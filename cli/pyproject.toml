@@ -1,13 +1,24 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "meertex"
-version = "0.1.0"
-description = "The meertex CLI: projects, versions and the live sync client."
+# From meertex.__version__. .github/workflows/cli.yml stamps it as
+# <VERSION>.<run number> before every release to PyPI.
+dynamic = ["version"]
+description = "The meertex CLI: papers, deadlines, versions, reviews and the live sync of a local LaTeX folder."
+readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
+keywords = ["latex", "papers", "sync", "crdt", "overleaf", "coauthors"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+]
 dependencies = [
     "httpx==0.28.1",
     "pycrdt==0.14.10",
@@ -17,8 +28,16 @@ dependencies = [
     "pathspec==1.1.1",
 ]
 
+[project.urls]
+Homepage = "https://meertex.com"
+Source = "https://github.com/ribalba/meertex"
+Documentation = "https://github.com/ribalba/meertex/blob/main/docs/DESIGN.md"
+
 [project.scripts]
 meertex = "meertex.__main__:main"
 
 [tool.setuptools]
 packages = ["meertex"]
+
+[tool.setuptools.dynamic]
+version = { attr = "meertex.__version__" }

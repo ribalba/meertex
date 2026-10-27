@@ -2,11 +2,12 @@
 
 <img src="app/static/img/logo-192.png" alt="" width="96" align="right">
 
-A meerkat LaTeX workspace for papers. You write locally, in VS Code or with
-Claude, and a small sync client keeps the folder in step with the server within
-a second. Coauthors see and edit the current state instead of an outdated copy.
-Every paper carries its conference, its deadlines with countdowns, and fixed
-versions of what was handed in.
+A meerkat LaTeX editor for the whole life of a paper, from the call for papers
+to camera-ready. Every paper carries its conference, its deadlines with
+countdowns, and fixed versions of what was handed in. You write locally, in VS
+Code or with Claude, and a small sync client keeps the folder in step with the
+server within a second. Coauthors see and edit the current state instead of an
+outdated copy.
 
 - **Live sync of a local folder.** `meertex sync` runs in the background and
   merges your edits with everyone else's, character by character (a CRDT, Yjs
@@ -65,6 +66,10 @@ meertex new --title "My paper" --conference ICSE --year 2027 --date submission=2
 meertex sync                         # or: meertex service install (Linux, systemd)
 ```
 
+The CLI is on [PyPI](https://pypi.org/project/meertex/). Every push to `main`
+that changes it publishes a new version, so `pipx upgrade meertex` brings the
+newest one.
+
 ## Run your own server
 
 You need Docker with Compose. The server and Postgres need about 1 GB of memory,
@@ -85,6 +90,22 @@ On a server, Coolify deploys `docker-compose.coolify.yml` behind TLS. Set
 
 Development: `make venv`, `make dev` (native server with reload), `make compile-dev`
 (the compile service with your TeX Live), `make test-db`, `make test`, `make lint`.
+
+## Releasing the CLI
+
+`.github/workflows/cli.yml` runs on every push to `main` that touches `cli/`,
+`VERSION` or the workflow itself, and on demand under Actions. It runs the CLI's
+tests on Python 3.11 and 3.13, builds the package with the version `VERSION`
+plus the run number (`0.1.0.42`, a normal release that pip sorts above `0.1.0`)
+and publishes it to PyPI. A push that changes only the server publishes nothing,
+because the package would be the same.
+
+Publishing uses PyPI's trusted publishing, so there is no token to keep. It
+needs a publisher set up once on pypi.org, under Your account, Publishing,
+"Add a new pending publisher": PyPI project name `meertex`, owner `ribalba`,
+repository `meertex`, workflow `cli.yml` and environment `pypi`. The first run
+then creates the project. `make cli` still installs the CLI from `./cli` for
+development.
 
 ## Layout
 

@@ -6,7 +6,7 @@ from helpers import needs_db, running_app, sign_in
 
 pytestmark = needs_db
 
-PITCH = "Write LaTeX locally."
+PITCH = "A paper is more than its .tex files."
 
 
 def test_signed_out_root_is_the_landing_page():

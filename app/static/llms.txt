@@ -1,6 +1,6 @@
 # meertex
 
-> meertex is a free, open-source (AGPL-3.0-or-later) LaTeX workspace for academic papers, hosted at https://meertex.com or on your own server. You write locally, in VS Code, vim or with Claude Code, and a small sync client keeps the folder in step with the server within a second. Coauthors edit the same document in the browser, with live cursors, LaTeX autocomplete and a PDF that compiles as they type. Every paper carries its venue, its deadlines with countdowns in the venue's time zone, and fixed versions of what was handed in.
+> meertex is a free, open-source (AGPL-3.0-or-later) LaTeX editor for the whole life of an academic paper, from the call for papers to camera-ready, hosted at https://meertex.com or on your own server. You write locally, in VS Code, vim or with Claude Code, and a small sync client keeps the folder in step with the server within a second. Coauthors edit the same document in the browser, with live cursors, LaTeX autocomplete and a PDF that compiles as they type. Every paper carries its venue, its deadlines with countdowns in the venue's time zone, and fixed versions of what was handed in.
 
 https://meertex.com is the hosted meertex. Anyone can sign in there with an email address, and coauthors need nothing but a browser. meertex is also free software, so anyone can run their own server with Docker Compose on a laptop or with Coolify on a server. A meertex server holds the papers of the people who sign in to it. This file is served by every meertex server at `/llms.txt`, and its landing page is `/` for visitors who are not signed in.
 
@@ -109,7 +109,7 @@ A meertex server is three containers.
 - **db** is PostgreSQL. It stores accounts, projects, dates, versions, reviews and the live documents.
 - **compile** is TeX Live 2025 behind a small HTTP service. It runs as an unprivileged user with a read-only root file system and no capabilities. TeX runs without shell escape and in kpathsea's paranoid mode, so a document reads and writes only inside its own job folder.
 
-The CLI is a Python package (`pipx install meertex`). Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
+The CLI is a Python package on PyPI (`pipx install meertex`), published again on every change, so `pipx upgrade meertex` brings the newest version. Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
 
 ## Get started
 

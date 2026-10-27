@@ -900,9 +900,11 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 
 ## 12. CLI
 
-`meertex` is a Python package in `cli/`, installed with
-`pipx install ./cli` (or `uv tool install ./cli`). Every command takes
-`--json`. Projects are addressed by name or id.
+`meertex` is a Python package in `cli/`, published to PyPI as `meertex`
+on every push to `main` that changes it (README.md, Releasing the CLI). It
+is installed with `pipx install meertex` (or `uv tool install meertex`), and
+from a clone with `pipx install ./cli`. Every command takes `--json`.
+Projects are addressed by name or id.
 
 | Command | What it does |
 | --- | --- |

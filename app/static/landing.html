@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>meertex · A LaTeX workspace for papers and their coauthors</title>
-  <meta name="description" content="meertex is a LaTeX workspace for papers and their coauthors. You write on your own computer in VS Code or with an LLM agent, meertex keeps the folder up to date within a second, and coauthors edit the same document in the browser. Every paper carries its venue, its deadlines and the versions you handed in." />
+  <title>meertex · A LaTeX editor for the whole life of a paper</title>
+  <meta name="description" content="meertex is a LaTeX editor for the whole life of a paper, from the call for papers to camera-ready. Every paper carries its venue, its deadlines with countdowns, the versions you handed in and its reviews, and meertex checks that its citations exist. You write on your own computer in VS Code or with an LLM agent, and coauthors edit the same document in the browser." />
   <meta name="theme-color" content="#ffffff" />
   <link rel="canonical" href="{{BASE_URL}}/" />
   <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -15,16 +15,16 @@
        because these addresses must be absolute. -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="meertex" />
-  <meta property="og:title" content="meertex · Write LaTeX locally, your coauthors see it live" />
-  <meta property="og:description" content="A LaTeX workspace for papers. Your local folder and the browser editor share one live document, and every paper carries its venue, its deadlines and its versions." />
+  <meta property="og:title" content="meertex · A paper is more than its .tex files" />
+  <meta property="og:description" content="A LaTeX editor for the whole life of a paper. Every paper carries its venue, its deadlines and its versions, and your local folder and the browser editor share one live document." />
   <meta property="og:url" content="{{BASE_URL}}/" />
   <meta property="og:image" content="{{BASE_URL}}/static/img/og-meerkat.jpg" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="The meertex meerkat holding a LaTeX page and a pencil." />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="meertex · Write LaTeX locally, your coauthors see it live" />
-  <meta name="twitter:description" content="A LaTeX workspace for papers, their deadlines and their versions." />
+  <meta name="twitter:title" content="meertex · A paper is more than its .tex files" />
+  <meta name="twitter:description" content="A LaTeX editor for the whole life of a paper, with its deadlines, its versions and its reviews." />
   <meta name="twitter:image" content="{{BASE_URL}}/static/img/og-meerkat.jpg" />
   <meta name="twitter:image:alt" content="The meertex meerkat holding a LaTeX page and a pencil." />
 
@@ -37,7 +37,7 @@
     "@type": "SoftwareApplication",
     "name": "meertex",
     "url": "{{BASE_URL}}/",
-    "description": "A free, open-source LaTeX workspace for papers, hosted at meertex.com or on your own server. A sync client keeps a local folder in step with the server within a second, coauthors edit the same document in the browser with live cursors and a compiled PDF, and every paper carries its venue, its deadlines with countdowns and fixed versions of what was handed in.",
+    "description": "A free, open-source LaTeX editor for the whole life of a paper, hosted at meertex.com or on your own server. Every paper carries its venue, its deadlines with countdowns and fixed versions of what was handed in. A sync client keeps a local folder in step with the server within a second, and coauthors edit the same document in the browser with live cursors and a compiled PDF.",
     "applicationCategory": "ProductivityApplication",
     "operatingSystem": "Any system with a web browser. The CLI runs on Linux, macOS and Windows.",
     "softwareRequirements": "A web browser. The CLI needs Python 3.11 or newer.",
@@ -115,8 +115,9 @@
         <a href="#how">How it works</a>
         <a href="#features">Features</a>
         <a href="#screenshots">Screenshots</a>
-        <a href="#claude">Claude</a>
         <a href="#start">Get started</a>
+        <a href="#cli">CLI</a>
+        <a href="#claude">Claude</a>
       </nav>
       <div class="header-actions">
         <a class="btn btn-github" href="https://github.com/ribalba/meertex" rel="noopener">
@@ -132,18 +133,19 @@
     <section class="hero" aria-labelledby="hero-title">
       <div class="wrap">
         <div class="hero-copy">
-          <h1 id="hero-title">Write LaTeX locally. <span class="accent">Your coauthors see it live.</span></h1>
+          <h1 id="hero-title">A paper is more than its .tex files. <span class="accent">meertex keeps all of it.</span></h1>
           <p class="hero-lead">
-            meertex is a LaTeX workspace for papers and the people who write them. You work
-            on your own computer, in VS Code, vim or together with an LLM agent such as
-            Claude Code. <strong>Every save reaches your coauthors within a second.</strong>
-            They edit the same document in the browser, with live cursors and a PDF that
-            compiles as they type.
+            meertex is a LaTeX editor for the whole life of a paper, from the call for
+            papers to camera-ready. Each paper carries its venue, its deadlines with
+            countdowns and every version you handed in. meertex checks that your citations
+            exist, and reviewers see how each of their comments was addressed.
           </p>
           <p class="hero-lead">
-            Every paper also carries its venue, its deadlines with countdowns and the
-            versions you handed in. A command line tool and an API make all of it ready
-            for your LLM workflow.
+            You write on your own computer, in VS Code, vim or together with an LLM agent
+            such as Claude Code. <strong>Every save reaches your coauthors within a second.</strong>
+            They edit the same document in the browser, with live cursors and a PDF that
+            compiles as they type. A command line tool and an API make all of it ready for
+            your LLM workflow.
           </p>
           <div class="hero-actions">
             <a class="btn btn-primary btn-lg" href="/login">
@@ -257,8 +259,9 @@
           <p class="section-kicker">Features</p>
           <h2 id="features-title">Everything a paper needs</h2>
           <p>
-            A paper is more than its <code>.tex</code> files. It has coauthors, a venue,
-            deadlines and the versions you handed in. meertex keeps all of it in one place.
+            Next to its text, a paper has coauthors, a venue, deadlines, the versions you
+            handed in, reviews and a bibliography that has to hold up. meertex looks after
+            each of them.
           </p>
         </div>
 
@@ -561,105 +564,7 @@
       </div>
     </section>
 
-    <section class="section section-alt" id="claude" aria-labelledby="claude-title">
-      <div class="wrap">
-        <div class="claude">
-          <div class="section-head">
-            <p class="section-kicker">For agents</p>
-            <h2 id="claude-title">Let Claude write with you</h2>
-            <p>
-              Your paper is a normal folder on your computer, so Claude Code or any other
-              agent edits your <code>.tex</code> files like any others, and every save
-              reaches your coauthors. Deadlines, versions and review comments are there for
-              the agent too, through the meertex command line tool and an API.
-            </p>
-          </div>
-
-          <div class="agent-rows">
-            <article class="agent-row">
-              <div class="agent-copy">
-                <span class="card-icon"><svg class="icon"><use href="#i-terminal"/></svg></span>
-                <h3>The command line tool</h3>
-                <p>Papers, dates, questions, versions, changes and compiling, each paper addressed by its name. Every command can answer in JSON for agents.</p>
-              </div>
-              <pre class="code"><span class="p">$ </span>meertex projects --outcome accepted
-<span class="p">$ </span>meertex show 2027-icse-green-llm
-<span class="p">$ </span>meertex diff 2027-icse-green-llm submission --word
-<span class="p">$ </span>meertex compile 2027-icse-green-llm</pre>
-            </article>
-
-            <article class="agent-row">
-              <div class="agent-copy">
-                <span class="card-icon"><svg class="icon"><use href="#i-key"/></svg></span>
-                <h3>The API</h3>
-                <p>
-                  Scripts and agents sign in with the same key as the command line tool. Every
-                  request is described in
-                  <a href="https://github.com/ribalba/meertex/blob/main/docs/DESIGN.md" rel="noopener">docs/DESIGN.md</a>.
-                </p>
-              </div>
-              <pre class="code"><span class="p">$ </span>curl -H "Authorization: Bearer $TOKEN" \
-    "$MEERTEX/api/projects?outcome=accepted"
-<span class="p">$ </span>curl -H "Authorization: Bearer $TOKEN" \
-    "$MEERTEX/api/projects/2027-icse-green-llm/files/main.tex"</pre>
-            </article>
-
-            <article class="agent-row">
-              <div class="agent-copy">
-                <span class="card-icon"><svg class="icon"><use href="#i-comment"/></svg></span>
-                <h3>Review comments</h3>
-                <p>
-                  Your agent reads the open comments together with the text they are about and
-                  fixes it. When you ask it to, it answers, applies suggestions and resolves.
-                </p>
-              </div>
-              <pre class="code"><span class="p">$ </span>meertex threads 2027-icse-green-llm
-<span class="p">$ </span>meertex reply 2027-icse-green-llm a1b2c3d4 "Done, see line 4."
-<span class="p">$ </span>meertex apply 2027-icse-green-llm 9f8e7d6c
-<span class="p">$ </span>meertex resolve 2027-icse-green-llm a1b2c3d4</pre>
-            </article>
-          </div>
-
-          <div class="skill">
-            <div class="skill-head">
-              <h3>From a call for papers to a new paper</h3>
-              <p>
-                Paste a conference URL and the <strong>meertex-new-paper</strong> skill for
-                Claude Code does the rest.
-              </p>
-            </div>
-            <ol class="skill-steps">
-              <li><span class="step-num">1</span><span>It reads the call for papers and follows the links to the dates, the submission rules and the template.</span></li>
-              <li><span class="step-num">2</span><span>It takes the venue's fields and every deadline with its time zone, and leaves out what the page does not say.</span></li>
-              <li><span class="step-num">3</span><span>It creates the paper with the publisher's template and puts the folder in <code>~/papers/&lt;name&gt;</code>.</span></li>
-            </ol>
-            <pre class="code"><span class="p">$ </span>mkdir -p ~/.claude/skills/meertex-new-paper
-<span class="p">$ </span>curl -o ~/.claude/skills/meertex-new-paper/SKILL.md \
-    https://raw.githubusercontent.com/ribalba/meertex/main/skills/meertex-new-paper/SKILL.md</pre>
-            <div class="skill-foot">
-              <a class="btn btn-primary" href="https://github.com/ribalba/meertex/blob/main/skills/meertex-new-paper/SKILL.md" rel="noopener">
-                <svg class="icon"><use href="#i-github"/></svg> View SKILL.md on GitHub
-              </a>
-              <p class="skill-note">
-                In a clone of the repository, <code>make install-skill</code> links it instead.
-                <a href="https://github.com/ribalba/meertex/blob/main/docs/agent.md" rel="noopener">docs/agent.md</a>
-                tells an agent how to read and change your papers.
-              </p>
-            </div>
-          </div>
-
-          <div class="asks" aria-label="Things to ask Claude">
-            <span class="ask">“Start a paper for this CFP.”</span>
-            <span class="ask">“What is due this month?”</span>
-            <span class="ask">“Which of my papers were accepted?”</span>
-            <span class="ask">“What changed since the submission?”</span>
-            <span class="ask">“Work through the open review comments on the introduction.”</span>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="start" aria-labelledby="start-title">
+    <section class="section section-alt" id="start" aria-labelledby="start-title">
       <div class="wrap">
         <div class="section-head">
           <p class="section-kicker">Get started</p>
@@ -697,8 +602,9 @@
             <h3><span class="step-num">3</span>Get the folder on your computer</h3>
             <p>
               To write in your own editor or with an agent, install the meertex command line
-              tool. It needs Python 3.11 or newer. <code>meertex login</code> mails you a
-              code, and <code>meertex checkout</code> puts the paper in <code>~/papers</code>.
+              tool from <a href="https://pypi.org/project/meertex/" rel="noopener">PyPI</a>. It
+              needs Python 3.11 or newer. <code>meertex login</code> mails you a code, and
+              <code>meertex checkout</code> puts the paper in <code>~/papers</code>.
             </p>
             <pre class="code"><span class="p">$ </span>pipx install meertex
 <span class="p">$ </span>meertex login --server meertex.com
@@ -747,6 +653,104 @@
       </div>
     </section>
 
+    <section class="section" id="cli" aria-labelledby="cli-title">
+      <div class="wrap">
+        <div class="section-head">
+          <p class="section-kicker">Command line</p>
+          <h2 id="cli-title">Full CLI support</h2>
+          <p>
+            Everything you do in the browser also works in a terminal, from the first
+            checkout to the last review comment.
+          </p>
+        </div>
+
+        <div class="cli-rows">
+          <article class="cli-row">
+            <div class="cli-copy">
+              <span class="card-icon"><svg class="icon"><use href="#i-terminal"/></svg></span>
+              <h3>The command line tool</h3>
+              <p>Papers, dates, questions, versions, changes and compiling, each paper addressed by its name. Every command can answer in JSON for agents.</p>
+            </div>
+            <pre class="code"><span class="p">$ </span>meertex projects --outcome accepted
+<span class="p">$ </span>meertex show 2027-icse-green-llm
+<span class="p">$ </span>meertex diff 2027-icse-green-llm submission --word
+<span class="p">$ </span>meertex compile 2027-icse-green-llm</pre>
+          </article>
+
+          <article class="cli-row">
+            <div class="cli-copy">
+              <span class="card-icon"><svg class="icon"><use href="#i-comment"/></svg></span>
+              <h3>Review comments</h3>
+              <p>
+                Read the open comments together with the text they are about, answer them,
+                apply suggestions and resolve, without leaving the terminal.
+              </p>
+            </div>
+            <pre class="code"><span class="p">$ </span>meertex threads 2027-icse-green-llm
+<span class="p">$ </span>meertex reply 2027-icse-green-llm a1b2c3d4 "Done, see line 4."
+<span class="p">$ </span>meertex apply 2027-icse-green-llm 9f8e7d6c
+<span class="p">$ </span>meertex resolve 2027-icse-green-llm a1b2c3d4</pre>
+          </article>
+
+          <article class="cli-row">
+            <div class="cli-copy">
+              <span class="card-icon"><svg class="icon"><use href="#i-sync"/></svg></span>
+              <h3>Install and update</h3>
+              <p>
+                The command line tool is a Python package on
+                <a href="https://pypi.org/project/meertex/" rel="noopener">PyPI</a>. Every change
+                to it is published as a new version, and <code>pipx upgrade</code> fetches it.
+              </p>
+            </div>
+            <pre class="code"><span class="p">$ </span>pipx install meertex   <span class="c"># or: uv tool install meertex</span>
+<span class="p">$ </span>pipx upgrade meertex
+<span class="p">$ </span>meertex --help</pre>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="claude" aria-labelledby="claude-title">
+      <div class="wrap">
+        <div class="claude">
+          <div class="section-head">
+            <p class="section-kicker">For agents</p>
+            <h2 id="claude-title">Let Claude start your papers</h2>
+            <p>
+              Install the meertex skill for Claude Code. It uses the
+              <a href="#cli">command line tool</a>, so install that first.
+            </p>
+          </div>
+
+          <div class="skill">
+            <div class="skill-head">
+              <h3>From a call for papers to a new paper</h3>
+              <p>
+                Paste a conference URL and the <strong>meertex-new-paper</strong> skill for
+                Claude Code does the rest.
+              </p>
+            </div>
+            <ol class="skill-steps">
+              <li><span class="step-num">1</span><span>It reads the call for papers and follows the links to the dates, the submission rules and the template.</span></li>
+              <li><span class="step-num">2</span><span>It takes the venue's fields and every deadline with its time zone, and leaves out what the page does not say.</span></li>
+              <li><span class="step-num">3</span><span>It creates the paper with the publisher's template and puts the folder in <code>~/papers/&lt;name&gt;</code>.</span></li>
+            </ol>
+            <pre class="code"><span class="p">$ </span>mkdir -p ~/.claude/skills/meertex-new-paper
+<span class="p">$ </span>curl -o ~/.claude/skills/meertex-new-paper/SKILL.md \
+    https://raw.githubusercontent.com/ribalba/meertex/main/skills/meertex-new-paper/SKILL.md</pre>
+            <div class="skill-foot">
+              <a class="btn btn-primary" href="https://github.com/ribalba/meertex/blob/main/skills/meertex-new-paper/SKILL.md" rel="noopener">
+                <svg class="icon"><use href="#i-github"/></svg> View SKILL.md on GitHub
+              </a>
+              <p class="skill-note">
+                In a clone of the repository, <code>make install-skill</code> links it instead.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <footer class="site-footer">
@@ -754,7 +758,7 @@
       <div class="footer-brand">
         <img src="/static/img/favicon-64.png" alt="" width="32" height="32" />
         <p>
-          <strong>meertex</strong> is the meerkat LaTeX workspace and part of the
+          <strong>meertex</strong> is the meerkat LaTeX editor for the whole life of a paper and part of the
           <a href="https://meerverse.com" rel="noopener">Meerverse</a>, the family of open-source
           meer* apps, with
           <a href="https://meercal.com" rel="noopener">meercal</a> for calendars,

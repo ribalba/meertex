@@ -1,0 +1,86 @@
+# Publishes the meertex CLI (cli/) to PyPI on every push to main that changes
+# it, so `pipx install meertex` and `pipx upgrade meertex` always get the
+# newest one. The version is VERSION plus the run number (0.1.0.42), which pip
+# sorts as a normal release above 0.1.0 and below 0.1.1.
+#
+# Publishing uses PyPI's trusted publishing, without a token. It needs a
+# publisher set up once on pypi.org (README.md, Releasing the CLI): project
+# meertex, owner ribalba, repository meertex, workflow cli.yml, environment pypi.
+
+name: CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - "VERSION"
+      - ".github/workflows/cli.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the CLI and pytest
+        run: python -m pip install ./cli pytest
+      # The end-to-end tests skip themselves without MEERTEX_TEST_DB.
+      - name: Test
+        run: python -m pytest -q cli/tests
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Stamp the version
+        id: version
+        run: |
+          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+          sed -i "s/^__version__ = .*/__version__ = \"${version}\"/" cli/meertex/__init__.py
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      # setuptools picks up a LICENSE next to pyproject.toml on its own.
+      - name: Build
+        run: |
+          cp LICENSE cli/LICENSE
+          python -m pip install build
+          python -m build cli --outdir dist
+      - name: Check the wheel
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install dist/*.whl
+          test "$(/tmp/check/bin/meertex --version)" = "meertex ${{ steps.version.outputs.version }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/meertex/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
