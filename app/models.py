@@ -54,7 +54,9 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
     name: Mapped[str | None] = mapped_column(String(200))
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
+    # None until the web app first loads for this account and sends the
+    # browser's zone (app/static/js/app.js). Read as UTC until then.
+    timezone: Mapped[str | None] = mapped_column(String(64))
     # Secret for the token API: scripts, the CLI, agents.
     api_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     # How new projects are named (DESIGN §4).
@@ -71,7 +73,18 @@ class User(Base):
     reminder_hour: Mapped[int] = mapped_column(Integer, default=8, server_default="8", nullable=False)
     # When the last reminder mail was put together, whether it said anything or not.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Spelling and grammar (DESIGN §17): on or off, the language, the personal
+    # dictionary and the rules switched off. Its shape and validation are in
+    # app/grammar/checker.py. {} reads as the defaults.
+    grammar: Mapped[dict] = mapped_column(JSONType, default=dict, server_default="{}", nullable=False)
+    # The profile picture's file name in DATA_DIR/avatars (app/avatars.py).
+    # None shows the initials.
+    avatar: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    @property
+    def avatar_url(self) -> str | None:
+        return f"/api/avatars/{self.avatar}" if self.avatar else None
 
 
 class LoginToken(Base):

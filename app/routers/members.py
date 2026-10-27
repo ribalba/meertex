@@ -6,6 +6,7 @@ mailed link signs them in and lands on the project.
 """
 
 from fastapi import APIRouter, HTTPException
+from sqlalchemy import func
 
 from .. import live, serialize
 from ..access import resolve_project
@@ -30,6 +31,23 @@ def _member(db: DB, project_id: str, user_id: str) -> tuple[Membership, User]:
     if row is None:
         raise HTTPException(status_code=404, detail="Not a member of this project")
     return row
+
+
+@router.get("/people")
+def list_people(db: DB, user: SessionOrTokenUser) -> list[dict]:
+    """Everyone who shares a paper with the user, for the email suggestions
+    of "Add someone". Those on the most papers with them come first."""
+    mine = db.query(Membership.project_id).filter(Membership.user_id == user.id)
+    shared = func.count(Membership.project_id)
+    rows = (
+        db.query(User, shared)
+        .join(Membership, Membership.user_id == User.id)
+        .filter(Membership.project_id.in_(mine), User.id != user.id)
+        .group_by(User.id)
+        .order_by(shared.desc(), User.email)
+        .all()
+    )
+    return [{"user_id": u.id, "email": u.email, "name": u.name, "papers": n} for u, n in rows]
 
 
 @router.get("/projects/{ref}/members")

@@ -761,6 +761,13 @@ def accept_thread(
         raise forbidden("Only the person who started the thread, or the owner, can accept it")
     if thread.state == "accepted":
         raise unprocessable("The thread is accepted already")
+    if thread.state == "open":
+        # An open thread has nothing to accept but a suggestion.
+        suggested = db.query(Comment.id).filter(
+            Comment.thread_id == thread.id, Comment.kind == "comment", Comment.suggestion.is_not(None)
+        ).first()
+        if suggested is None:
+            raise unprocessable("This thread has no suggestion, so there is nothing to accept before it is resolved")
     now = utcnow()
     note = ((body.note if body else None) or "").strip()
     thread.state = "accepted"

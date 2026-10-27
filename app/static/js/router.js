@@ -2,7 +2,7 @@
 // so moving between pages and tabs does not reload the app, and Back and
 // Forward re-render the page the URL names.
 
-import { clearFlashes, showQueuedFlashes, flashBox, setTitle, setCrumbs } from "./ui.js";
+import { clearFlashes, showQueuedFlashes, flashBox, setTitle, setCrumbs, setHeaderActions } from "./ui.js";
 import { h, clear } from "./dom.js";
 
 const routes = [];
@@ -72,6 +72,7 @@ export async function render({ scroll = null } = {}) {
   if (path !== lastPath) {
     clearFlashes();
     setCrumbs([]);
+    setHeaderActions([]);
   }
   lastPath = path;
   const ctx = {

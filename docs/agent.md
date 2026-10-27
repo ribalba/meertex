@@ -46,6 +46,7 @@ the server does not answer, tell the user rather than working around it.
 
 ```bash
 meertex status --json          # checkouts and whether sync runs
+meertex service status         # the background sync service and its last log lines
 meertex projects               # the list with countdowns
 ```
 
@@ -212,7 +213,8 @@ every suggestion as a small diff (`-` the current text, `+` the replacement).
    next sync, and resolves the thread. Prefer it over editing by hand, so the
    thread records what happened. It refuses a thread whose text is gone.
 6. Accepting is the reviewer's step (`meertex accept`). Only the person who
-   started the thread or the owner can do it. Reopen with
+   started the thread or the owner can do it. An open thread can only be
+   accepted when it carries a suggestion, a resolved one always. Reopen with
    `meertex reopen <project> <id> --note "..."` when the user says a thread is
    not done.
 

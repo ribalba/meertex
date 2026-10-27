@@ -10,7 +10,7 @@ from outside the host at all.
 
 | | |
 | --- | --- |
-| **Host** | 1 GB RAM is plenty for the server and Postgres, and compiling adds up to `COMPILE_MEMORY` (2 GB). Disk for the papers' histories and figures (`MAX_BLOB_BYTES`, 50 MB, is the largest single file), and 6 GB for the TeX Live image ([Compiling](#compiling)). |
+| **Host** | 1 GB RAM is plenty for the server and Postgres, compiling adds up to `COMPILE_MEMORY` (2 GB), and the spelling checker up to `LANGUAGETOOL_MEMORY` (1.5 GB). Disk for the papers' histories and figures (`MAX_BLOB_BYTES`, 50 MB, is the largest single file), and 6 GB for the TeX Live image ([Compiling](#compiling)). |
 | **Coolify** | v4. The compose file uses its magic variables (`SERVICE_PASSWORD_*`) and required variables (`${BASE_URL:?}`). |
 | **DNS** | An A record for the app's hostname pointing at the Coolify host. |
 
@@ -32,6 +32,7 @@ from outside the host at all.
 | `SERVICE_PASSWORD_64_COMPILE` | Leave it alone. The token `web` shows the compile service. Both read the same variable. |
 | `COMPILE_TIMEOUT_SECONDS`, `COMPILE_KEEP_JOBS`, `COMPILE_WORKERS`, `COMPILE_MEMORY`, `COMPILE_CPUS` | Optional. Default 90 seconds per compile, 30 jobs kept for SyncTeX, 2 compiles at once, 2 GB of memory and 2 CPUs for the compile container. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `EMAIL_FROM` | Needed before anyone but you can sign in, for invites, and for the reminder mails. Without `SMTP_HOST` the sign-in link and code are printed to the `web` container's log instead, which is how you sign in the first time (step 5). |
+| `GRAMMAR_URL`, `GRAMMAR_TIMEOUT_SECONDS`, `GRAMMAR_ALLOW_PUBLIC_HOSTS`, `GRAMMAR_MAX_CONCURRENT`, `LANGUAGETOOL_MEMORY` | Optional. The editor's spelling and grammar check ([Spelling and grammar](#spelling-and-grammar)). Empty `GRAMMAR_URL` means the bundled `languagetool` service. Default 20 seconds per check, public hosts refused, 3 requests at once, 1.5 GB of memory for the container. |
 | `REMINDERS_ENABLED` | Optional, default `true`. The daily reminder mails before deadlines ([docs/DESIGN.md](docs/DESIGN.md) §5, Reminders). They need SMTP to reach anyone. `false` turns them off. |
 | `MAX_TEXT_BYTES`, `MAX_BLOB_BYTES`, `MAX_SYNC_MESSAGE_BYTES` | Default 2 MB, 50 MB and 64 MB. The last one has to stay below the `--ws-max-size` in the Dockerfile. |
 | `SNAPSHOT_IDLE_SECONDS`, `SNAPSHOT_MAX_SECONDS`, `ROOM_IDLE_SECONDS` | Default 60, 600 and 300. When the git history gets a commit, and when an unused document leaves memory. |
@@ -87,6 +88,20 @@ ports, and every request carries the token.
 | **Jobs** | The `compile-jobs` volume holds the newest `COMPILE_KEEP_JOBS` job folders, for SyncTeX. It needs no backup. The PDFs themselves are stored by `web`, with the project. |
 | **First compiles** | The first xelatex compile after a start takes about 7 seconds longer while fontconfig builds its cache in the container's `/tmp`. Later ones take well under a second for a short paper. |
 | **Without it** | The compile routes answer 503 and say why. Everything else works. |
+
+## Spelling and grammar
+
+The editor underlines spelling and grammar mistakes in `.tex`, `.md` and `.txt` files. `web` asks the
+`languagetool` service, LanguageTool 6.8 in the community image `erikvl87/languagetool`
+([docs/DESIGN.md](docs/DESIGN.md) §17).
+
+| | |
+| --- | --- |
+| **Image** | About 450 MB, pulled on the first deploy. The first check in a language loads it, which takes a few seconds. |
+| **Memory** | Up to 1.3 GB resident once two languages are loaded. `LANGUAGETOOL_MEMORY` (1.5 GB) is the container's limit, and the JVM heap is capped at 768 MB inside it. |
+| **Privacy** | Unpublished papers go to the checker, so it has no domain and no ports, and `web` refuses a `GRAMMAR_URL` with a public address unless `GRAMMAR_ALLOW_PUBLIC_HOSTS` is `true`. Nothing logs the text. |
+| **Load** | `web` caches results per paragraph and only sends the paragraphs that changed. At most `GRAMMAR_MAX_CONCURRENT` (3) requests are with the checker at once. |
+| **Without it** | While the container is stopped or starting, checks answer 503 and the editor says so on its Spellcheck button. Everything else works. |
 
 ## Operating it
 

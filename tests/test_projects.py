@@ -59,7 +59,7 @@ def test_create_and_read():
         assert p["template"] == ""
         assert p["main_file"] == "main.tex"
         assert p["outcome"] is None and p["outcome_at"] is None
-        assert p["owner"] == {"id": me["id"], "email": me["email"], "name": None}
+        assert p["owner"] == {"id": me["id"], "email": me["email"], "name": None, "avatar_url": None}
         assert p["members"][0]["role"] == "owner"
         assert p["dates"] == [] and p["questions"] == [] and p["versions"] == []
         assert p["forked_from"] is None

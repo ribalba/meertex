@@ -5,6 +5,7 @@ import asyncio
 import io
 import json
 import stat
+import subprocess
 import threading
 from pathlib import Path
 
@@ -323,6 +324,110 @@ def test_service_install_writes_the_unit_only(capsys, monkeypatch, isolated_home
     assert "MEERTEX_TOKEN" not in text
     code, out, _ = run(capsys, "service", "uninstall", "--no-start")
     assert code == 0 and not unit.exists()
+
+
+UNIT_GONE = {"LoadState": "not-found", "FragmentPath": "", "UnitFileState": "", "ActiveState": "inactive",
+             "SubState": "dead", "MainPID": "0", "NRestarts": "0", "Result": "success", "ExecMainStatus": "0",
+             "ActiveEnterTimestamp": "", "InactiveEnterTimestamp": ""}
+JOURNAL = [
+    {"__REALTIME_TIMESTAMP": "1793139254000000", "_PID": "4242", "PRIORITY": "6",
+     "MESSAGE": "22:14:14 paper  ↑ main.tex"},
+    # journald sends a message with colour codes in it as bytes.
+    {"__REALTIME_TIMESTAMP": "1793139255000000", "_PID": "4242", "PRIORITY": "3",
+     "MESSAGE": list(b"\x1b[31mlost the server\x1b[0m")},
+]
+
+
+def fake_systemd(monkeypatch, props: dict, journal: list[dict] | None = JOURNAL) -> list[list[str]]:
+    """Answers systemctl show and journalctl as systemd would. No journal is
+    journalctl failing. Returns the commands that ran."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[0] == "systemctl":
+            return subprocess.CompletedProcess(argv, 0, "".join(f"{k}={v}\n" for k, v in props.items()), "")
+        if journal is None:
+            return subprocess.CompletedProcess(argv, 1, "", "No journal files were found.")
+        return subprocess.CompletedProcess(argv, 0, "".join(json.dumps(e) + "\n" for e in journal), "")
+
+    monkeypatch.setattr(service.subprocess, "run", fake_run)
+    return calls
+
+
+def test_service_status_shows_the_unit_and_its_log(capsys, monkeypatch, isolated_home):
+    unit = isolated_home / "meertex.service"
+    unit.write_text("[Service]\nExecStart=/opt/bin/meertex sync\n")
+    calls = fake_systemd(monkeypatch, {
+        **UNIT_GONE, "LoadState": "loaded", "FragmentPath": str(unit), "UnitFileState": "enabled",
+        "ActiveState": "active", "SubState": "running", "MainPID": "4242",
+        "ActiveEnterTimestamp": "Tue 2026-10-27 22:14:14 UTC",
+    })
+    code, out, _ = run(capsys, "service", "status", "--json", "-n", "5")
+    s = json.loads(out)
+    assert code == 0 and s["running"] and s["enabled"] and s["pid"] == 4242
+    assert s["since"] == "2026-10-27T22:14:14+00:00" and s["command"] == "/opt/bin/meertex sync"
+    assert [e["message"] for e in s["logs"]] == ["22:14:14 paper  ↑ main.tex", "\x1b[31mlost the server\x1b[0m"]
+    assert ["journalctl", "--user", "--unit=meertex.service", "--lines=5", "--output=json", "--no-pager"] in calls
+
+    code, out, _ = run(capsys, "service", "status")
+    assert code == 0 and "running since" in out and "/opt/bin/meertex sync" in out
+    # The client's own time stamp goes. The journal's day and time stay.
+    assert "  paper  ↑ main.tex" in out and "22:14:14 paper" not in out
+    assert "lost the server" in out and "\x1b" not in out
+
+
+def test_service_status_of_a_failed_unit(capsys, monkeypatch, isolated_home):
+    unit = isolated_home / "meertex.service"
+    unit.write_text("[Service]\nExecStart=/opt/bin/meertex sync\n")
+    fake_systemd(monkeypatch, {
+        **UNIT_GONE, "LoadState": "loaded", "FragmentPath": str(unit), "UnitFileState": "disabled",
+        "ActiveState": "failed", "SubState": "failed", "NRestarts": "3", "Result": "exit-code",
+        "ExecMainStatus": "1", "InactiveEnterTimestamp": "Tue 2026-10-27 22:20:00 UTC",
+    })
+    code, out, _ = run(capsys, "service", "status")
+    assert code == 1 and "failed since" in out and "not enabled at login" in out
+    assert "exit-code, status 1" in out and "systemctl --user start meertex.service" in out
+
+
+def test_service_status_when_not_installed(capsys, monkeypatch):
+    fake_systemd(monkeypatch, UNIT_GONE, journal=None)
+    code, out, _ = run(capsys, "service", "status")
+    assert code == 1 and "not installed" in out and "meertex service install" in out
+    assert "No journal files were found." in out
+    code, out, _ = run(capsys, "service", "status", "--json")
+    s = json.loads(out)
+    assert code == 1 and not s["installed"] and s["logs"] == [] and "No journal files" in s["logs_error"]
+
+
+def test_service_status_without_systemd(capsys, monkeypatch):
+    def missing(argv, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    monkeypatch.setattr(service.subprocess, "run", missing)
+    code, _, err = run(capsys, "service", "status")
+    assert code == 2 and "needs systemd" in err
+
+
+def test_service_status_follows_the_log(capsys, monkeypatch):
+    started = []
+
+    class Journal:
+        def __init__(self, argv, **kwargs):
+            started.append(self)
+            self.argv, self.stopped = argv, False
+            self.stdout = iter(json.dumps(e) + "\n" for e in JOURNAL)
+
+        def terminate(self):
+            self.stopped = True
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr(service.subprocess, "Popen", Journal)
+    code, out, _ = run(capsys, "service", "status", "--follow", "--json", "-n", "2")
+    assert code == 0 and [json.loads(line)["pid"] for line in out.splitlines()] == [4242, 4242]
+    assert "--follow" in started[0].argv and "--lines=2" in started[0].argv and started[0].stopped
 
 
 def test_status_lists_checkouts(capsys, tmp_path):

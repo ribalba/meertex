@@ -352,7 +352,7 @@ function peopleSection(p, ctx) {
   return h("div", { class: "sidebar-section" },
     h("h2", {}, ctx.canEdit ? h("a", { href: `${ctx.base}/settings/access` }, "People") : "People", counter(members.length)),
     h("ul", { class: "people-list" }, members.map((m) => h("li", {},
-      avatar({ name: m.name, email: m.email }, 32),
+      avatar(m, 32),
       h("div", { class: "flex-1", style: { minWidth: "0" } },
         h("div", { class: "truncate text-bold", text: m.name || m.email }),
         h("div", { class: "text-small color-muted truncate", text: m.name ? `${m.email} · ${m.role}` : m.role })))),

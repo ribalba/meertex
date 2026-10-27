@@ -22,7 +22,24 @@ logger = logging.getLogger("uvicorn.error")
 _LOCK_KEY = 8_314_207_032
 
 
-MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = []
+def _users_timezone_nullable(conn: Connection) -> bool:
+    """A new account has no zone until the web app sends the browser's. The
+    accounts made before keep the one they have."""
+    nullable = conn.execute(
+        text(
+            "SELECT is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = 'users' AND column_name = 'timezone'"
+        )
+    ).scalar()
+    if nullable != "NO":
+        return False
+    conn.execute(text("ALTER TABLE users ALTER COLUMN timezone DROP NOT NULL"))
+    return True
+
+
+MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
+    ("0001_users_timezone_nullable", _users_timezone_nullable),
+]
 
 
 def run_migrations(engine: Engine) -> None:

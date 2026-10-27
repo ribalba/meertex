@@ -1,14 +1,16 @@
-// /settings is your account. It holds name and time zone, the naming pattern
-// with a live example, your usual writing time, the reminder mails, the API
-// token, and how to set up the command line.
+// /settings is your account. It holds the profile picture, name and time
+// zone, the naming pattern
+// with a live example, your usual writing time, spelling and grammar in the
+// editor, the reminder mails, the API token, and how to set up the command
+// line.
 
 import { api } from "../api.js";
 import { h, clear, debounce } from "../dom.js";
 import { icon } from "../icons.js";
-import { session } from "../session.js";
+import { meChanged, session } from "../session.js";
 import { patternProblem, previewName } from "../naming.js";
 import { allTimezones } from "../time.js";
-import { avatar, busy, commandLine, confirmDialog, copyButton, field, flash, flashError, openDialog, setTitle, textInput } from "../ui.js";
+import { avatar, busy, commandLine, confirmDialog, copyButton, counter, field, flash, flashError, openDialog, setTitle, spinner, textInput } from "../ui.js";
 import { onLeave } from "../router.js";
 import { writingDaysField } from "./timeline.js";
 
@@ -27,29 +29,38 @@ export async function render(ctx) {
     h("a", { href: "#profile" }, icon("person"), "Profile"),
     h("a", { href: "#naming" }, icon("book"), "Naming"),
     h("a", { href: "#writing" }, icon("calendar"), "Writing time"),
+    h("a", { href: "#grammar" }, icon("check"), "Spelling and grammar"),
     h("a", { href: "#reminders" }, icon("bell"), "Reminders"),
     h("a", { href: "#token" }, icon("key"), "API token"),
     h("a", { href: "#cli" }, icon("terminal"), "Command line"));
 
+  const head = h("div", { class: "flex mb-4" },
+    avatar(me, 40),
+    h("div", {},
+      h("h1", { style: { fontSize: "20px" }, text: me.name || me.email }),
+      h("div", { class: "color-muted", text: me.name ? `${me.email} · your personal account` : "Your personal account" })));
+  // A new name or picture shows at the top of this page and in the header.
+  const changed = () => {
+    head.firstChild.replaceWith(avatar(session.me, 40));
+    meChanged();
+  };
+
   const content = h("div", {},
-    profileSection(me),
+    profileSection(me, changed),
     namingSection(me),
     writingSection(me),
+    grammarSection(),
     remindersSection(me),
     tokenSection(me),
     cliSection(),
   );
 
   clear(ctx.main).append(h("div", { class: "container container-md page" },
-    h("div", { class: "flex mb-4" },
-      avatar(me, 40),
-      h("div", {},
-        h("h1", { style: { fontSize: "20px" }, text: me.name || me.email }),
-        h("div", { class: "color-muted", text: me.name ? `${me.email} · your personal account` : "Your personal account" }))),
+    head,
     h("div", { class: "layout-settings" }, h("div", {}, menu), content)));
 }
 
-function profileSection(me) {
+function profileSection(me, changed) {
   const name = textInput({ value: me.name || "", autocomplete: "name", maxlength: "200" });
   const email = textInput({ value: me.email, disabled: true });
   const zones = allTimezones();
@@ -62,6 +73,7 @@ function profileSection(me) {
   const save = h("button", { type: "submit", class: "btn btn-primary", text: "Update profile" });
   const form = h("form", { class: "settings-section", id: "profile" },
     h("div", { class: "subhead" }, h("h2", { text: "Profile" })),
+    pictureField(changed),
     field("Name", name, { hint: "Shown to your coauthors next to your edits." }),
     field("Email", email, { hint: "You sign in with this address. It cannot be changed here." }),
     field("Time zone", tz, { hint: h("span", {}, "Times in the history and tooltips use it. Deadlines are always shown in the venue's zone. ", useBrowser) }),
@@ -71,12 +83,95 @@ function profileSection(me) {
     try {
       const updated = await busy(save, () => api.patch("/api/auth/me", { name: name.value.trim(), timezone: tz.value }));
       Object.assign(session.me, updated);
+      changed();
       flash("Profile saved.", "success");
     } catch (err) {
       flashError(err);
     }
   });
   return form;
+}
+
+// The picture is saved when it is chosen, apart from the rest of the form.
+function pictureField(changed) {
+  const preview = h("span", {});
+  const file = h("input", { type: "file", accept: "image/*", hidden: true, "aria-label": "Profile picture" });
+  const upload = h("button", { type: "button", class: "btn" });
+  const remove = h("button", { type: "button", class: "btn btn-danger", text: "Remove" });
+  const paint = () => {
+    clear(preview).append(avatar(session.me, 96));
+    upload.textContent = session.me.avatar_url ? "Change picture" : "Upload a picture";
+    remove.hidden = !session.me.avatar_url;
+  };
+  const saved = (updated, text) => {
+    Object.assign(session.me, updated);
+    paint();
+    changed();
+    flash(text, "success");
+  };
+  upload.addEventListener("click", () => file.click());
+  file.addEventListener("change", async () => {
+    const picked = file.files?.[0];
+    file.value = "";
+    if (!picked) return;
+    try {
+      const square = await squarePicture(picked);
+      saved(await busy(upload, () => api.put("/api/auth/me/avatar", square)), "Profile picture saved.");
+    } catch (err) {
+      flashError(err);
+    }
+  });
+  remove.addEventListener("click", async () => {
+    try {
+      saved(await busy(remove, () => api.del("/api/auth/me/avatar")), "Profile picture removed. Your initials show again.");
+    } catch (err) {
+      flashError(err);
+    }
+  });
+  paint();
+  return h("fieldset", { class: "form-group" },
+    h("legend", { text: "Profile picture" }),
+    h("div", { class: "flex flex-wrap", style: { gap: "16px" } }, preview, h("div", { class: "flex" }, upload, remove), file),
+    h("div", { class: "form-hint", text: "Shown next to your name for your coauthors, instead of your initials. The middle square of the picture is used." }));
+}
+
+// The size a profile picture is stored at. The largest place it shows is 96px.
+const PICTURE_PX = 256;
+
+// The middle square of a picture, scaled to PICTURE_PX. WebP where the browser
+// writes it, PNG where it does not.
+async function squarePicture(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.src = url;
+  try {
+    await img.decode();
+  } catch {
+    throw new Error("This picture could not be read. Try a JPEG or PNG.");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  let side = Math.min(img.naturalWidth, img.naturalHeight);
+  let source = img;
+  let x = (img.naturalWidth - side) / 2;
+  let y = (img.naturalHeight - side) / 2;
+  // Halving step by step keeps a large photo from turning grainy.
+  while (side / 2 >= PICTURE_PX) {
+    const half = h("canvas", { width: Math.floor(side / 2), height: Math.floor(side / 2) });
+    half.getContext("2d").drawImage(source, x, y, side, side, 0, 0, half.width, half.height);
+    source = half;
+    side = half.width;
+    x = 0;
+    y = 0;
+  }
+  const size = Math.min(PICTURE_PX, side);
+  const out = h("canvas", { width: size, height: size });
+  const g = out.getContext("2d");
+  g.imageSmoothingQuality = "high";
+  g.drawImage(source, x, y, side, side, 0, 0, size, size);
+  const blob = size ? await new Promise((resolve) => out.toBlob(resolve, "image/webp", 0.9)) : null;
+  if (!blob) throw new Error("This picture could not be read. Try a JPEG or PNG.");
+  return blob;
 }
 
 function namingSection(me) {
@@ -180,6 +275,139 @@ function writingSection(me) {
       "How long it usually takes you to write a paper. The ", h("a", { href: "/timeline", text: "timeline" }),
       " starts each paper's writing window this many days before its submission deadline. A paper can have its own time in its row's menu on the timeline."),
     h("div", { class: "form-group" }, days.el));
+}
+
+// Spelling and grammar in the editor (editor-grammar.js), like meerail's
+// Settings. Kept on the server, so every browser gets the same. The form
+// saves with its button. The dictionary and the rules turned off change at
+// once, as they do from the editor's suggestions, which fill them.
+function grammarSection() {
+  const out = h("section", { class: "settings-section", id: "grammar" },
+    h("div", { class: "subhead" }, h("h2", { text: "Spelling and grammar" })),
+    h("div", { class: "loading" }, spinner()));
+  (async () => {
+    let config = null;
+    let problem = null;
+    try {
+      config = await api.get("/api/grammar/config");
+    } catch (err) {
+      if (err.status === 401) return;
+      // A server without the checker's routes has no checker either.
+      if (err.status !== 404) problem = err.message;
+    }
+    out.lastElementChild.remove();
+    if (config?.available) out.append(...grammarForm(config));
+    else out.append(h("p", { class: "color-muted", text: problem || "The spelling and grammar checker is not set up on this server, so the editor's Spellcheck button uses your browser's spellchecker." }));
+  })();
+  return out;
+}
+
+function grammarForm(config) {
+  const on = h("input", { type: "checkbox", id: "grammar-on" });
+  on.checked = config.enabled;
+  const language = h("select", { class: "form-select", id: "grammar-language", style: { width: "auto", maxWidth: "100%" } });
+  const variants = textInput({ id: "grammar-variants", value: (config.variants || []).join(", "), spellcheck: "false", autocomplete: "off", placeholder: "en-GB, de-AT", class: "form-control input-block input-mono" });
+  const variantsField = field("Preferred variants", variants, { hint: "When the language is detected, check it in these variants, for example British instead of American English. Separate them with commas." });
+  const picky = h("input", { type: "checkbox", id: "grammar-picky" });
+  picky.checked = config.picky;
+
+  let languages = [];
+  const fillLanguages = (current) => {
+    const list = languages.some((l) => l.code === current) || current === "auto" ? languages : [{ code: current, name: current }, ...languages];
+    clear(language).append(h("option", { value: "auto", text: "Detect from the text" }), ...list.map((l) => h("option", { value: l.code, text: l.name })));
+    language.value = current;
+    variantsField.hidden = current !== "auto";
+  };
+  fillLanguages(config.language || "auto");
+  language.addEventListener("change", () => { variantsField.hidden = language.value !== "auto"; });
+  api.get("/api/grammar/languages").then((res) => {
+    languages = res?.languages || [];
+    fillLanguages(language.value);
+  }).catch(() => {
+    // The checker is down. The setting can still be kept as it is.
+  });
+
+  const save = h("button", { type: "submit", class: "btn btn-primary", text: "Save" });
+  const form = h("form", {},
+    h("div", { class: "form-checkbox" }, on,
+      h("div", {},
+        h("label", { for: on.id, text: "Check spelling and grammar in the editor" }),
+        h("div", { class: "form-hint", text: "The Spellcheck button in the editor turns it on and off as well." }))),
+    field("Language", language, { hint: "Detecting looks at each file on its own." }),
+    variantsField,
+    h("div", { class: "form-checkbox" }, picky,
+      h("div", {},
+        h("label", { for: picky.id, text: "Picky" }),
+        h("div", { class: "form-hint", text: "Also point out style and typography, like wordy phrases or a missing comma." }))),
+    h("div", { class: "form-actions mt-3" }, save));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      config = await busy(save, () => api.put("/api/grammar/config", {
+        enabled: on.checked,
+        language: language.value,
+        variants: variants.value.split(/[\s,]+/).filter(Boolean),
+        picky: picky.checked,
+      }));
+      flash(config.enabled ? "Spelling and grammar saved." : "Spelling and grammar are off. The editor underlines nothing.", "success");
+      paintLists();
+    } catch (err) {
+      flashError(err);
+    }
+  });
+
+  // The dictionary and the rules turned off, each a list with a button per row.
+  const words = h("div", { class: "box mb-3", id: "grammar-words" });
+  const rules = h("div", { class: "box", id: "grammar-rules" });
+  const change = async (button, fn) => {
+    try {
+      config = await busy(button, fn);
+      paintLists();
+    } catch (err) {
+      flashError(err);
+    }
+  };
+  const word = textInput({ "aria-label": "A word for your dictionary", placeholder: "A word", spellcheck: "false", autocomplete: "off", class: "form-control form-control-sm flex-1" });
+  const add = h("button", { type: "submit", class: "btn btn-sm", text: "Add word" });
+  const addForm = h("form", { class: "box-footer flex" }, word, add);
+  addForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const value = word.value.trim();
+    if (!value) return;
+    change(add, () => api.post("/api/grammar/ignore", { word: value })).then(() => {
+      word.value = "";
+      word.focus();
+    });
+  });
+
+  function paintLists() {
+    const list = [...(config.words || [])].sort((a, b) => a.localeCompare(b));
+    clear(words).append(
+      h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title flex-1", text: "Your dictionary" }), counter(list.length)),
+      ...(list.length ? list.map((w) => {
+        const remove = h("button", { type: "button", class: "btn-octicon danger", "aria-label": `Remove ${w} from your dictionary`, title: "Remove" }, icon("x"));
+        remove.addEventListener("click", () => change(remove, () => api.put("/api/grammar/config", { words: (config.words || []).filter((x) => x !== w) })));
+        return h("div", { class: "box-row box-row-sm flex grammar-row" }, h("span", { class: "flex-1 text-mono truncate", text: w }), remove);
+      }) : [h("div", { class: "box-row box-row-sm color-muted text-small", text: "No words yet. They are never flagged as misspelled. “Add to dictionary” in the editor adds one too." })]),
+      addForm);
+    const off = config.disabled_rules || [];
+    clear(rules).append(
+      h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title flex-1", text: "Rules you turned off" }), counter(off.length)),
+      ...(off.length ? off.map((r) => {
+        const enable = h("button", { type: "button", class: "btn btn-sm", text: "Turn on", "aria-label": `Turn ${r} on again` });
+        enable.addEventListener("click", () => change(enable, () => api.put("/api/grammar/config", { disabled_rules: (config.disabled_rules || []).filter((x) => x !== r) })));
+        return h("div", { class: "box-row box-row-sm flex grammar-row" }, h("span", { class: "flex-1 text-mono truncate", text: r }), enable);
+      }) : [h("div", { class: "box-row box-row-sm color-muted text-small", text: "None. “Turn off this rule” in the editor's suggestions adds one here." })]));
+  }
+  paintLists();
+
+  return [
+    h("p", { class: "color-muted", text: "The editor underlines spelling mistakes in red, grammar in amber and style in blue, in .tex, .md and .txt files. Click an underline for suggestions, or press Alt+Shift+G for the next one. The text goes to the LanguageTool server this meertex is set up with, without LaTeX's commands, math and citations." }),
+    form,
+    h("h3", { class: "grammar-lists-head", text: "Words and rules" }),
+    words,
+    rules,
+  ];
 }
 
 // The daily reminder mail (DESIGN §5, Reminders): on or off, how many days

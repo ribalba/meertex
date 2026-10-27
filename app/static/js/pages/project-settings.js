@@ -3,7 +3,7 @@
 // (members) and Resubmit (fork to another venue).
 
 import { api, enc, projectUrl } from "../api.js";
-import { h, append, clear, debounce, plural } from "../dom.js";
+import { h, append, clear, debounce, nextId, plural } from "../dom.js";
 import { icon } from "../icons.js";
 import { navigate } from "../router.js";
 import { dateList } from "../dates.js";
@@ -261,7 +261,12 @@ const ROLE_TEXT = {
 
 async function access(ctx, out) {
   const p = ctx.project;
-  const members = await api.get(projectUrl(ctx.ref, "/members"));
+  // People from the user's other papers are suggested in "Add someone". The
+  // page works without them.
+  const [members, people] = await Promise.all([
+    api.get(projectUrl(ctx.ref, "/members")),
+    ctx.canEdit ? api.get("/api/people").catch(() => []) : [],
+  ]);
   if (!ctx.alive()) return;
   const order = { owner: 0, editor: 1, reviewer: 2, viewer: 3 };
   members.sort((a, b) => (order[a.role] ?? 9) - (order[b.role] ?? 9) || (a.email || "").localeCompare(b.email || ""));
@@ -314,14 +319,17 @@ async function access(ctx, out) {
       remove);
   });
 
-  const email = textInput({ type: "email", placeholder: "coauthor@example.com", autocomplete: "off", required: true, "aria-label": "Email" });
+  const onPaper = new Set(members.map((m) => m.email));
+  const suggestions = h("datalist", { id: nextId("people") },
+    people.filter((x) => !onPaper.has(x.email)).map((x) => h("option", { value: x.email, label: x.name || null })));
+  const email = textInput({ type: "email", placeholder: "coauthor@example.com", autocomplete: "off", required: true, "aria-label": "Email", list: suggestions.id });
   const roleSel = h("select", { class: "form-select", "aria-label": "Role", value: ctx.isOwner ? "editor" : "reviewer" },
     ["editor", "reviewer", "viewer"].map((r) => h("option", { value: r, disabled: r === "editor" && !ctx.isOwner }, r[0].toUpperCase() + r.slice(1))));
   const add = h("button", { type: "submit", class: "btn btn-primary", text: "Add" });
   const invite = h("form", { class: "box mt-4" },
     h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title", text: "Add someone" })),
     h("div", { class: "box-body" },
-      h("div", { class: "flex flex-wrap" }, h("div", { class: "flex-1", style: { minWidth: "220px" } }, email), roleSel, add),
+      h("div", { class: "flex flex-wrap" }, h("div", { class: "flex-1", style: { minWidth: "220px" } }, email, suggestions), roleSel, add),
       h("p", { class: "form-hint mb-0", text: "Someone without an account gets one right away. They receive an email with a sign-in link that opens this paper." }),
       ctx.isOwner ? null : h("p", { class: "form-hint mb-0", text: "Editors can add reviewers and viewers. Only the owner adds editors." })));
   invite.addEventListener("submit", async (e) => {

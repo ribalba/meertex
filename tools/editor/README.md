@@ -33,7 +33,7 @@ reason.
 
 ## Tests
 
-Two scripts. Neither is part of the server's pytest suite.
+Three scripts. None is part of the server's pytest suite.
 
 `tests/test_livefiles.py` checks that the browser's copy of the file list
 rules (`app/static/js/livefiles.js`) agrees with `app/live/ydoc.py` on 400
@@ -44,13 +44,26 @@ node and the repository's virtualenv:
 .venv/bin/python tools/editor/tests/test_livefiles.py
 ```
 
+`tests/test_pagelimit.py` checks the page limit (`app/static/js/pagelimit.js`,
+docs/DESIGN.md §14). It compiles small papers with article, IEEEtran, acmart
+and llncs, reads them with the vendored PDF.js in node, and compares where
+the text ends and the references start with what LaTeX's own labels say. It
+also checks how page limits are read and what the warnings say. It needs node
+and a local pdflatex with those classes and lipsum, and skips without them:
+
+```sh
+python3 tools/editor/tests/test_pagelimit.py
+```
+
 `tests/test_editor.py` drives Google Chrome through Playwright against a real
 server, a real database and the real `meertex sync`. It starts its own server
 on port 8065 with a temporary `DATA_DIR`, makes four accounts with sessions
 right in the database, creates the papers through the API, and stops
 everything when it is done. The CLI runs with `MEERTEX_HOME`,
 `MEERTEX_PAPERS` and `XDG_CONFIG_HOME` in the temporary folder, so your own
-checkouts and configuration are never touched.
+checkouts and configuration are never touched. The server's `GRAMMAR_URL`
+points at a small fake of LanguageTool that the script runs in a thread on a
+free port. It flags every "teh" as misspelled, so no Java is needed.
 
 It needs these things once:
 
@@ -105,10 +118,20 @@ What the tests cover:
 - The file tree: new file, new folder, rename, a rename by someone else while
   the file is open, upload through the picker and by dropping a file, moving a
   file by dragging it onto a folder, delete, and a delete by someone else.
+- The outline: the headings of the main file and the files it inputs in
+  reading order, a click that opens a heading's line, the mark that follows
+  the cursor, headings typed or written by someone else, a folded heading,
+  the box folded across a reload, and a `.tex` file outside the main
+  document with its own outline.
 - A viewer cannot type.
 - Back and Forward between files on one socket. Leaving the page closes the
   socket and stops every interval the editor started.
-- The spellcheck toggle is remembered, and the tree folds away at phone width.
+- The Spellcheck button turns the server's spelling and grammar checker on
+  and off for the account. Without a checker it is the browser's
+  spellchecker, remembered in the browser. The tree folds away at phone width.
+- Spelling and grammar: the underline, the suggestions under it, a
+  suggestion undone with Ctrl+Z, Alt+Shift+G, "Add to dictionary" and the
+  word taken out again on the Settings page.
 - An empty paper starts with "New file", and the Overview and Files tabs lead
   into the editor.
 - A path clash shows the second file as a conflict copy, like the server.
@@ -127,7 +150,7 @@ latexdiff on the `PATH`) also:
   shows the page count, and lists an error, whose `file:line` opens its line.
   On a phone the PDF takes the place of the text and goes back.
 - SyncTeX both ways: Ctrl+Shift+Enter marks the cursor's line in the PDF, and
-  a double-click there leads back to it.
+  a click there leads back to it.
 - A version's compiled PDF on the Versions tab with its preview, and the PDF
   diff of the Compare view.
 
@@ -136,7 +159,7 @@ latexdiff on the `PATH`) also:
 `tests/test_reviews_ui.py` drives the review pages (`pages/reviews.js`,
 `pages/review.js`, `pages/review-files.js`, `threads.js`) and, in the
 editor, the comments (`editor-comments.js`), the compile's problems on their
-lines (`editor-problems.js`) and the place a double-click in the PDF points at
+lines (`editor-problems.js`) and the place a click in the PDF points at
 (`editor-spot.js`). It works like `test_editor.py`: its own server on port
 8066 with a temporary `DATA_DIR`, accounts and sessions made in the database,
 papers made through the API. It needs a database of its own, made once:
@@ -168,9 +191,14 @@ What the tests cover:
   and `/reviews#thread-<id>` marks it.
 - Back and Forward between Conversation, Files and Changes, and every page at
   390 pixels without a horizontal scroll.
+- The Files view fills the window below the review's header, its source
+  scrolls on its own, and LaTeX has the editor's colours.
 - With a compile service: the PDF next to the review's source, a thread marks
   its lines in it, a double-click opens the comment box at the line, and the
-  latexdiff PDF of the changes.
+  latexdiff PDF of the changes. Text selected in the PDF with the mouse is
+  marked in the source, across the PDF's line break and with the umlauts that
+  TeX's fonts draw as accents, and its "Comment" button opens the comment box
+  on it. Zoomed in, the selectable text still lies on the drawn one.
 - In the editor: highlights of the open threads that stay on their words while
   typing, the comments panel in the PDF's column, a comment on a selection
   after an emoji (UTF-16 and code points differ), resolving there, a reviewer's
@@ -178,7 +206,7 @@ What the tests cover:
 - With a compile service: errors and warnings on their lines (gutter icon, red
   or amber line, the message on hover), right after an edit and after another
   file was open, gone after the fix and a new compile, and shown to viewers.
-  A double-click on a word in the PDF selects it in the text, the clicked one
+  A click on a word in the PDF selects it in the text, the clicked one
   of two in a long line, `na\"ive` for the PDF's "naïve", and the highlight
   fades.
 

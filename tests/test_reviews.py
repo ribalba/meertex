@@ -221,6 +221,20 @@ def test_resolve_accept_and_reopen_record_events():
         assert client.get(f"/api/projects/{pid}/threads", params={"state": "done"}).status_code == 422
 
 
+def test_an_open_thread_needs_a_suggestion_to_be_accepted():
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        t = thread(client, pid, "Energie")
+        url = f"/api/projects/{pid}/threads/{t['id']}"
+        r = client.post(f"{url}/accept")
+        assert r.status_code == 422 and "no suggestion" in r.json()["detail"]
+        # A reply that suggests something is enough, even a deletion.
+        assert client.post(f"{url}/comments", json={"body": "Drop it.", "suggestion": ""}).status_code == 201
+        got = client.post(f"{url}/accept").json()
+        assert (got["state"], got["resolution"]) == ("accepted", None)
+
+
 def test_apply_a_suggestion_writes_the_live_document():
     from app import live
 

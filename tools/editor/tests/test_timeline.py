@@ -109,24 +109,29 @@ class Env:
 
     # --- people and papers --------------------------------------------------------
 
-    def make_users(self, people):
+    def make_users(self, people, zone="UTC"):
         """Accounts with a session and an API token, made in the database the
-        way a sign-in makes them. Returns {email: (session, token)}."""
+        way a sign-in makes them. Returns {email: (session, token)}. A sign-in
+        leaves the zone for the browser to fill in. ``zone`` sets it first, UTC
+        by default because day 0 of the axis is today in the reader's zone and
+        self.today is counted in UTC. None leaves it to the browser."""
         code = (
             "import sys\n"
             "from app.database import SessionLocal\n"
             "from app.security import create_session, get_or_create_user, new_api_token\n"
             "with SessionLocal() as db:\n"
-            "    for arg in sys.argv[1:]:\n"
+            "    zone = sys.argv[1] or None\n"
+            "    for arg in sys.argv[2:]:\n"
             "        email, name = arg.split('|')\n"
             "        u = get_or_create_user(db, email)\n"
             "        u.name = name\n"
+            "        u.timezone = zone\n"
             "        u.api_token = u.api_token or new_api_token()\n"
             "        db.commit()\n"
             "        print(email, create_session(db, u), u.api_token)\n"
         )
         env = {**os.environ, "DATABASE_URL": self.args.db, "DATA_DIR": str(self.tmp / "data")}
-        out = subprocess.run([str(PYTHON), "-c", code, *[f"{e}|{n}" for e, n in people]],
+        out = subprocess.run([str(PYTHON), "-c", code, zone or "", *[f"{e}|{n}" for e, n in people]],
                              cwd=REPO, env=env, check=True, capture_output=True, text=True).stdout
         return {line.split()[0]: tuple(line.split()[1:]) for line in out.strip().splitlines()}
 
@@ -183,8 +188,8 @@ class Env:
 
     # --- browsers -----------------------------------------------------------------
 
-    def context(self, browser, who, width=1440, height=900):
-        ctx = browser.new_context(viewport={"width": width, "height": height})
+    def context(self, browser, who, width=1440, height=900, zone=None):
+        ctx = browser.new_context(viewport={"width": width, "height": height}, timezone_id=zone)
         ctx.add_cookies([{"name": "meertex_session", "value": self.session[who], "url": self.base}])
         return ctx
 
@@ -654,6 +659,21 @@ def a_shared_link_shows_the_chart_only(env, browser):
     env.shot(dead, "shared-gone-1440")
     guest.close()
     ctx.close()
+
+
+@test
+def a_new_account_takes_the_browsers_zone(env, browser):
+    email = f"carol-{env.run}@example.com"
+    env.session["carol"], env.token["carol"] = env.make_users([(email, "Carol Chen")], zone=None)[email]
+    assert env.get("carol", "/api/auth/me")["timezone"] is None
+    # The first browser's zone stays. One in another zone changes nothing.
+    for zone in ("Asia/Tokyo", "America/New_York"):
+        ctx = env.context(browser, "carol", zone=zone)
+        page = env.page(ctx, "carol")
+        page.goto(f"{env.base}/settings")
+        expect(page.get_by_label("Time zone", exact=True)).to_have_value("Asia/Tokyo")
+        ctx.close()
+    assert env.get("carol", "/api/auth/me")["timezone"] == "Asia/Tokyo"
 
 
 def main():

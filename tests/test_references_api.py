@@ -128,9 +128,9 @@ def test_report_before_any_run():
         assert todo["status"] == "error"
         assert {"placeholder", "year", "not_cited"} <= _codes(todo)
         assert entries["gmt"]["status"] == "pending"
-        # The broken entry and the error count. Pending ones do not.
-        assert data["problems"] == 2
-        assert client.get(f"/api/projects/{pid}/references/summary").json() == {"problems": 2, "total": 4}
+        # The error, the broken entry and the missing key count. Pending ones do not.
+        assert data["problems"] == 3
+        assert client.get(f"/api/projects/{pid}/references/summary").json() == {"problems": 3, "total": 4}
 
 
 def test_a_run_looks_entries_up(fake):
@@ -187,8 +187,9 @@ def test_mark_change_and_unmark(fake):
         client.put(f"/api/projects/{pid}/files/refs.bib", content=text.replace("{2019}", "{2018}", 1).encode())
         changed = _entries(client, pid)["roussou2019"]
         assert changed["status"] == "changed"
-        # roussou2019 is changed, fake2023 and todo are errors, one entry is broken.
-        assert client.get(f"/api/projects/{pid}/references/summary").json()["problems"] == 4
+        # roussou2019 is changed, fake2023 and todo are errors, one entry is broken
+        # and one key is missing.
+        assert client.get(f"/api/projects/{pid}/references/summary").json()["problems"] == 5
         problems = client.get(f"/api/projects/{pid}/references/problems").json()
         assert any("changed after it was marked" in p["message"] for p in problems)
 

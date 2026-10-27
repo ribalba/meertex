@@ -1006,7 +1006,89 @@ def cmd_mv(args) -> int:
     return 0
 
 
+# The sync client stamps its own lines with the time. The journal has the
+# time of every line already, with the day.
+LOG_STAMP = re.compile(r"^\d\d:\d\d:\d\d ")
+
+
+def _service_state(s: dict) -> str:
+    if not s["installed"]:
+        return paint("not installed", output.DIM)
+    if s["running"]:
+        return paint("running", output.GREEN)
+    if s["sub_state"] == "auto-restart":
+        return paint("stopped, restarting soon", output.AMBER)
+    if s["state"] == "activating":
+        return paint("starting", output.AMBER)
+    if s["state"] == "failed":
+        return paint("failed", output.RED)
+    return paint("stopped", output.DIM)
+
+
+def _log_line(e: dict) -> str:
+    at = output.parse_time(e["at"]).astimezone().strftime("%b %d %H:%M:%S")
+    message = LOG_STAMP.sub("", output.ANSI.sub("", e["message"]), count=1)
+    code = output.RED if e["priority"] <= 3 else output.AMBER if e["priority"] == 4 else None
+    return f"{paint(at, output.DIM)}  {paint(message, code)}"
+
+
+def service_status(args) -> int:
+    if args.lines < 0:
+        raise UsageError("--lines must be 0 or more.")
+    if args.json and args.follow:
+        for e in service.follow(args.lines):
+            print(json.dumps(e, ensure_ascii=False), flush=True)
+        return 0
+    s = service.status(0 if args.follow else args.lines)
+    if args.json:
+        print_json(s)
+        return 0 if s["running"] else 1
+
+    head = f"{paint(service.UNIT_NAME, output.BOLD)}  {_service_state(s)}"
+    if s["since"] and s["installed"]:
+        since = output.parse_time(s["since"]).astimezone().strftime("%Y-%m-%d %H:%M")
+        head += f" since {since} ({output.ago(s['since'])})"
+    print(head)
+    rows = []
+    if s["installed"]:
+        rows.append(["unit", s["unit"] + (", enabled at login" if s["enabled"] else ", not enabled at login")])
+        if s["command"]:
+            rows.append(["runs", s["command"]])
+    if s["pid"]:
+        rows.append(["pid", str(s["pid"])])
+    if s["restarts"]:
+        rows.append(["restarts", str(s["restarts"])])
+    if s["result"] and s["result"] != "success":
+        rows.append(["last exit", f"{s['result']}, status {s['exit_status']}"])
+    if rows:
+        print(table(rows, indent="  "))
+    if not s["installed"]:
+        print(paint("Install it with meertex service install.", output.DIM))
+    elif not s["running"]:
+        print(paint("Start it with systemctl --user start meertex.service.", output.DIM))
+
+    if args.follow:
+        print()
+        for e in service.follow(args.lines):
+            print(_log_line(e), flush=True)
+        return 0
+    if args.lines:
+        print()
+        if s["logs_error"]:
+            print(paint(f"No log. {s['logs_error']}", output.AMBER))
+        elif not s["logs"]:
+            print(paint("No log lines.", output.DIM))
+        for e in s["logs"]:
+            print(_log_line(e))
+    return 0 if s["running"] else 1
+
+
 def cmd_service(args) -> int:
+    if args.action == "status":
+        try:
+            return service_status(args)
+        except service.Unavailable as exc:
+            raise UsageError(str(exc)) from exc
     try:
         if args.action == "install":
             res = service.install(start=not args.no_start)
@@ -1177,9 +1259,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("folder")
 
-    p = cmd("service", cmd_service, "Install or remove the systemd user unit that runs meertex sync")
-    p.add_argument("action", choices=("install", "uninstall"))
-    p.add_argument("--no-start", action="store_true", help="only write or remove the file, no systemctl")
+    p = cmd("service", cmd_service, "Install, remove or check the systemd user unit that runs meertex sync")
+    ssub = p.add_subparsers(dest="action", metavar="install|uninstall|status", required=True)
+    for action, help in (("install", "write the unit and start it"), ("uninstall", "stop the unit and remove it")):
+        s = ssub.add_parser(action, parents=[common], help=help)
+        s.add_argument("--no-start", action="store_true", help="only write or remove the file, no systemctl")
+    s = ssub.add_parser("status", parents=[common], help="whether it runs, and its last log lines. Exits 1 when it does not run")
+    s.add_argument("-n", "--lines", type=int, default=20, help="how many log lines, default 20")
+    s.add_argument("-f", "--follow", action="store_true",
+                   help="keep printing new log lines until Ctrl-C (with --json, one object per line)")
 
     cmd_reviews.add_commands(cmd, common)
     cmd_hold.add_commands(cmd, common)

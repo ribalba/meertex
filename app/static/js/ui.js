@@ -209,13 +209,18 @@ export function avatar(person, size = 20) {
   const initials = ((parts[0]?.[0] || "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
   let hash = 0;
   for (const c of person?.email || who) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
-  const cls = size >= 40 ? " avatar-40" : size >= 32 ? " avatar-32" : "";
-  return h("span", {
+  const cls = size >= 96 ? " avatar-96" : size >= 40 ? " avatar-40" : size >= 32 ? " avatar-32" : "";
+  const letters = h("span", {
     class: `avatar${cls}`,
     style: { background: AVATAR_COLORS[hash % AVATAR_COLORS.length] },
     "aria-hidden": "true",
     text: initials,
   });
+  if (!person?.avatar_url) return letters;
+  // A profile picture that does not load gives way to the initials.
+  const picture = h("img", { class: `avatar${cls}`, src: person.avatar_url, alt: "", "aria-hidden": "true" });
+  picture.addEventListener("error", () => picture.replaceWith(letters), { once: true });
+  return picture;
 }
 
 export function personName(person) {
@@ -327,4 +332,10 @@ export function setCrumbs(items = []) {
     nav.append(h("span", { class: "sep", text: "/", "aria-hidden": "true" }));
     nav.append(item.href ? h("a", { href: item.href, class: "truncate", text: item.text }) : h("span", { class: "truncate", text: item.text }));
   }
+}
+
+// A page's own buttons in the header, left of New paper (a paper's Check out).
+// The router empties them with the crumbs when the URL changes.
+export function setHeaderActions(nodes = []) {
+  document.getElementById("header-page-actions")?.replaceChildren(...nodes.filter(Boolean));
 }

@@ -96,12 +96,12 @@ def _sync_message(step: int, payload: bytes) -> bytes:
 
 
 def _signed(state: str, conn: rooms.Connection) -> str:
-    """The state with the signed-in person's name and email in its ``user``
-    field, whatever the client wrote there. The editor shows these names next
-    to cursors, so nobody can appear as someone else."""
+    """The state with the signed-in person's name, email and picture in its
+    ``user`` field, whatever the client wrote there. The editor shows these
+    next to cursors, so nobody can appear as someone else."""
     value = json.loads(state)
     if isinstance(value, dict) and isinstance(value.get("user"), dict):
-        value["user"] = {**value["user"], "name": conn.name, "email": conn.editor}
+        value["user"] = {**value["user"], "name": conn.name, "email": conn.editor, "avatar_url": conn.avatar_url}
         return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
     return state
 
@@ -174,6 +174,7 @@ class _Access:
     editor: str
     can_write: bool
     name: str
+    avatar_url: str | None = None
 
 
 def _origin(url: str) -> str:
@@ -206,7 +207,7 @@ def _authorize(project: str, cookie: str | None, authorization: str | None, toke
             p, membership = resolve_project(db, user, project)
         except HTTPException:
             return CLOSE_NO_PROJECT
-        return _Access(p.id, user.email, can(membership, "editor"), user.name or user.email)
+        return _Access(p.id, user.email, can(membership, "editor"), user.name or user.email, user.avatar_url)
 
 
 # --- The connection ----------------------------------------------------------------
@@ -292,7 +293,7 @@ async def sync(websocket: WebSocket, project: str) -> None:
             await websocket.close(access, reason)
         return
 
-    conn = rooms.Connection(access.editor, access.can_write, access.name)
+    conn = rooms.Connection(access.editor, access.can_write, access.name, access.avatar_url)
     room = await anyio.to_thread.run_sync(rooms.join, access.project_id, conn)
     try:
         async with anyio.create_task_group() as tg:

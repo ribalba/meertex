@@ -1,6 +1,7 @@
 // The editor's PDF pane (docs/DESIGN.md §14, In the editor): the compiled PDF
 // of the live document, compiling on request and two seconds after the last
-// edit, the problems of the last compile, and SyncTeX in both directions.
+// edit, the problems of the last compile, SyncTeX in both directions, and a
+// warning when the PDF is longer than the paper's page limit (pagelimit.js).
 //
 // The server compiles and caches by content, so every open editor may ask
 // after every edit. Only one request runs here at a time. Edits meanwhile ask
@@ -12,8 +13,9 @@
 import { api, projectUrl } from "../api.js";
 import { h, clear, plural } from "../dom.js";
 import { icon } from "../icons.js";
+import { checkView } from "../pagelimit.js";
 import { createPdfView } from "../pdfview.js";
-import { dropdown, spinner } from "../ui.js";
+import { dropdown, flashBox, spinner } from "../ui.js";
 
 const AUTO_KEY = "meertex.editor.autocompile";
 const AUTO_DELAY_MS = 2000;
@@ -42,7 +44,10 @@ function seconds(ms) {
 // finished compile's problems, for the editor to mark their lines. The
 // reference check's errors and warnings (docs/DESIGN.md §16) come with them,
 // read when the pane opens and after every compile, marked "References".
-export function pdfPane({ project, openSource, cursor, note, onHide, onProblems = null }) {
+// `hasFile(path)` says whether the paper has that file (null while the files
+// load) and `canEdit` whether the person may choose another main document,
+// both for the hint under a compile that made no PDF.
+export function pdfPane({ project, openSource, cursor, note, onHide, onProblems = null, hasFile = null, canEdit = false }) {
   const url = (rest) => projectUrl(project.id, rest);
   let auto = readAuto();
   let shown = null; // the compile whose PDF is in the view
@@ -55,6 +60,8 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   let problemsOpen = null; // null until the person opens or closes the list
   let refProblems = []; // the reference check's errors and warnings
   let refAsked = 0;
+  let limitNote = ""; // where the references start and the page limit, for the page count's tooltip
+  let limitChecked = 0;
 
   const status = h("span", { class: "pdf-status is-idle", role: "status" }, h("span", { class: "dot" }), h("span", { class: "pdf-status-text", text: "Not compiled yet" }));
   const recompile = h("button", { type: "button", class: "btn btn-sm pdf-recompile", title: "Compile the paper now (Ctrl+Enter)" }, "Recompile");
@@ -77,7 +84,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
 
   const showButton = h("button", {
     type: "button", class: "btn-octicon", "aria-label": "Show the cursor's place in the PDF",
-    title: "Show the cursor's place in the PDF (Ctrl+Shift+Enter). A double-click in the PDF shows its place in the text.",
+    title: "Show the cursor's place in the PDF (Ctrl+Shift+Enter). A click in the PDF shows its place in the text.",
   }, icon("arrow-right"));
   showButton.addEventListener("click", () => showCursor());
   const zoomOut = h("button", { type: "button", class: "btn-octicon pdf-zoom-step", "aria-label": "Zoom out", title: "Zoom out", text: "−" });
@@ -109,18 +116,37 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   const message = h("div", { class: "pdf-message" }, h("div", { class: "loading" }, spinner(true)));
   const stale = h("div", { class: "pdf-stale", hidden: true }, icon("alert", { size: 14 }),
     h("span", { text: "The last compile made no PDF. This one is from before it." }));
+  const overLimit = h("div", { class: "pdf-limit", hidden: true }, icon("alert", { size: 14 }), h("span"));
   const problems = h("div", { class: "pdf-problems", hidden: true });
-  const el = h("section", { class: "pdf-pane", "aria-label": "PDF" }, toolbar, stale, h("div", { class: "pdf-body" }, viewHost, message), problems);
+  const el = h("section", { class: "pdf-pane", "aria-label": "PDF" }, toolbar, stale, overLimit, h("div", { class: "pdf-body" }, viewHost, message), problems);
 
   const view = createPdfView(viewHost, {
-    onDoubleClick: (at) => findSource(at),
+    onClick: (at) => findSource(at),
     onChange: ({ page, pages, zoom }) => {
       zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
       pageCount.hidden = !pages;
       pageCount.textContent = `${page} / ${pages}`;
-      pageCount.title = `Page ${page} of ${pages}`;
+      pageCount.title = `Page ${page} of ${pages}.${limitNote ? ` ${limitNote}` : ""}`;
     },
   });
+
+  // The PDF in the view against the paper's page limit (pagelimit.js). A
+  // newer PDF meanwhile gets its own check.
+  async function checkPages() {
+    const mine = ++limitChecked;
+    let result = null;
+    try {
+      result = await checkView(view, project.page_limit);
+    } catch (err) {
+      console.warn("The PDF's pages could not be checked", err);
+    }
+    if (dead || mine !== limitChecked) return;
+    overLimit.hidden = !result?.over;
+    overLimit.lastChild.textContent = result?.message || "";
+    pageCount.classList.toggle("is-over", Boolean(result?.over));
+    limitNote = result?.summary || "";
+    pageCount.title = `Page ${view.page} of ${view.pages}.${limitNote ? ` ${limitNote}` : ""}`;
+  }
 
   function setStatus(kind, text) {
     status.className = `pdf-status is-${kind}`;
@@ -167,6 +193,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
           await view.load(c.pdf_url);
           shown = c;
           message.hidden = true;
+          checkPages();
         } catch (err) {
           // A PDF (or PDF.js) that could not be fetched, because the server was
           // out of reach for a moment, is loaded with the next compile.
@@ -177,12 +204,32 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
         }
       }
     } else if (!shown) {
-      showMessage(h("div", { class: "blankslate" },
-        icon("alert", { size: 24 }),
-        h("h3", { text: c.status === "timeout" ? "The compile took too long" : "LaTeX made no PDF" }),
-        h("p", { text: (c.problems || []).length ? "The problems below say why." : "The log says why." }),
-        c.log_url ? h("a", { class: "btn", href: c.log_url, target: "_blank", rel: "noopener" }, "Open the log") : null));
+      showFailure(c);
     }
+  }
+
+  function showFailure(c) {
+    showMessage(h("div", { class: "blankslate" },
+      icon("alert", { size: 24 }),
+      h("h3", { text: c.status === "timeout" ? "The compile took too long" : "LaTeX made no PDF" }),
+      h("p", { text: (c.problems || []).length ? "The problems below say why." : "The log says why." }),
+      c.log_url ? h("a", { class: "btn", href: c.log_url, target: "_blank", rel: "noopener" }, "Open the log") : null,
+      c.status === "timeout" ? null : mainHint(c)));
+  }
+
+  // LaTeX may have compiled the wrong file. Says which one, and how to pick another.
+  function mainHint(c) {
+    const main = c.main_file || project.main_file || "main.tex";
+    const name = h("code", { text: main });
+    const what = hasFile?.(main) === false
+      ? h("p", {}, "The main file ", name, " is not in this paper.")
+      : h("p", {}, "LaTeX compiles ", name, ". If the paper starts in another file, that may be why.");
+    const how = canEdit
+      ? h("p", {}, "In Files, open the menu of the paper's main .tex file and choose ", h("strong", { text: "Make main document" }), ".")
+      : h("p", { text: "The owner and the editors can choose another main document." });
+    const box = flashBox([what, how], "info", { iconName: "info" });
+    box.classList.add("pdf-main-hint");
+    return box;
   }
 
   function paintProblems(c) {
@@ -362,6 +409,11 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     compile,
     edited,
     showCursor,
+    // A compile that failed before the files were in names its main file
+    // without knowing whether it is there. Now it does.
+    filesLoaded() {
+      if (last && !shown && !last.pdf_url) showFailure(last);
+    },
     destroy() {
       dead = true;
       clearTimeout(timer);

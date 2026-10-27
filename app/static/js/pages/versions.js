@@ -7,6 +7,7 @@ import { api, enc, projectUrl } from "../api.js";
 import { h, clear, nextId } from "../dom.js";
 import { icon } from "../icons.js";
 import { navigate, onLeave } from "../router.js";
+import { checkView } from "../pagelimit.js";
 import { createPdfView } from "../pdfview.js";
 import { renderMarkdown } from "../markdown.js";
 import { renderDiff } from "../diff.js";
@@ -274,7 +275,9 @@ function compiledRow(v, ctx, preview) {
       preview.hidden = !open;
       show.setAttribute("aria-expanded", String(open));
       if (open && !view) {
-        view = pdfBox(preview, { title: `${v.label}, compiled from ${v.tag}`, url: c.pdf_url, name: `${ctx.project.name}-${v.tag}.pdf` });
+        view = pdfBox(preview, {
+          title: `${v.label}, compiled from ${v.tag}`, url: c.pdf_url, name: `${ctx.project.name}-${v.tag}.pdf`, pageLimit: ctx.project.page_limit,
+        });
         onLeave(() => view.destroy());
       }
     });
@@ -289,7 +292,8 @@ function compiledRow(v, ctx, preview) {
 }
 
 // A box with a PDF in the viewer, its zoom, page count and a download link.
-function pdfBox(host, { title, url, name }) {
+// With the paper's `pageLimit` a PDF that is too long gets a warning (pagelimit.js).
+function pdfBox(host, { title, url, name, pageLimit = "" }) {
   const zoom = h("span", { class: "pdf-zoom-text", text: "" });
   const pages = h("span", { class: "pdf-pages" });
   const view = { current: null };
@@ -303,14 +307,20 @@ function pdfBox(host, { title, url, name }) {
     pages,
     h("a", { class: "btn-octicon", href: url, download: name, "aria-label": "Download the PDF", title: "Download the PDF" }, icon("download")));
   const body = h("div", { class: "pdf-box-body" });
-  clear(host).append(h("div", { class: "box pdf-box" }, header, body));
+  const overLimit = h("div", { class: "pdf-limit", hidden: true }, icon("alert", { size: 14 }), h("span"));
+  clear(host).append(h("div", { class: "box pdf-box" }, header, overLimit, body));
   view.current = createPdfView(body, {
     onChange: ({ page, pages: n, zoom: z }) => {
       zoom.textContent = `${Math.round(z * 100)}%`;
       pages.textContent = n ? `${page} / ${n}` : "";
     },
   });
-  view.current.load(url).catch((err) => {
+  view.current.load(url).then(() => checkView(view.current, pageLimit).then((result) => {
+    overLimit.hidden = !result?.over;
+    overLimit.lastChild.textContent = result?.message || "";
+    pages.classList.toggle("is-over", Boolean(result?.over));
+    pages.title = result?.summary || "";
+  }, (err) => console.warn("The PDF's pages could not be checked", err)), (err) => {
     console.error(err);
     clear(body).append(blankslate({ iconName: "alert", title: "The PDF could not be shown", text: err.message || String(err) }));
   });

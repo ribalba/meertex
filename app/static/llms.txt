@@ -28,8 +28,9 @@ https://meertex.com is the hosted meertex. Anyone can sign in there with an emai
 - **Outcome filter.** "All my accepted papers" is `meertex projects --outcome accepted`, or one filter in the web app.
 - **Folders and names.** Each person sorts the papers into their own folder tree. Project names follow a pattern, by default `{year}-{conference|lower}-{paper|lower}`, which gives names like `2027-icse-green-llm`.
 - **Templates and resubmission.** A new paper can start empty, from a basic `main.tex` and `refs.bib`, or from a publisher's template zip, whose sample paper becomes the main file. A rejected paper is resubmitted to another venue as a fork that keeps its files and links back.
-- **Reviews.** GitHub-style reviews on a fixed state of the paper. A reviewer comments on spans or lines of the text, or double-clicks the PDF and SyncTeX finds the line. A comment can carry a suggestion (replacement text). Authors reply, apply suggestions and resolve threads. Resolving records how the text changed, and the reviewer accepts or reopens. Threads follow their text through later edits and renames.
+- **Reviews.** GitHub-style reviews on a fixed state of the paper. A reviewer comments on spans or lines of the text, selects a passage in the PDF and finds it marked in the source, or double-clicks the PDF and SyncTeX finds the line. A comment can carry a suggestion (replacement text). Authors reply, apply suggestions and resolve threads. Resolving records how the text changed, and the reviewer accepts or reopens. Threads follow their text through later edits and renames.
 - **Reference check.** Every `.bib` entry is looked up at doi.org, Crossref, Semantic Scholar, DBLP, arXiv and Open Library, and its links are fetched. It finds DOIs that do not exist or belong to another work, titles no index has, authors who did not write the paper, wrong years, venues and pages, dead links, retracted papers and preprints that have been published since, with the record's value one click away. Checks that need no network catch placeholders, impossible arXiv ids, bad ISBNs and years in the future. On request, Claude reads each cited abstract and says whether it supports the sentences that cite it. A person who checked an entry by hand marks it in the entry itself (`meertex-checked`), and the mark breaks when the entry changes. New entries come from a DOI, an arXiv id, an ISBN or a link.
+- **Spelling and grammar.** The editor underlines spelling, grammar and style mistakes in `.tex`, `.md` and `.txt` files while you type, checked by a LanguageTool server that runs next to meertex, so the text never leaves it. Commands, math, citations, references, code and tables are skipped, so a correct paper stays quiet. A click on an underline offers the fixes, "Add to dictionary" and "Turn off this rule". The language (or automatic detection), the personal dictionary and the rules turned off are per person. The routes are `GET` and `PUT /api/grammar/config`, `POST /api/grammar/ignore {word?, rule?}`, `GET /api/grammar/languages` and `POST /api/grammar/check {text, kind?, language?, focus?}`, which answers the matches with UTF-16 offsets into `text`.
 - **Email notifications.** Invitations, submitted reviews, new comments and every reply, resolve, accept or reopen in a thread are mailed to the people concerned.
 - **Reminders before deadlines.** One digest mail a day per person, by default 14, 3 and 1 days before a deadline and on the day, counted in the venue's time zone, with when to start writing and the questions waiting. Each person picks the days and the hour and can mute a paper. `meertex reminders` prints what the next one says.
 - **Members and roles.** Owner, editor, reviewer and viewer, invited by email.
@@ -103,11 +104,12 @@ In a clone of the repository, `make install-skill` links it instead.
 
 ## How it works
 
-A meertex server is three containers.
+A meertex server is four containers.
 
 - **web** is the FastAPI server and the web app (plain HTML, CSS and JavaScript). It holds each open paper in memory as a live document, takes the WebSocket sync of the CLI and the browser (the y-websocket protocol), and keeps the git history of every paper. It runs as one process with one worker on purpose.
 - **db** is PostgreSQL. It stores accounts, projects, dates, versions, reviews and the live documents.
 - **compile** is TeX Live 2025 behind a small HTTP service. It runs as an unprivileged user with a read-only root file system and no capabilities. TeX runs without shell escape and in kpathsea's paranoid mode, so a document reads and writes only inside its own job folder.
+- **languagetool** is LanguageTool 6.8, the spelling and grammar checker. Only `web` talks to it, with paragraphs it has not checked before, and `web` refuses to send text to a checker on a public address unless told otherwise.
 
 The CLI is a Python package on PyPI (`pipx install meertex`), published again on every change, so `pipx upgrade meertex` brings the newest version. Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
 
@@ -120,6 +122,7 @@ pipx install meertex                       # or: uv tool install meertex
 meertex login --server meertex.com         # mails a sign-in code
 meertex checkout 2027-icse-green-llm       # or: meertex new ... --checkout
 meertex service install                    # a systemd user unit that runs meertex sync
+meertex service status                     # whether it runs, and its last log lines
 ```
 
 The background sync service is a systemd user unit. On systems without systemd (macOS, Windows), run `meertex sync` in a terminal.
@@ -136,7 +139,7 @@ meertex login --server http://127.0.0.1:8060
 
 On a server, Coolify deploys `docker-compose.coolify.yml`. Set `BASE_URL` and the SMTP variables, give the web service its domain and deploy. [COOLIFY.md](https://github.com/ribalba/meertex/blob/main/COOLIFY.md) has every step.
 
-Requirements are Docker with Compose, about 1 GB of memory for the server and Postgres plus up to 2 GB while compiling, and about 6 GB of disk for the TeX Live image.
+Requirements are Docker with Compose, about 1 GB of memory for the server and Postgres plus up to 2 GB while compiling and up to 1.5 GB for the spelling checker, and about 6 GB of disk for the TeX Live image.
 
 ## Common questions
 

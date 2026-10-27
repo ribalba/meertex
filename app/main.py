@@ -24,11 +24,13 @@ from .config import get_settings
 from .database import init_db
 from .routers import (
     auth,
+    avatars,
     blobs,
     compiles,
     dates,
     files,
     folders,
+    grammar,
     history,
     imports,
     members,
@@ -89,6 +91,8 @@ app.include_router(reviews.router)
 app.include_router(timeline.router)
 app.include_router(reminders.router)
 app.include_router(references.router)
+app.include_router(grammar.router)
+app.include_router(avatars.router)
 
 
 @app.get("/healthz")

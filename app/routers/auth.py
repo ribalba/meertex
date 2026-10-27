@@ -87,7 +87,7 @@ def me(user: SessionOrTokenUser) -> UserOut:
 @router.patch("/me", response_model=UserOut)
 def update_me(payload: ProfileUpdate, db: DB, user: SessionOrTokenUser) -> UserOut:
     data = payload.model_dump(exclude_unset=True)
-    if "timezone" in data:
+    if data.get("timezone") is not None:
         try:
             ZoneInfo(data["timezone"])
         except (ZoneInfoNotFoundError, ValueError):

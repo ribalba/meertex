@@ -57,7 +57,7 @@ a date.
 | `submission_url` | The submission system for this track | `https://icse2027.hotcrp.com` |
 | `location` | City and country | `Rio de Janeiro, Brazil` |
 | `publisher` | Who publishes the proceedings | `ACM`, `IEEE`, `Springer LNCS`, `LIPIcs`, `USENIX` |
-| `page_limit` | The limit as the CFP words it, short | `10 pages + 2 pages of references` |
+| `page_limit` | The limit as the CFP words it, short. Start with the pages for the text and say what the references get, because meertex checks the PDF against it | `10 pages + 2 pages of references`, `8 pages + unlimited references`, `12 pages including references` |
 | `template` | The LaTeX class and option the CFP requires | `acmart sigconf`, `IEEEtran conference`, `llncs` |
 | `review_model` | `double-blind`, `single-blind` or `open` | |
 | `notes` | Rules that bite at the deadline, as short Markdown bullets | anonymisation rules, mandatory abstract registration, artifact evaluation, "no extensions", ORCID, data availability statement |

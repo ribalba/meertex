@@ -4,7 +4,7 @@
 import { api, ApiError } from "./api.js";
 import { h, clear } from "./dom.js";
 import { icon } from "./icons.js";
-import { session } from "./session.js";
+import { onMeChanged, session } from "./session.js";
 import { route, start, navigate, decodePath } from "./router.js";
 import { avatar, dropdown, flashBox, flashError } from "./ui.js";
 
@@ -45,6 +45,7 @@ function renderHeader() {
 
   actions.append(
     search,
+    h("span", { id: "header-page-actions" }),
     h("a", { class: "btn btn-sm", href: "/new", "aria-label": "New paper", title: "New paper" },
       icon("plus"), h("span", { class: "hide-sm", text: "New paper" })),
     userMenu,
@@ -58,6 +59,19 @@ async function signOut() {
     flashError(err);
   }
   location.assign("/login");
+}
+
+// A new account has no zone yet, whether it signed up itself or was invited.
+// The browser it first opens the app in knows one. Settings can change it.
+async function takeBrowserZone() {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!tz) return;
+  try {
+    Object.assign(session.me, await api.patch("/api/auth/me", { timezone: tz }));
+  } catch {
+    // A zone the server does not know. The account stays on UTC, and the
+    // next load tries again.
+  }
 }
 
 async function boot() {
@@ -76,7 +90,10 @@ async function boot() {
       h("div", { class: "container page" }, flashBox(`meertex could not start. ${err.message}`, "error")));
     return;
   }
+  if (!session.me.timezone) await takeBrowserZone();
   renderHeader();
+  // Only the menu's avatar, so the page's own header actions stay.
+  onMeChanged((me) => document.querySelector("#header-actions .avatar-btn > .avatar")?.replaceWith(avatar(me, 32)));
   api.get("/api/version").then((v) => {
     document.getElementById("app-version").textContent = v?.version || "";
   }).catch(() => {});

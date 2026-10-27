@@ -29,7 +29,8 @@ class UserOut(BaseModel):
     id: str
     email: str
     name: str | None = None
-    timezone: str
+    # None until the web app sends the browser's zone. Read as UTC until then.
+    timezone: str | None = None
     api_token: str | None = None
     naming_pattern: str
     writing_days: int
@@ -38,6 +39,8 @@ class UserOut(BaseModel):
     reminders: bool = True
     reminder_days: list[int] = [14, 3, 1, 0]
     reminder_hour: int = 8
+    # The profile picture (§2, Accounts), or None for the initials.
+    avatar_url: str | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

@@ -77,7 +77,14 @@ export async function render(ctx) {
   else if (view === "changes") await renderChanges(rctx);
   else renderConversation(rctx);
   if (!ctx.alive()) return;
-  clear(ctx.main).append(head.el, tabs, body);
+  if (view === "files") {
+    // The source and the PDF take the full width below the paper's header,
+    // like the editor. The review's header keeps the page's width.
+    ctx.main.className = "rv-files-page";
+    clear(ctx.main).append(h("div", { class: "rv-files-head" }, h("div", { class: "container" }, head.el, tabs)), body);
+  } else {
+    clear(ctx.main).append(head.el, tabs, body);
+  }
 }
 
 // --- Header -----------------------------------------------------------------------

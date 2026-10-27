@@ -27,3 +27,17 @@ def test_naming_pattern_needs_a_placeholder():
         r = client.patch("/api/auth/me", json={"naming_pattern": "{conference}{year}-{paper}"})
         assert r.status_code == 200
         assert r.json()["naming_pattern"] == "{conference}{year}-{paper}"
+
+
+def test_a_new_account_waits_for_the_browsers_zone():
+    """No zone until the web app sends the browser's (app/static/js/app.js)."""
+    with running_app() as client:
+        assert sign_in(client)["timezone"] is None
+        assert client.patch("/api/auth/me", json={"timezone": "Mars/Olympus"}).status_code == 422
+        r = client.patch("/api/auth/me", json={"timezone": "Asia/Tokyo"})
+        assert r.status_code == 200
+        assert r.json()["timezone"] == "Asia/Tokyo"
+        # A null is no way back to "not chosen yet".
+        r = client.patch("/api/auth/me", json={"timezone": None, "name": "Didi"})
+        assert r.status_code == 200
+        assert r.json()["timezone"] == "Asia/Tokyo"

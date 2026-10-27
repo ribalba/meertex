@@ -23,13 +23,63 @@ function uncomment(line) {
   return line;
 }
 
+// The outline's commands. A heading's number is its depth.
+const HEADINGS = { part: 0, chapter: 1, section: 2, subsection: 3, subsubsection: 4, paragraph: 5, subparagraph: 6 };
+const OUTLINE = /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|input|include|subfile|import|subimport)(?![a-zA-Z@])\*?/g;
+
+// The text inside the braces that open at `at`, or the rest of the line when
+// they close on a later one.
+function braced(line, at) {
+  let depth = 0;
+  for (let i = at; i < line.length; i++) {
+    if (line[i] === "\\") i++;
+    else if (line[i] === "{") depth++;
+    else if (line[i] === "}" && --depth === 0) return line.slice(at + 1, i);
+  }
+  return line.slice(at + 1);
+}
+
+// A heading as it reads in the PDF, more or less. Labels and notes go,
+// commands give up their name and keep their text.
+function plainTitle(tex) {
+  return tex
+    .replace(/\\(?:label|index|footnote|thanks|cite[a-zA-Z]*)\*?(?:\[[^\]]*\])*\{[^{}]*\}/g, "")
+    .replace(/\\\\|~/g, " ")
+    .replace(/\\([&%$#_{}])|\\[a-zA-Z@]+\*?\s*|[{}$]/g, (_, escaped) => escaped || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Headings and the files a line reads in, in the order LaTeX meets them.
+function outlineOf(line, n, outline) {
+  for (const m of line.matchAll(OUTLINE)) {
+    const rest = line.slice(m.index + m[0].length);
+    const level = HEADINGS[m[1]];
+    if (level !== undefined) {
+      const open = /^\s*(?:\[[^\]]*\])?\s*\{/.exec(rest);
+      const title = open ? braced(rest, open[0].length - 1) : null;
+      // A heading in a macro's body has #1 for its title.
+      if (title !== null && !title.includes("#")) outline.push({ level, title: plainTitle(title), line: n });
+    } else if (m[1].endsWith("import")) {
+      const args = /^\s*\{([^{}]*)\}\s*\{([^{}]+)\}/.exec(rest);
+      const dir = args?.[1].trim().replace(/\/+$/, "");
+      if (args) outline.push({ input: dir ? `${dir}/${args[2].trim()}` : args[2].trim(), line: n });
+    } else {
+      const arg = /^\s*\{([^{}]+)\}/.exec(rest);
+      if (arg) outline.push({ input: arg[1].trim(), line: n });
+    }
+  }
+}
+
 function scanTex(text) {
   const labels = [];
   const commands = [];
   const environments = [];
+  const outline = [];
   text.split("\n").forEach((raw, i) => {
     const line = uncomment(raw);
     if (!line.includes("\\")) return;
+    outlineOf(line, i + 1, outline);
     for (const m of line.matchAll(/\\label\{([^{}]+)\}/g)) labels.push({ name: m[1].trim(), line: i + 1, text: raw.trim() });
     for (const m of line.matchAll(/\\(?:re)?newcommand\*?\s*\{?\\([a-zA-Z@]+)\}?\s*(?:\[(\d)\])?/g)) commands.push({ name: m[1], args: Number(m[2] || 0) });
     for (const m of line.matchAll(/\\providecommand\*?\s*\{?\\([a-zA-Z@]+)\}?\s*(?:\[(\d)\])?/g)) commands.push({ name: m[1], args: Number(m[2] || 0) });
@@ -38,7 +88,7 @@ function scanTex(text) {
     for (const m of line.matchAll(/\\(?:re)?newenvironment\*?\s*\{([^{}]+)\}/g)) environments.push(m[1].trim());
     for (const m of line.matchAll(/\\newtheorem\*?\s*\{([^{}]+)\}/g)) environments.push(m[1].trim());
   });
-  return { labels, commands, environments, cites: [] };
+  return { labels, commands, environments, cites: [], outline };
 }
 
 // The text of a field's value at `at`: {...} with nested braces, "..." or a bare word.
@@ -106,10 +156,11 @@ function scanBib(text) {
   return { labels: [], commands: [], environments: [], cites };
 }
 
-// What the completions know about the project. `changed(events)` takes the
-// events of the "files" map's observeDeep. `read(byPath)` takes the
-// materialized files (livefiles.js) and returns everything, rescanning only
-// the files that changed since the last read.
+// What the completions and the outline (editor-outline.js) know about the
+// project. `changed(events)` takes the events of the "files" map's
+// observeDeep. `read(byPath)` takes the materialized files (livefiles.js) and
+// returns everything, rescanning only the files that changed since the last
+// read. `outlines` maps each LaTeX file's path to its headings and inputs.
 export class ProjectIndex {
   constructor() {
     this.scans = new Map();
@@ -133,7 +184,7 @@ export class ProjectIndex {
     for (const id of this.dirty) this.scans.delete(id);
     this.everything = false;
     this.dirty.clear();
-    const result = { version: this.version, byPath, labels: [], cites: [], commands: new Map(), environments: new Set(), files: [] };
+    const result = { version: this.version, byPath, labels: [], cites: [], commands: new Map(), environments: new Set(), files: [], outlines: new Map() };
     for (const entry of byPath.values()) {
       result.files.push(entry);
       if (entry.kind !== "text" || !entry.text) continue;
@@ -149,6 +200,7 @@ export class ProjectIndex {
       for (const c of scan.cites) result.cites.push({ ...c, path: scan.path });
       for (const c of scan.commands) result.commands.set(c.name, c);
       for (const e of scan.environments) result.environments.add(e);
+      if (scan.outline) result.outlines.set(scan.path, scan.outline);
     }
     this.result = result;
     return result;

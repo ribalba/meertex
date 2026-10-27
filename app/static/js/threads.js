@@ -56,14 +56,19 @@ function isMe(person) {
   return Boolean(person && session.me && person.id === session.me.id);
 }
 
-// What the reader may do with a thread right now.
+function hasSuggestion(thread) {
+  return thread.comments.some((c) => c.kind === "comment" && c.suggestion !== null && c.suggestion !== undefined);
+}
+
+// What the reader may do with a thread right now. An open thread can only be
+// accepted when it carries a suggestion, a resolved one always.
 export function threadActions(thread, perms) {
   const live = !thread.pending;
   return {
     reply: perms.comment,
     resolve: perms.resolve && live && thread.state === "open",
     apply: perms.resolve && live && thread.state === "open" && !thread.outdated,
-    accept: perms.comment && live && (thread.state === "open" || thread.state === "resolved")
+    accept: perms.comment && live && (thread.state === "resolved" || (thread.state === "open" && hasSuggestion(thread)))
       && (isMe(thread.created_by) || perms.owner),
     reopen: perms.comment && live && (thread.state === "resolved" || thread.state === "accepted"),
   };
@@ -302,6 +307,8 @@ export function storedDiffTable(diff, quote) {
 
 // The lines of `text` around [s16, e16), the span marked. `firstLine` is the
 // expected number of the span's first line, to check that the text still fits.
+// Only the span is yellow. The lines it is on get a bar in the gutter, since a
+// LaTeX paragraph is often one line and a yellow line would be the paragraph.
 export function snippetTable(text, s16, e16, { context = 2, firstLine = null, cls = "" } = {}) {
   const lines = text.split("\n");
   if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
@@ -337,7 +344,7 @@ export function snippetTable(text, s16, e16, { context = 2, firstLine = null, cl
     const content = a < b
       ? [lines[i].slice(0, a - ls), h("mark", { class: "rv-hl", text: lines[i].slice(a - ls, b - ls) }), lines[i].slice(b - ls)]
       : lines[i];
-    rows.push(h("tr", { class: inSpan ? "is-span" : null },
+    rows.push(h("tr", { class: inSpan ? "is-marked" : null },
       h("td", { class: "ln", dataset: { ln: i + 1 } }),
       h("td", { class: "lc" }, content)));
   }

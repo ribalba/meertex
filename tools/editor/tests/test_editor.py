@@ -8,6 +8,7 @@ exits 1 when one failed.
 
 import argparse
 import base64
+import json
 import os
 import re
 import secrets
@@ -16,8 +17,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -48,6 +52,61 @@ def late_test(fn):
     return fn
 
 
+def utf16(text):
+    return len(text.encode("utf-16-le")) // 2
+
+
+class FakeLanguageTool(BaseHTTPRequestHandler):
+    """Just enough of LanguageTool's HTTP API (v2) for the editor's checker.
+    Every "teh" in a text item of the annotated text is a spelling mistake, at
+    its UTF-16 offset in the items' text and markup joined, as LanguageTool
+    counts. The server this script starts has GRAMMAR_URL pointing here."""
+
+    def reply(self, body):
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if urllib.parse.urlsplit(self.path).path != "/v2/languages":
+            self.send_error(404)
+            return
+        self.reply([{"name": "English (US)", "code": "en", "longCode": "en-US"},
+                    {"name": "English (GB)", "code": "en", "longCode": "en-GB"},
+                    {"name": "German (Germany)", "code": "de", "longCode": "de-DE"}])
+
+    def do_POST(self):
+        if urllib.parse.urlsplit(self.path).path != "/v2/check":
+            self.send_error(404)
+            return
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        form = urllib.parse.parse_qs(body, keep_blank_values=True)
+        items = json.loads(form["data"][0])["annotation"] if "data" in form else [{"text": form.get("text", [""])[0]}]
+        matches = []
+        at = 0
+        for item in items:
+            if "text" not in item:
+                at += utf16(item.get("markup", ""))
+                continue
+            for m in re.finditer(r"\bteh\b", item["text"]):
+                matches.append({
+                    "message": "Possible spelling mistake found.", "shortMessage": "Spelling mistake",
+                    "replacements": [{"value": "the"}], "offset": at + utf16(item["text"][:m.start()]), "length": 3,
+                    "rule": {"id": "MORFOLOGIK_RULE_EN_US", "description": "Possible spelling mistake",
+                             "issueType": "misspelling", "category": {"id": "TYPOS", "name": "Possible Typo"}},
+                })
+            at += utf16(item["text"])
+        english = {"name": "English (US)", "code": "en-US"}
+        self.reply({"software": {"name": "LanguageTool", "version": "6.8"},
+                    "language": {**english, "detectedLanguage": {**english, "confidence": 0.9}}, "matches": matches})
+
+    def log_message(self, *args):
+        pass
+
+
 class Env:
     """The server, the people and the papers every test uses."""
 
@@ -65,8 +124,15 @@ class Env:
         # The PDF tests need a compile service (docs/DESIGN.md §14).
         self.compile_service = None
         self.compiling = bool(args.compile or args.compile_url or args.server)
+        # The spelling and grammar checker the server asks (FakeLanguageTool).
+        self.languagetool = None
 
     # --- server --------------------------------------------------------------
+
+    def start_languagetool(self):
+        """FakeLanguageTool in a thread, on a free port. It outlives a restart of the server."""
+        self.languagetool = ThreadingHTTPServer(("127.0.0.1", 0), FakeLanguageTool)
+        threading.Thread(target=self.languagetool.serve_forever, daemon=True).start()
 
     def start_compile_service(self):
         """compile/service.py with this machine's TeX Live, as `make compile-dev` runs it."""
@@ -94,6 +160,8 @@ class Env:
             return
         if self.args.compile and not self.compile_service:
             self.start_compile_service()
+        if not self.languagetool:
+            self.start_languagetool()
         env = {
             **os.environ,
             "DATABASE_URL": self.args.db,
@@ -102,6 +170,7 @@ class Env:
             "SMTP_HOST": "",
             "COMPILE_URL": self.args.compile_url or "",
             "COMPILE_TOKEN": self.args.compile_token or "",
+            "GRAMMAR_URL": f"http://127.0.0.1:{self.languagetool.server_address[1]}",
         }
         # The server gets its own copy of the log's file descriptor.
         with open(self.tmp / "server.log", "a") as log:
@@ -135,6 +204,8 @@ class Env:
                 self.compile_service.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.compile_service.kill()
+        if self.languagetool:
+            self.languagetool.shutdown()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     # --- people and papers --------------------------------------------------------
@@ -178,6 +249,11 @@ class Env:
     def api(self, who):
         return httpx.Client(base_url=self.base, headers={"Authorization": f"Bearer {self.token[who]}"}, timeout=10)
 
+    def browser_api(self, who):
+        """With the session cookie instead of the token, for the routes only a
+        browser may use, /api/grammar/ among them."""
+        return httpx.Client(base_url=self.base, cookies={"meertex_session": self.session[who]}, timeout=10)
+
     def create_paper(self, owner, title, members=None):
         with self.api(owner) as c:
             p = c.post("/api/projects", json={"title": title, "conference": "TEST", "year": 2027, "starter": "basic"})
@@ -216,11 +292,14 @@ class Env:
     def expected(self, message):
         """Errors the browser logs for answers the page expects: refused
         reconnects while the server is down on purpose, the 404 of
-        /compiles/latest for a paper that was never compiled, and the 503 of
-        every compile route when there is no compile service."""
+        /compiles/latest for a paper that was never compiled, the 503 of
+        every compile route when there is no compile service, and the 429 of a
+        grammar check while the server is still busy with the one before."""
         if self.server_down and "ERR_CONNECTION_REFUSED" in message.text:
             return True
         url = (message.location or {}).get("url", "")
+        if "/api/grammar/check" in url and "429" in message.text:
+            return True
         return "/compiles/latest" in url or (not self.compiling and "/compile" in url)
 
     def open_editor(self, page, path="", project=None):
@@ -245,6 +324,17 @@ def editor_text(page: Page) -> str:
             const { EditorView } = await import('/static/vendor/editor/editor.js');
             const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
             return view ? view.state.doc.toString() : null;
+        }"""
+    )
+
+
+def cursor_line(page: Page) -> int:
+    """The line of the open file the cursor is on."""
+    return page.evaluate(
+        """async () => {
+            const { EditorView } = await import('/static/vendor/editor/editor.js');
+            const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+            return view ? view.state.doc.lineAt(view.state.selection.main.head).number : null;
         }"""
     )
 
@@ -578,15 +668,36 @@ def spellcheck_and_phone(env, browser):
     ctx = env.context(browser, "alice", width=390, height=844)
     page = env.open_editor(env.page(ctx, "alice"), "main.tex")
     content = page.locator(".cm-content")
+    button = page.get_by_role("button", name="Spellcheck")
+    with env.browser_api("alice") as c:
+        checker = c.get("/api/grammar/config").json().get("available")
+    if checker:
+        # With a checker on the server the button switches it for the
+        # account, and the browser's own spellchecker stays off.
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(content).to_have_attribute("spellcheck", "false")
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "false")
+        page.reload()
+        expect(page.locator(".editor-status")).to_have_text("Connected")
+        expect(button).to_have_attribute("aria-pressed", "false")
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(content).to_have_attribute("spellcheck", "false")
+    # Without one it is the browser's spellchecker, remembered in this browser.
+    page.route("**/api/grammar/config", lambda route: route.fulfill(json={
+        "available": False, "enabled": True, "language": "auto", "variants": [], "picky": False, "words": [], "disabled_rules": []}))
+    page.reload()
+    expect(page.locator(".editor-status")).to_have_text("Connected")
     expect(content).to_have_attribute("spellcheck", "false")
-    page.get_by_role("button", name="Spellcheck").click()
+    button.click()
     expect(content).to_have_attribute("spellcheck", "true")
     page.reload()
     expect(page.locator(".editor-status")).to_have_text("Connected")
-    expect(page.locator(".cm-content")).to_have_attribute("spellcheck", "true")
-    page.get_by_role("button", name="Spellcheck").click()
-    expect(page.locator(".cm-content")).to_have_attribute("spellcheck", "false")
-    expect(page.get_by_role("button", name="Spellcheck")).to_have_attribute("aria-pressed", "false")
+    expect(content).to_have_attribute("spellcheck", "true")
+    button.click()
+    expect(content).to_have_attribute("spellcheck", "false")
+    expect(button).to_have_attribute("aria-pressed", "false")
     # The tree folds away on a phone and opens with the Files button.
     expect(page.locator(".editor-tree")).to_be_hidden()
     env.shot(page, "editor-390")
@@ -598,6 +709,101 @@ def spellcheck_and_phone(env, browser):
     expect(page).to_have_url(re.compile(r"/edit/refs\.bib$"))
     assert page.evaluate("document.documentElement.scrollWidth") <= 390
     ctx.close()
+
+
+@test
+def tree_width(env, browser):
+    ctx = env.context(browser, "alice")
+    page = env.open_editor(env.page(ctx, "alice"), "main.tex")
+    tree = page.locator(".editor-tree")
+    divider = page.get_by_role("separator", name="Width of the file tree")
+    usual = tree.bounding_box()["width"]
+
+    def width_is(px):
+        wait_until(lambda: abs(tree.bounding_box()["width"] - px) <= 1, what=f"the tree {px:.0f} px wide")
+
+    box = divider.bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 120, y, steps=5)
+    page.mouse.up()
+    width_is(usual + 120)
+    # The width is kept, and the divider stays when the PDF is hidden.
+    page.reload()
+    expect(page.locator(".editor-status")).to_have_text("Connected")
+    width_is(usual + 120)
+    env.shot(page, "tree-wide-1280")
+    page.get_by_role("button", name="PDF", exact=True).click()
+    expect(page.locator(".editor-pdf")).to_be_hidden()
+    expect(divider).to_be_visible()
+    # The arrow keys move it, and a double-click gives the usual width back.
+    divider.focus()
+    page.keyboard.press("ArrowLeft")
+    width_is(usual + 88)
+    divider.dblclick()
+    width_is(usual)
+    page.reload()
+    expect(page.locator(".editor-status")).to_have_text("Connected")
+    width_is(usual)
+    ctx.close()
+    return "drag, kept after a reload, arrow keys, double-click"
+
+
+@test
+def outline(env, browser):
+    paper = env.create_paper("alice", f"Outline {env.run}")
+    main = ("\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nText.\n"
+            "\\input{sections/method}\n% \\section{Commented out}\n\\section{Conclusion}\n\\end{document}\n")
+    env.put("alice", "main.tex", main, project=paper)
+    env.put("alice", "sections/method.tex", "\\subsection{Setup}\nMore text.\n\\subsection{Results}\nNumbers.\n", project=paper)
+    env.put("alice", "letter.tex", "\\section{Response to the reviewers}\n", project=paper)
+    ctx = env.context(browser, "alice")
+    page = env.open_editor(env.page(ctx, "alice"), "main.tex", project=paper)
+    box = page.locator(".editor-outline")
+    links = box.locator(".tree-link")
+    marked = box.locator(".tree-row[aria-current='location']")
+    # The main file's headings and those of the file it inputs, in reading order.
+    expect(links).to_have_text(["Introduction", "Setup", "Results", "Conclusion"])
+    # A click opens the heading's line and marks it. The mark follows the cursor.
+    links.filter(has_text="Results").click()
+    expect(page).to_have_url(re.compile(r"/edit/sections/method\.tex$"))
+    wait_until(lambda: cursor_line(page) == 3, what="the cursor on the heading's line")
+    expect(marked).to_have_text("Results")
+    page.keyboard.press("Control+Home")
+    expect(marked).to_have_text("Setup")
+    # A heading typed here and one written by someone else show up.
+    page.keyboard.press("Control+End")
+    page.keyboard.type("\\subsection{Discussion}")
+    page.keyboard.press("Escape")
+    expect(links).to_have_text(["Introduction", "Setup", "Results", "Discussion", "Conclusion"])
+    expect(marked).to_have_text("Discussion")
+    env.put("alice", "main.tex", main.replace("\\section{Conclusion}", "\\section{Related work}\n\\section{Conclusion}"), project=paper)
+    expect(links).to_have_text(["Introduction", "Setup", "Results", "Discussion", "Related work", "Conclusion"])
+    env.shot(page, "outline-1280")
+    # A folded heading hides the ones under it and takes their mark.
+    box.get_by_role("button", name="Collapse Introduction").click()
+    expect(links).to_have_text(["Introduction", "Related work", "Conclusion"])
+    expect(marked).to_have_text("Introduction")
+    box.get_by_role("button", name="Expand Introduction").click()
+    expect(links).to_have_count(6)
+    # The box folds to its header, also after a reload.
+    toggle = box.get_by_role("button", name="Outline", exact=True)
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    expect(box.locator(".editor-outline-body")).to_be_hidden()
+    page.reload()
+    expect(page.locator(".editor-status")).to_have_text("Connected")
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    expect(box.locator(".editor-outline-body")).to_be_hidden()
+    toggle.click()
+    expect(links).to_have_count(6)
+    # A .tex file the main file does not read has its own outline.
+    page.locator(".editor-tree-body .tree-row[data-path='letter.tex'] a").click()
+    expect(links).to_have_text(["Response to the reviewers"])
+    ctx.close()
+    return "reading order across \\input, click, mark, live edits, folding, kept folded"
 
 
 @test
@@ -668,6 +874,84 @@ def conflict_copy_is_shown(env, browser):
         c.delete(f"/api/projects/{env.paper['id']}/files/main.conflict-ffffffff.tex").raise_for_status()
     expect(row).to_have_count(0)
     ctx.close()
+
+
+@test
+def spelling_and_grammar(env, browser):
+    """The server's checker, here FakeLanguageTool: the underline, the
+    suggestions, undo, Alt+Shift+G, the dictionary on the Settings page and
+    the Spellcheck button."""
+    if env.args.server:
+        return "skipped, needs the server this script starts"
+    paper = env.create_paper("alice", f"Grammar {env.run}")
+    env.put("alice", "grammar.tex", "Here is teh first paragraph.\n\nAnd teh second one.\n", project=paper)
+    ctx = env.context(browser, "alice")
+    page = env.open_editor(env.page(ctx, "alice"), "grammar.tex", project=paper)
+    marks = page.locator(".cm-grammar-spelling")
+    box = page.locator(".grammar-box")
+    button = page.get_by_role("button", name="Spellcheck")
+    c = env.browser_api("alice")
+    try:
+        expect(marks).to_have_count(2, timeout=5000)
+        expect(marks.first).to_have_text("teh")
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(button.locator(".counter")).to_have_text("2")
+        expect(page.locator(".cm-content")).to_have_attribute("spellcheck", "false")
+
+        # A click on an underline opens the suggestions under it. One fixes the text.
+        marks.first.click()
+        expect(box).to_be_visible()
+        expect(box).to_contain_text("Possible spelling mistake found.")
+        env.shot(page, "grammar-box")
+        box.get_by_role("button", name="the", exact=True).click()
+        expect(box).to_be_hidden()
+        wait_until(lambda: "Here is the first" in (env.file("alice", "grammar.tex", project=paper) or ""),
+                   what="the suggestion on the server")
+        expect(marks).to_have_count(1)
+        # Ctrl+Z takes it back like anything typed, and the next check finds the word again.
+        page.keyboard.press("Control+z")
+        wait_until(lambda: "Here is teh first" in editor_text(page), what="the undo")
+        expect(marks).to_have_count(2, timeout=5000)
+
+        # Alt+Shift+G goes to the next underline after the cursor, Escape closes the box.
+        page.keyboard.press("Control+Home")
+        page.keyboard.press("Alt+Shift+G")
+        expect(box).to_be_visible()
+        expect(box.get_by_role("button", name="Add to dictionary")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(box).to_be_hidden()
+
+        # Add to dictionary takes every "teh" away, for the account.
+        marks.last.click()
+        box.get_by_role("button", name="Add to dictionary").click()
+        expect(marks).to_have_count(0)
+        wait_until(lambda: c.get("/api/grammar/config").json()["words"] == ["teh"], what="the word in the dictionary")
+
+        # The Settings page lists it and takes it out again.
+        page.goto(f"{env.base}/settings")
+        section = page.locator("#grammar")
+        expect(section.locator("#grammar-words")).to_contain_text("teh")
+        env.shot(section, "grammar-settings")
+        section.get_by_role("button", name="Remove teh from your dictionary").click()
+        expect(section.locator("#grammar-words .grammar-row")).to_have_count(0)
+        assert c.get("/api/grammar/config").json()["words"] == []
+
+        # Back in the editor the word is flagged again. The button turns the checker off and on.
+        env.open_editor(page, "grammar.tex", project=paper)
+        expect(marks).to_have_count(2, timeout=5000)
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "false")
+        expect(marks).to_have_count(0)
+        assert c.get("/api/grammar/config").json()["enabled"] is False
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(marks).to_have_count(2, timeout=5000)
+    finally:
+        # The other tests find alice's settings as they were.
+        c.put("/api/grammar/config", json={"enabled": True, "words": [], "disabled_rules": []})
+        c.close()
+        ctx.close()
+    return "underline, suggestion, undo, Alt+Shift+G, dictionary, Settings, the switch"
 
 
 @late_test
@@ -878,9 +1162,9 @@ def synctex(env, browser):
     expect(mark).to_be_visible(timeout=10000)
     env.shot(page, "synctex-1280")
     box = mark.bounding_box()
-    # From the PDF to the text: a double-click there leads back to the line.
+    # From the PDF to the text: a click there leads back to the line.
     page.keyboard.press("Control+Home")
-    page.mouse.dblclick(box["x"] + 20, box["y"] + box["height"] / 2)
+    page.mouse.click(box["x"] + 20, box["y"] + box["height"] / 2)
     wait_until(lambda: cursor_line(page) in (target, target + 1), what="the cursor back on the paragraph")
     ctx.close()
     return f"line {target} and back"

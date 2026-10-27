@@ -79,12 +79,13 @@ class Connection:
     Only the connection's event loop touches the outbox. Other threads use
     ``send_threadsafe`` and ``close_threadsafe``."""
 
-    def __init__(self, editor: str, can_write: bool, name: str | None = None) -> None:
+    def __init__(self, editor: str, can_write: bool, name: str | None = None, avatar_url: str | None = None) -> None:
         self.editor = editor
         self.can_write = can_write
-        # The signed-in person's name, which replaces whatever name the client
-        # puts into its awareness state (routers/sync.py).
+        # The signed-in person's name and picture, which replace whatever the
+        # client puts into its awareness state (routers/sync.py).
         self.name = name or editor
+        self.avatar_url = avatar_url
         self.loop = asyncio.get_running_loop()
         # Messages to send, ended by at most one (code, reason) that closes the socket.
         self.outbox: asyncio.Queue[bytes | tuple[int, str]] = asyncio.Queue()

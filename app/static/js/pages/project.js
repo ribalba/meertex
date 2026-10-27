@@ -6,7 +6,7 @@ import { api, enc, projectUrl } from "../api.js";
 import { h, clear } from "../dom.js";
 import { icon } from "../icons.js";
 import { render as rerender, decodePath } from "../router.js";
-import { commandLine, counter, dropdown, flashBox, loading, outcomeLabel, personName, setCrumbs, setTitle, topicList } from "../ui.js";
+import { commandLine, counter, dropdown, flashBox, loading, outcomeLabel, personName, setCrumbs, setHeaderActions, setTitle, topicList } from "../ui.js";
 
 import * as overview from "./overview.js";
 import * as files from "./files.js";
@@ -54,6 +54,9 @@ export async function render(ctx) {
   // loads, instead of flashing a spinner.
   const sameProject = ctx.main.dataset.project === ref && ctx.main.querySelector(".repo-head");
   if (!sameProject) clear(ctx.main).append(loading());
+  // The router empties the header on a new URL. The paper's name and Check
+  // out go back at once, so they do not blink between its tabs.
+  else if (shown) setHeader(shown);
 
   let project;
   try {
@@ -80,7 +83,7 @@ export async function render(ctx) {
     throw err;
   }
 
-  setCrumbs([{ text: project.name, href: base }]);
+  setHeader(project);
   const tabCtx = {
     ...ctx,
     project,
@@ -121,11 +124,36 @@ export async function render(ctx) {
   }
   if (!ctx.alive()) return;
   ctx.main.dataset.project = ref;
+  shown = project;
   clear(ctx.main).append(page);
 }
 
+// The paper on screen, for putting its header back between tabs.
+let shown = null;
+
+// The app header shows the paper's name after the logo and its Check out
+// menu next to New paper.
+function setHeader(p) {
+  setCrumbs([{ text: p.name, href: `/p/${enc(p.name)}` }]);
+  setHeaderActions([dropdown({
+    summary: [icon("terminal"), h("span", { class: "hide-sm", text: "Check out" }), icon("triangle-down")],
+    summaryClass: "btn btn-sm",
+    label: "Check out this paper",
+    align: "right",
+    wide: true,
+    cls: "checkout-menu",
+    items: [
+      { header: "Work on it locally" },
+      { node: h("div", { class: "dropdown-body cmd-list" },
+        commandLine(`meertex checkout ${p.name}`, "Copy the files to ~/papers and register the folder"),
+        commandLine("meertex sync", "Keep every checkout in step with the server")) },
+      "divider",
+      { text: "Download ZIP", icon: "download", href: projectUrl(p.id, "/zip?ref=live"), download: `${p.name}.zip` },
+    ],
+  })]);
+}
+
 function repoHead(p, active, ctx) {
-  const owner = p.owner ? p.owner.email || personName(p.owner) : "";
   const tabs = TABS.filter((t) => t.key !== "settings" || ctx.canEdit).map((t) => {
     let count = null;
     if (t.key === "files" && typeof p.file_count === "number") count = counter(p.file_count);
@@ -138,43 +166,21 @@ function repoHead(p, active, ctx) {
     }, icon(t.icon), t.text, count);
   });
 
-  const actions = h("div", { class: "repo-head-actions" },
-    dropdown({
-      summary: [icon("terminal"), h("span", { text: "Check out" }), icon("triangle-down")],
-      summaryClass: "btn btn-sm",
-      label: "Check out this paper",
-      align: "right",
-      wide: true,
-      items: [
-        { header: "Work on it locally" },
-        { node: h("div", { class: "dropdown-body cmd-list" },
-          commandLine(`meertex checkout ${p.name}`, "Copy the files to ~/papers and register the folder"),
-          commandLine("meertex sync", "Keep every checkout in step with the server")) },
-        "divider",
-        { text: "Download ZIP", icon: "download", href: projectUrl(p.id, "/zip?ref=live"), download: `${p.name}.zip` },
-      ],
-    }),
-    ctx.canEdit ? h("a", { class: "btn btn-sm", href: `${ctx.base}/settings/resubmit`, title: "Resubmit to another venue" },
-      icon("fork"), h("span", { class: "hide-sm", text: "Resubmit" })) : null,
-  );
+  // The name is in the app header already, so the paper's title leads here.
+  const labels = [
+    p.planned ? h("span", { class: "Label label-planned", title: "A venue without a paper yet", text: "Planned" }) : null,
+    outcomeLabel(p.outcome),
+    p.archived ? h("span", { class: "Label label-attention", text: "Archived" }) : null,
+    p.role && p.role !== "owner" ? h("span", { class: "Label", text: p.role[0].toUpperCase() + p.role.slice(1) }) : null,
+  ].filter(Boolean);
 
   setTitle(p.name);
   return h("div", { class: "repo-head" },
     h("div", { class: "container" },
-      h("div", { class: "repo-head-top" },
-        h("div", { class: "flex-1", style: { minWidth: "0" } },
-          h("div", { class: "repo-title" },
-            icon("book"),
-            owner ? h("span", { class: "owner", text: owner, title: p.owner?.name ? `The owner is ${p.owner.name}` : "The owner" }) : null,
-            owner ? h("span", { class: "slash", text: "/" }) : null,
-            h("strong", {}, h("a", { href: ctx.base, text: p.name })),
-            p.planned ? h("span", { class: "Label label-planned", title: "A venue without a paper yet", text: "Planned" }) : null,
-            outcomeLabel(p.outcome),
-            p.archived ? h("span", { class: "Label label-attention", text: "Archived" }) : null,
-            p.role && p.role !== "owner" ? h("span", { class: "Label", text: p.role[0].toUpperCase() + p.role.slice(1) }) : null),
-          p.title ? h("p", { class: "repo-subtitle", text: p.title }) : null,
-          topicList(p.labels, (l) => `/?label=${enc(l)}`)),
-        actions),
+      p.title || labels.length ? h("div", { class: "repo-title" },
+        p.title ? h("span", { class: "repo-subtitle", text: p.title }) : null,
+        labels) : null,
+      topicList(p.labels, (l) => `/?label=${enc(l)}`),
       h("nav", { class: "underline-nav", "aria-label": "Paper" }, tabs),
     ),
   );

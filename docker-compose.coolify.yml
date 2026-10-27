@@ -81,6 +81,13 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       REFERENCES_CLAUDE_MODEL: ${REFERENCES_CLAUDE_MODEL:-claude-opus-5-5}
 
+      # Spelling and grammar in the editor (docs/DESIGN.md §17), checked by the
+      # `languagetool` service below over the project network.
+      GRAMMAR_URL: ${GRAMMAR_URL:-http://languagetool:8010}
+      GRAMMAR_TIMEOUT_SECONDS: ${GRAMMAR_TIMEOUT_SECONDS:-20}
+      GRAMMAR_ALLOW_PUBLIC_HOSTS: ${GRAMMAR_ALLOW_PUBLIC_HOSTS:-false}
+      GRAMMAR_MAX_CONCURRENT: ${GRAMMAR_MAX_CONCURRENT:-3}
+
       # The daily reminder mails before deadlines (docs/DESIGN.md §5).
       REMINDERS_ENABLED: ${REMINDERS_ENABLED:-true}
 
@@ -136,6 +143,31 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+
+  # Spelling and grammar (docs/DESIGN.md §17) are checked by LanguageTool in
+  # the community image, up to 1.3 GB resident once two languages are loaded.
+  # It gets no domain and no ports. It has no authentication at all, and only
+  # `web` talks to it. `web` does not wait for it, the app works without it.
+  languagetool:
+    image: erikvl87/languagetool:6.8
+    expose:
+      - "8010"
+    environment:
+      # The JVM's initial and maximum heap, which the image's start.sh passes on.
+      Java_Xms: 256m
+      Java_Xmx: 768m
+      # Sentences whose results LanguageTool keeps. The server caches whole
+      # paragraphs on top of that (app/grammar/checker.py).
+      langtool_cacheSize: "2000"
+    mem_limit: ${LANGUAGETOOL_MEMORY:-1536m}
+    healthcheck:
+      # One small English check, which also loads English before anybody types.
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null --data 'language=en-US&text=a simple test' http://localhost:8010/v2/check || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
 
 volumes:

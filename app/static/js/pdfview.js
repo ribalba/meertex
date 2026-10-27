@@ -2,7 +2,7 @@
 // versions and the reviews. It draws the pages near the view only and lets go
 // of the others, so a long paper at a high zoom does not fill the memory.
 //
-//   const view = createPdfView(container, { onDoubleClick, onChange });
+//   const view = createPdfView(container, { onClick, onChange });
 //   await view.load(url);       // load, or replace and keep the scroll position
 //   view.setZoom(1.25);         // or "width" to fit the width; zoomIn(), zoomOut()
 //   view.showBoxes(boxes);      // mark [{page, x, y, width, height}] and scroll there
@@ -12,23 +12,36 @@
 // gives them. Pages count from 1.
 //
 // Options:
+//   onClick({page, x, y, word, before, after})
+//                                        a click on a page. word is the word
+//                                        under the pointer as the page's text
+//                                        has it ("measured" for a "mea-" "sured"
+//                                        broken at a line's end), before and
+//                                        after up to 30 characters around it.
+//                                        The three are missing where the page
+//                                        has no text. The second click of a
+//                                        double-click and a drag do not count.
 //   onDoubleClick({page, x, y, word, before, after})
-//                                        a double-click on a page. word is the
-//                                        word under the pointer as the page's
-//                                        text has it ("measured" for a "mea-"
-//                                        "sured" broken at a line's end), before
-//                                        and after up to 30 characters around
-//                                        it. The three are missing where the
-//                                        page has no text.
+//                                        the same for a double-click.
 //   onChange({page, pages, zoom, mode})  the page in view, the page count or the zoom changed
+//   onSelect({text, start, end})         text was selected with the mouse, or
+//                                        null when the selection went away.
+//                                        start and end are {page, x, y} of its
+//                                        first and its last character, and text
+//                                        reads as on the page, with a word
+//                                        hyphenated at a line's end put together.
+//                                        With onSelect the pages get PDF.js's
+//                                        text layer, so their text can be selected.
 //
 // The view: load(url), setZoom(zoom | "width"), zoomIn(), zoomOut(),
 // showBoxes(boxes, {fade = true, scroll = true}), clearBoxes(),
-// scrollToPage(page), destroy(), and the read-only page, pages, zoom (1 is
-// 100 percent) and mode ("width" or "fixed").
+// scrollToPage(page), texts(), destroy(), and the read-only page, pages, zoom
+// (1 is 100 percent) and mode ("width" or "fixed"). texts() is the text of
+// every page, [{view, items}] with the page's box and PDF.js's text content,
+// for checks of the whole PDF (pagelimit.js).
 //
 // wordAt({page}, x, y) is exported for tests: the word at a point in PDF user
-// space of a PDF.js page, as onDoubleClick gets it.
+// space of a PDF.js page, as onClick and onDoubleClick get it.
 
 const PDFJS = "/static/vendor/pdfjs/pdf.js";
 const WORKER = "/static/vendor/pdfjs/pdf.worker.js";
@@ -135,7 +148,13 @@ export async function wordAt(p, px, py) {
   };
 }
 
-export function createPdfView(container, { onDoubleClick = null, onChange = null } = {}) {
+// A selection's text as a reader sees it: one space between words, accents with
+// their letters and ligatures as letters ("ﬁ" is "fi").
+function selectedText(raw) {
+  return joinAccents(raw.replace(/([\p{L}\p{N}])-[ \t]*\n\s*/gu, "$1").replace(/\s+/g, " ")).normalize("NFKC").trim();
+}
+
+export function createPdfView(container, { onClick = null, onDoubleClick = null, onChange = null, onSelect = null } = {}) {
   const scroller = document.createElement("div");
   scroller.className = "pdfview";
   scroller.tabIndex = 0;
@@ -154,6 +173,7 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
   let frame = 0;
   let lastPage = 0;
   let destroyed = false;
+  let selected = false;
 
   const cssScale = () => zoom * PX_PER_POINT;
 
@@ -173,16 +193,46 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
     el.className = "pdfview-page";
     el.dataset.page = String(index + 1);
     el.setAttribute("aria-label", `Page ${index + 1}`);
-    return { page, base, el, canvas: null, drawn: 0, task: null, text: null };
+    return { page, base, el, canvas: null, drawn: 0, task: null, text: null, layer: null };
   }
 
   function size(p) {
     const vp = viewportOf(p);
     p.el.style.width = `${Math.floor(vp.width)}px`;
     p.el.style.height = `${Math.floor(vp.height)}px`;
+    // The text layer's spans are sized and placed from this (app.css).
+    p.el.style.setProperty("--total-scale-factor", String(vp.scale));
+  }
+
+  // The page's text as transparent spans over the drawing, for selecting it.
+  function addText(p, vp) {
+    if (p.layer) {
+      p.layer.update({ viewport: vp });
+      return;
+    }
+    const div = document.createElement("div");
+    div.className = "textLayer";
+    p.layer = new lib.TextLayer({
+      textContentSource: p.page.streamTextContent({ includeMarkedContent: true, disableNormalization: true }),
+      container: div,
+      viewport: vp,
+    });
+    p.el.append(div);
+    const layer = p.layer;
+    layer.render().then(() => {
+      // Dragging over the page's blank parts keeps selecting (app.css).
+      const end = document.createElement("div");
+      end.className = "endOfContent";
+      div.append(end);
+    }).catch((err) => {
+      if (err?.name !== "AbortException" && !destroyed && p.layer === layer) console.warn("The page's text could not be laid over it", err);
+    });
   }
 
   function release(p) {
+    p.layer?.cancel();
+    p.layer = null;
+    p.el.querySelector(".textLayer")?.remove();
     p.task?.cancel();
     p.task = null;
     if (p.canvas) {
@@ -225,6 +275,7 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
     p.canvas = canvas;
     p.el.prepend(canvas);
     p.drawn = scale;
+    if (onSelect) addText(p, vp);
     if (scale !== cssScale()) schedule();
   }
 
@@ -414,15 +465,20 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
     if (p) scroller.scrollTop = p.el.offsetTop - PADDING;
   }
 
+  function texts() {
+    return Promise.all(pages.map(async (p) => {
+      p.text ??= p.page.getTextContent();
+      return { view: p.page.view, items: (await p.text).items };
+    }));
+  }
+
   scroller.addEventListener("scroll", schedule, { passive: true });
-  scroller.addEventListener("dblclick", async (e) => {
-    const el = e.target.closest?.(".pdfview-page");
-    if (!el || !onDoubleClick) return;
+  // What a click on a page points at, for onClick and onDoubleClick.
+  async function clicked(e, el, handler) {
     const p = pages[Number(el.dataset.page) - 1];
     const rect = el.getBoundingClientRect();
     const [px, py] = viewportOf(p).convertToPdfPoint(e.clientX - rect.left, e.clientY - rect.top);
     const [x0, , , y1] = p.base.viewBox;
-    e.preventDefault();
     const at = { page: Number(el.dataset.page), x: px - x0, y: y1 - py };
     let found = null;
     try {
@@ -430,8 +486,77 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
     } catch (err) {
       console.warn("The word under the pointer could not be found", err);
     }
-    if (!destroyed) onDoubleClick(found ? { ...at, ...found } : at);
+    if (!destroyed) handler(found ? { ...at, ...found } : at);
+  }
+
+  // A click is where the button went down. One that ends farther away is a drag.
+  let down = null;
+  scroller.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
+  scroller.addEventListener("click", (e) => {
+    const el = e.target.closest?.(".pdfview-page");
+    if (!el || !onClick || e.detail > 1) return;
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
+    clicked(e, el, onClick);
   });
+  scroller.addEventListener("dblclick", (e) => {
+    const el = e.target.closest?.(".pdfview-page");
+    if (!el || !onDoubleClick) return;
+    e.preventDefault();
+    clicked(e, el, onDoubleClick);
+  });
+  // A point on the screen as {page, x, y}, or null off the pages.
+  function pointAt(cx, cy) {
+    for (const [i, p] of pages.entries()) {
+      const r = p.el.getBoundingClientRect();
+      if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) continue;
+      const [px, py] = viewportOf(p).convertToPdfPoint(cx - r.left, cy - r.top);
+      const [x0, , , y1] = p.base.viewBox;
+      return { page: i + 1, x: px - x0, y: y1 - py };
+    }
+    return null;
+  }
+
+  function readSelection() {
+    const sel = document.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const range = sel.getRangeAt(0);
+    if (!scroller.contains(range.startContainer) || !scroller.contains(range.endContainer)) return null;
+    const text = selectedText(sel.toString());
+    const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    if (!/[\p{L}\p{N}]/u.test(text) || !rects.length) return null;
+    const first = rects[0];
+    const last = rects[rects.length - 1];
+    const start = pointAt(first.left + Math.min(2, first.width / 2), first.top + first.height / 2);
+    const end = pointAt(last.right - Math.min(2, last.width / 2), last.top + last.height / 2);
+    return start || end ? { text, start: start || end, end: end || start } : null;
+  }
+
+  if (onSelect) {
+    scroller.addEventListener("mousedown", (e) => e.target.closest?.(".textLayer")?.classList.add("selecting"));
+    // A double-click selects a word too. That one belongs to onDoubleClick.
+    scroller.addEventListener("mouseup", (e) => {
+      if (e.detail > 1) return;
+      setTimeout(() => {
+        const sel = destroyed ? null : readSelection();
+        if (!sel) return;
+        selected = true;
+        onSelect(sel);
+      }, 0);
+    });
+  }
+  const onMouseUp = () => scroller.querySelectorAll(".textLayer.selecting").forEach((el) => el.classList.remove("selecting"));
+  const onSelectionChange = () => {
+    if (!selected) return;
+    const sel = document.getSelection();
+    if (sel && !sel.isCollapsed && sel.rangeCount && scroller.contains(sel.getRangeAt(0).startContainer)) return;
+    selected = false;
+    onSelect(null);
+  };
+  if (onSelect) {
+    document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+  }
+
   scroller.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) { e.preventDefault(); step(1); }
     if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); step(-1); }
@@ -451,6 +576,7 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
     showBoxes,
     clearBoxes,
     scrollToPage,
+    texts,
     get page() { return lastPage || (pages.length ? 1 : 0); },
     get pages() { return pages.length; },
     get zoom() { return zoom; },
@@ -461,6 +587,8 @@ export function createPdfView(container, { onDoubleClick = null, onChange = null
       cancelAnimationFrame(frame);
       clearTimeout(markTimer);
       resized.disconnect();
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
       pages.forEach(release);
       pages = [];
       doc?.loadingTask.destroy();

@@ -20,6 +20,8 @@ import { FILES, materialize, pathProblem } from "../livefiles.js";
 import { ProjectIndex, latexAutocomplete } from "../latexcomplete.js";
 import { pdfPane } from "./editor-pdf.js";
 import { editorComments } from "../editor-comments.js";
+import { editorGrammar } from "../editor-grammar.js";
+import { editorOutline } from "../editor-outline.js";
 import { editorProblems } from "../editor-problems.js";
 import { showSpot, spotExtension } from "../editor-spot.js";
 
@@ -40,6 +42,9 @@ const ROLE_CHANGED = 4009;
 const SPELLCHECK_KEY = "meertex.editor.spellcheck";
 const PDF_KEY = "meertex.editor.pdf";
 const PDF_WIDTH_KEY = "meertex.editor.pdfwidth";
+const TREE_WIDTH_KEY = "meertex.editor.treewidth";
+// The folders open in the tree, per paper: FOLDERS_KEY.<project id>.
+const FOLDERS_KEY = "meertex.editor.folders";
 const PHONE = "(max-width: 767px)";
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const LATEX = /\.(tex|sty|cls|ltx|dtx|ins|bbx|cbx|lbx|tikz)$/i;
@@ -102,6 +107,27 @@ function readSpellcheck() {
   }
 }
 
+// The folders left open the last time. Every other folder starts closed.
+function readFolders(projectId) {
+  try {
+    const list = JSON.parse(localStorage.getItem(`${FOLDERS_KEY}.${projectId}`) || "[]");
+    return new Set(Array.isArray(list) ? list.filter((p) => typeof p === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveFolders(ed) {
+  store(`${FOLDERS_KEY}.${ed.p.id}`, JSON.stringify([...ed.expanded]));
+}
+
+// Open `folder` and the folders above it, for a file made or uploaded there.
+function expand(ed, folder) {
+  for (let p = folder; p; p = parentOf(p)) ed.expanded.add(p);
+  saveFolders(ed);
+  paintTree(ed);
+}
+
 function byName(a, b) {
   return a.name.localeCompare(b.name, undefined, { numeric: true });
 }
@@ -120,10 +146,15 @@ export async function render(ctx) {
     note: (text) => note(ed, text),
     onHide: () => togglePdf(ed, false),
     onProblems: (problems) => ed.problems.update(problems),
+    hasFile: (path) => (ed.ready ? ed.byPath.has(path) : null),
+    canEdit: ed.canEdit,
   });
   ed.el.pdfColumn.append(ed.pdf.el);
   onLeave(() => ed.pdf.destroy());
   onLeave(() => ed.comments.destroy());
+  onLeave(() => ed.outline.destroy());
+  ed.grammar.start();
+  onLeave(() => ed.grammar.destroy());
   // The page goes up right away and connects in the background.
   start(ed, want).catch((err) => {
     if (!ctx.alive()) return;
@@ -147,7 +178,7 @@ function layout(ctx) {
     spell: readSpellcheck(),
     byPath: new Map(),
     byId: new Map(),
-    collapsed: new Set(),
+    expanded: readFolders(ctx.project.id),
     undo: new Map(),
     selections: new Map(),
     openId: null,
@@ -176,10 +207,19 @@ function layout(ctx) {
   }) : null;
 
   el.treeBody = h("div", { class: "editor-tree-body" }, h("div", { class: "editor-tree-loading" }, spinner(), " Loading files…"));
+  // The document's headings under the files (editor-outline.js).
+  ed.outline = editorOutline({
+    cm: () => ed.cm,
+    read: () => (ed.ready ? ed.index.read(ed.byPath) : null),
+    main: () => ed.p.main_file || "main.tex",
+    place: () => cursorPlace(ed),
+    open: (at) => openAt(ed, at),
+    href: (path, line) => `${editorHref(ed.base, path)}#L${line}`,
+  });
   el.tree = h("nav", { class: "editor-tree", id: `tree-${ed.p.id}`, "aria-label": "Files of this paper" },
     h("div", { class: "editor-tree-head" }, h("h2", { text: "Files" }), addMenu, el.upload,
       h("button", { type: "button", class: "btn-octicon editor-tree-close", "aria-label": "Back to the editor", onclick: () => showTree(ed, false) }, icon("x"))),
-    el.treeBody);
+    el.treeBody, ed.outline.el);
   wireTree(ed);
 
   el.filesBtn = h("button", {
@@ -191,10 +231,12 @@ function layout(ctx) {
   el.statusText = h("span", { class: "editor-status-text", text: "Connecting…" });
   el.status = h("span", { class: "editor-status is-pending", role: "status" }, h("span", { class: "dot" }), el.statusText);
   el.presence = h("div", { class: "editor-presence", hidden: true });
+  // With a checker on the server, the count of underlines in the open file.
+  el.spellCount = h("span", { class: "counter", hidden: true });
   el.spell = h("button", {
-    type: "button", class: "btn btn-sm", "aria-pressed": String(ed.spell), "aria-label": "Spellcheck",
+    type: "button", class: "btn btn-sm editor-spell-btn", "aria-pressed": String(ed.spell), "aria-label": "Spellcheck",
     title: "Underline misspelled words with the browser's spellchecker",
-  }, icon("check"), h("span", { class: "hide-sm hide-narrow", text: "Spellcheck" }));
+  }, icon("check"), h("span", { class: "hide-sm hide-narrow", text: "Spellcheck" }), el.spellCount);
   el.spell.addEventListener("click", () => toggleSpellcheck(ed));
   el.pdfBtn = h("button", { type: "button", class: "btn btn-sm", "aria-label": "PDF", title: "Show or hide the PDF" },
     icon("pdf"), h("span", { class: "hide-sm hide-narrow", text: "PDF" }));
@@ -219,8 +261,18 @@ function layout(ctx) {
     view: () => (ed.boundText ? ed.view : null),
     text: () => ed.boundText,
   });
+  // Spelling and grammar from the server's LanguageTool (editor-grammar.js).
+  // Without one the Spellcheck button stays the browser's spellchecker.
+  ed.grammar = editorGrammar({
+    cm: () => ed.cm,
+    view: () => (ed.boundText ? ed.view : null),
+    path: () => (ed.boundText ? ed.openPath : null),
+    text: () => ed.boundText,
+    canEdit: ed.canEdit,
+    onChange: () => paintSpell(ed),
+  });
 
-  el.host = h("div", { class: "editor-host" }, ed.comments.floatEl);
+  el.host = h("div", { class: "editor-host" }, ed.comments.floatEl, ed.grammar.box);
   el.other = h("div", { class: "editor-other" },
     h("div", { class: "loading" }, spinner(true)));
   el.host.hidden = true;
@@ -238,9 +290,17 @@ function layout(ctx) {
     class: "editor-divider", role: "separator", "aria-orientation": "vertical", "aria-label": "Width of the PDF",
     tabindex: "0", title: "Drag to change the width. A double-click makes both halves equal.",
   });
-  el.shell = h("div", { class: `editor-shell${stored(PDF_KEY, "on") === "off" ? " pdf-off" : ""}` }, el.tree, el.main, el.divider, el.pdfColumn);
+  el.treeDivider = h("div", {
+    class: "editor-divider editor-tree-divider", role: "separator", "aria-orientation": "vertical", "aria-label": "Width of the file tree",
+    tabindex: "0", title: "Drag to change the width. A double-click gives the files their usual width.",
+  });
+  el.shell = h("div", { class: `editor-shell${stored(PDF_KEY, "on") === "off" ? " pdf-off" : ""}` },
+    el.tree, el.treeDivider, el.main, el.divider, el.pdfColumn);
   el.pdfColumn.style.flexBasis = `${Number(stored(PDF_WIDTH_KEY, "0.42")) * 100}%`;
+  const treeWidth = Number(stored(TREE_WIDTH_KEY, ""));
+  if (treeWidth > 0) el.shell.style.setProperty("--tree-width", `${treeWidth}px`);
   wireDivider(ed);
+  wireTreeDivider(ed);
   paintPdfButton(ed);
   // A file dropped next to the tree would make the browser leave the page.
   el.shell.addEventListener("dragover", (e) => {
@@ -297,6 +357,7 @@ async function start(ed, want) {
   ed.index = new ProjectIndex();
   ed.onFiles = (events) => {
     ed.index.changed(events);
+    ed.outline.changed();
     // Typing changes a Y.Text. Only entries coming, going or renamed change the tree.
     if (events.some((e) => !(e.target instanceof cm.Y.Text))) queueRefresh(ed);
   };
@@ -401,7 +462,7 @@ function paintPresence(ed) {
     const key = user.email || `client-${client}`;
     const where = ed.byId.get(state.file)?.shownAt || null;
     const known = people.get(key);
-    if (!known) people.set(key, { name: user.name || user.email || "Someone", email: user.email || "", where });
+    if (!known) people.set(key, { name: user.name || user.email || "Someone", email: user.email || "", avatar_url: user.avatar_url || null, where });
     else if (!known.where) known.where = where;
   });
   // Every remote cursor move changes the awareness. Most change nothing here.
@@ -435,6 +496,11 @@ function note(ed, text) {
 }
 
 function toggleSpellcheck(ed) {
+  // With a checker on the server it is switched for the account (editor-grammar.js).
+  if (ed.grammar.active) {
+    ed.grammar.toggle();
+    return;
+  }
   ed.spell = !ed.spell;
   try {
     localStorage.setItem(SPELLCHECK_KEY, ed.spell ? "on" : "off");
@@ -445,8 +511,30 @@ function toggleSpellcheck(ed) {
   ed.view?.dispatch({ effects: ed.spellComp.reconfigure(spellAttrs(ed)) });
 }
 
+// The browser's spellchecker stays off while the server's checker is there.
+// It would underline the same words again, in its own colour and with its own
+// idea of the language, and LaTeX's commands with them.
 function spellAttrs(ed) {
-  return ed.cm.EditorView.contentAttributes.of({ spellcheck: ed.spell ? "true" : "false" });
+  return ed.cm.EditorView.contentAttributes.of({ spellcheck: ed.spell && !ed.grammar.active ? "true" : "false" });
+}
+
+// The Spellcheck button. With a checker on the server it shows whether that
+// is on for the account and how many underlines the open file has, and its
+// title names the language or the checker's last error. Without one, or for
+// someone who may not edit, it is the browser's spellchecker as before.
+function paintSpell(ed) {
+  const g = ed.grammar;
+  const btn = ed.el.spell;
+  btn.setAttribute("aria-pressed", String(g.active ? g.enabled : ed.spell));
+  btn.title = g.active ? g.title : "Underline misspelled words with the browser's spellchecker";
+  ed.el.spellCount.textContent = String(g.count);
+  ed.el.spellCount.hidden = !g.active || !g.count;
+  btn.classList.toggle("is-busy", g.active && g.busy);
+  btn.classList.toggle("is-failed", g.active && g.failed);
+  if (ed.spellActive !== g.active) {
+    ed.spellActive = g.active;
+    if (ed.spellComp) ed.view?.dispatch({ effects: ed.spellComp.reconfigure(spellAttrs(ed)) });
+  }
 }
 
 // --- The document -----------------------------------------------------------------
@@ -456,6 +544,8 @@ function ready(ed, want) {
   ed.comments.start();
   refresh(ed);
   ed.problems.ready();
+  ed.outline.changed();
+  ed.pdf.filesLoaded();
   // /edit/<path>#L<n>, the References tab's links, opens the file at that line.
   const at = /^#L(\d+)$/.exec(location.hash);
   openPath(ed, want, { history: "replace" });
@@ -581,8 +671,6 @@ function open(ed, id, { history = "push", focus = false } = {}) {
     ed.boundText = null;
     ed.openId = id;
     ed.openPath = entry.shownAt;
-    // The folders above the open file are opened, so it shows in the tree.
-    for (let p = parentOf(entry.shownAt); p; p = parentOf(p)) ed.collapsed.delete(p);
     ed.awareness.setLocalStateField("file", id);
     if (entry.kind === "text") bindText(ed, entry);
     else showBlob(ed, entry);
@@ -591,6 +679,7 @@ function open(ed, id, { history = "push", focus = false } = {}) {
   setUrl(ed, entry.shownAt, history);
   setTitle(entry.shownAt, ed.p.name);
   paintPath(ed, entry);
+  ed.outline.moved();
   showTree(ed, false);
   if (focus && ed.view && window.matchMedia("(min-width: 768px)").matches) ed.view.focus();
 }
@@ -664,6 +753,8 @@ function bindText(ed, entry) {
       cm.EditorView.contentAttributes.of({ "aria-label": `Contents of ${entry.shownAt}` }),
       ed.langComp.of(language(ed, entry.shownAt)),
       ed.spellComp.of(spellAttrs(ed)),
+      // Before the keymap below, so Escape closes the suggestions first.
+      ed.grammar.extension(),
       cm.keymap.of([
         { key: "Mod-Enter", run: () => { ed.pdf.compile(); return true; } },
         { key: "Mod-Shift-Enter", run: () => { ed.pdf.showCursor(); return true; } },
@@ -680,6 +771,7 @@ function bindText(ed, entry) {
       }),
       editorLooks(cm),
       ed.comments.extension(),
+      ed.outline.extension(),
       spotExtension(cm),
       cm.yCollab(entry.text, ed.awareness, { undoManager }),
     ],
@@ -692,6 +784,7 @@ function bindText(ed, entry) {
   ed.boundText = entry.text;
   ed.comments.opened();
   ed.problems.opened();
+  ed.grammar.opened();
   if (selection) reveal(ed, selection.main.head, false);
 }
 
@@ -721,6 +814,7 @@ function unbind(ed) {
   ed.boundText = null;
   ed.awareness?.setLocalStateField("cursor", null);
   ed.comments?.opened();
+  ed.grammar?.opened();
 }
 
 // Where the cursor was in each file, as positions that move with edits.
@@ -939,6 +1033,28 @@ function showComments(ed, on, { keepColumn = false } = {}) {
   paintPdfButton(ed);
 }
 
+// While a divider is dragged, `drag` gets the pointer's x.
+function dragDivider(ed, divider, drag) {
+  const shell = ed.el.shell;
+  divider.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    divider.setPointerCapture(e.pointerId);
+    shell.classList.add("is-resizing");
+    divider.classList.add("is-dragging");
+    const move = (m) => drag(m.clientX);
+    const up = () => {
+      shell.classList.remove("is-resizing");
+      divider.classList.remove("is-dragging");
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", up);
+      divider.removeEventListener("pointercancel", up);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", up);
+    divider.addEventListener("pointercancel", up);
+  });
+}
+
 function wireDivider(ed) {
   const { divider, pdfColumn, shell } = ed.el;
   const setWidth = (px) => {
@@ -948,21 +1064,7 @@ function wireDivider(ed) {
     pdfColumn.style.flexBasis = `${(width / room) * 100}%`;
     store(PDF_WIDTH_KEY, String(width / room));
   };
-  divider.addEventListener("pointerdown", (e) => {
-    e.preventDefault();
-    divider.setPointerCapture(e.pointerId);
-    shell.classList.add("is-resizing");
-    const move = (m) => setWidth(shell.getBoundingClientRect().right - m.clientX);
-    const up = () => {
-      shell.classList.remove("is-resizing");
-      divider.removeEventListener("pointermove", move);
-      divider.removeEventListener("pointerup", up);
-      divider.removeEventListener("pointercancel", up);
-    };
-    divider.addEventListener("pointermove", move);
-    divider.addEventListener("pointerup", up);
-    divider.addEventListener("pointercancel", up);
-  });
+  dragDivider(ed, divider, (x) => setWidth(shell.getBoundingClientRect().right - x));
   divider.addEventListener("dblclick", () => setWidth((ed.el.main.offsetWidth + pdfColumn.offsetWidth) / 2));
   divider.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
@@ -971,8 +1073,30 @@ function wireDivider(ed) {
   });
 }
 
+// The tree keeps its width in pixels, at most half the editor, and leaves the
+// text at least 320 pixels. A double-click gives it the stylesheet's width back.
+function wireTreeDivider(ed) {
+  const { treeDivider, tree, main, shell } = ed.el;
+  const setWidth = (px) => {
+    const room = tree.offsetWidth + main.offsetWidth;
+    const width = Math.round(Math.max(160, Math.min(px, room - 320, shell.clientWidth / 2)));
+    shell.style.setProperty("--tree-width", `${width}px`);
+    store(TREE_WIDTH_KEY, String(width));
+  };
+  dragDivider(ed, treeDivider, (x) => setWidth(x - tree.getBoundingClientRect().left));
+  treeDivider.addEventListener("dblclick", () => {
+    shell.style.removeProperty("--tree-width");
+    store(TREE_WIDTH_KEY, "");
+  });
+  treeDivider.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    setWidth(tree.offsetWidth + (e.key === "ArrowLeft" ? -32 : 32));
+  });
+}
+
 // Show a place the PDF pointed at: a problem's line or a SyncTeX result. A
-// SyncTeX result has `spot` ({word, before, after} of the double-click), and
+// SyncTeX result has `spot` ({word, before, after} of the click), and
 // its line and word light up for a moment (editor-spot.js).
 function openAt(ed, { path, line, column = 0, spot = null }) {
   const entry = ed.byPath.get(path);
@@ -1018,7 +1142,7 @@ function paintTree(ed) {
   const list = h("ul", { class: "tree" });
   const walk = (node, depth) => {
     for (const dir of [...node.dirs.values()].sort(byName)) {
-      const open = !ed.collapsed.has(dir.path);
+      const open = ed.expanded.has(dir.path);
       list.append(h("li", {}, dirRow(ed, dir, depth, open)));
       if (open) walk(dir, depth + 1);
     }
@@ -1036,8 +1160,9 @@ function countFiles(dir) {
 
 function dirRow(ed, dir, depth, open) {
   const flip = () => {
-    if (open) ed.collapsed.add(dir.path);
-    else ed.collapsed.delete(dir.path);
+    if (open) ed.expanded.delete(dir.path);
+    else ed.expanded.add(dir.path);
+    saveFolders(ed);
     paintTree(ed);
   };
   const label = open ? `Collapse ${dir.name}` : `Expand ${dir.name}`;
@@ -1068,6 +1193,8 @@ function dirRow(ed, dir, depth, open) {
 function fileRow(ed, file, depth) {
   const entry = file.entry;
   const iconName = entry.kind === "text" ? "file-text" : /\.pdf$/i.test(entry.shownAt) ? "pdf" : "file-binary";
+  const isMain = entry.shownAt === (ed.p.main_file || "main.tex");
+  const canBeMain = !isMain && !entry.conflict && entry.kind === "text" && /\.tex$/i.test(entry.shownAt);
   const menu = ed.canEdit ? dropdown({
     summary: icon("kebab"),
     summaryClass: "btn-octicon",
@@ -1075,6 +1202,7 @@ function fileRow(ed, file, depth) {
     align: "right",
     cls: "tree-actions",
     items: [
+      canBeMain ? { text: "Make main document", icon: "book", onClick: () => makeMain(ed, entry.shownAt) } : null,
       { text: "Rename or move…", icon: "pencil", onClick: () => renameDialog(ed, entry.shownAt, false) },
       { text: "Download", icon: "download", href: projectUrl(ed.p.id, `/files/${encPath(entry.shownAt)}`), download: file.name },
       "divider",
@@ -1088,6 +1216,7 @@ function fileRow(ed, file, depth) {
   h("span", { class: "tree-toggle spacer" }),
   h("a", { class: "tree-link", href: editorHref(ed.base, entry.shownAt), title: entry.shownAt, dataset: { id: entry.id } },
     icon(iconName), h("span", { class: "flex-1 truncate", text: file.name }),
+    isMain ? h("span", { class: "Label", text: "main", title: "The main document, the file LaTeX compiles" }) : null,
     entry.conflict ? h("span", { class: "Label label-attention", text: "conflict" }) : null),
   menu);
 }
@@ -1184,6 +1313,7 @@ function starter(ed, path) {
 
 async function createFile(ed, path) {
   const body = new Blob([starter(ed, path)], { type: "text/plain" });
+  expand(ed, parentOf(path));
   let info;
   try {
     // Create only. A coauthor who made the same file a moment ago keeps theirs.
@@ -1320,7 +1450,32 @@ async function move(ed, from, to) {
     if (from !== ed.openPath && !(ed.openPath || "").startsWith(`${from}/`)) note(ed, `Moved to ${to}`);
   } catch (err) {
     flashError(err);
+    return;
   }
+  // A folder that was open stays open under its new path, and so do the open folders in it.
+  const moved = [...ed.expanded].filter((p) => p === from || p.startsWith(`${from}/`));
+  if (!moved.length) return;
+  for (const p of moved) {
+    ed.expanded.delete(p);
+    ed.expanded.add(to + p.slice(from.length));
+  }
+  saveFolders(ed);
+  paintTree(ed);
+}
+
+// LaTeX compiles `path` from now on, for everybody on this paper.
+async function makeMain(ed, path) {
+  try {
+    const updated = await api.patch(projectUrl(ed.p.id), { main_file: path });
+    Object.assign(ed.p, updated || { main_file: path });
+  } catch (err) {
+    flashError(err);
+    return;
+  }
+  note(ed, `${path} is the main document now`);
+  paintTree(ed);
+  ed.outline.changed();
+  ed.pdf.compile();
 }
 
 async function removeDialog(ed, path, count) {
@@ -1364,6 +1519,7 @@ async function upload(ed, files, folder) {
     });
     if (!ok) return;
   }
+  expand(ed, folder);
   note(ed, `Uploading ${plural(items.length, "file")}…`);
   let last = null;
   let done = 0;

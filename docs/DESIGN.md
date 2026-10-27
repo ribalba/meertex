@@ -54,12 +54,33 @@ meerpad's scheme, carried over unchanged. You enter your email and get a
 link and a six-character code, and either one signs you in. There are no
 passwords. A brand-new email gets an account on its first sign-in.
 
-A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, created_at`.
+A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, avatar_url, created_at`.
 `naming_pattern` is described in §4, `writing_days` and the reminders in §5.
+A new account, whether it signed in itself or was invited, has no
+`timezone` yet and reads as UTC. The first time the web app loads for it,
+it sends the browser's zone. After that only the settings change it.
 
 The API token is for scripts, the CLI and agents. It is sent as
 `Authorization: Bearer <token>` or, where a header is impossible, as
 `?token=`.
+
+### Profile picture
+
+Everywhere a person shows, their profile picture shows, or their initials
+on a colour when they have none. That is the header, the members, reviews,
+comments, versions and the people in the editor. Settings, Profile uploads
+and removes it. The web app crops the middle square of the chosen picture,
+scales it to 256 pixels and sends it as WebP, or as PNG where the browser
+does not write WebP.
+
+The server takes PNG, JPEG, GIF and WebP up to `MAX_AVATAR_BYTES` (1 MB),
+recognised by their first bytes, and never SVG, which can carry script. A
+picture is stored once in `DATA_DIR/avatars`, named by its SHA-256 and its
+format. Two accounts with the same picture share the file, and it is
+deleted when no account shows it any more. `avatar_url` is
+`/api/avatars/<name>` or null. The name changes with the picture, so the
+picture is served for a year and marked immutable. Fetching it needs a
+session or the token, like any other route.
 
 ### Members and roles
 
@@ -184,7 +205,7 @@ an account. They see the chart and nothing else of meertex.
 | `submission_url` | string | HotCRP, EasyChair and so on. |
 | `location` | string | City and country. |
 | `publisher` | string | ACM, IEEE, Springer, LIPIcs, USENIX. |
-| `page_limit` | string | Free text as the CFP says it (`10 pages + 2 for references`). |
+| `page_limit` | string | Free text as the CFP says it (`10 pages + 2 for references`). The PDF is checked against its numbers (§14, The page limit). |
 | `template` | string | `acmart sigconf`, `IEEEtran conference`, `llncs`. |
 | `review_model` | string | `double-blind`, `single-blind`, `open` or empty. |
 | `notes` | text | Markdown, anything else from the CFP or our own. |
@@ -617,6 +638,19 @@ sync client's, and other people's cursors show with their names (awareness).
   deletes and uploads go through the file routes (§11), which check the path
   and come back over the socket as CRDT edits. New files use
   `If-None-Match: *`.
+- Folders in the tree start closed. The ones a person opens stay open across
+  visits (per paper and browser), and so do closed ones, also for the file
+  the page opens. Making or uploading a file opens its folder, and a moved
+  folder keeps its state.
+- A `.tex` file's menu has Make main document, which sets the project's
+  `main_file` and compiles again. The tree marks the main file.
+- An outline under the tree shows the headings (`\part` to `\subparagraph`)
+  as a tree (`app/static/js/editor-outline.js`). It starts at the main file
+  and follows `\input`, `\include`, `\subfile` and `\import` in reading
+  order. A `.tex` file the main file does not read shows its own headings.
+  A click opens a heading's line, and the heading the cursor is under is
+  marked. It follows everybody's edits. The box folds to its header, and the
+  choice is kept per browser.
 - Viewers and reviewers get a read-only editor. A role change closes the
   socket with 4009 and the page says to reload.
 
@@ -750,8 +784,8 @@ Every route returns these shapes. Datetimes are ISO 8601 UTC with `Z`.
 
 ```text
 user      {id, email, name, timezone, api_token, naming_pattern, writing_days,
-           reminders, reminder_days, reminder_hour, created_at}
-person    {id, email, name}
+           reminders, reminder_days, reminder_hour, avatar_url, created_at}
+person    {id, email, name, avatar_url}
 folder    {id, name, parent_id, path, position}
 date      {id, kind, label, due_at, tz, date_only, local, passed, seconds_left,
            answer, answered_at, changes: [{at, by, from, to}]}
@@ -760,7 +794,7 @@ question  {project_id, project_name, date_id, kind, label, due_at, text, answers
 version   {id, number, kind, label, tag, commit, date_id, note, pdf_name,
            created_at, created_by: person | null,
            compiled: {id, status, pdf_url, log_url} | null}
-member    {user_id, email, name, role, added_at}
+member    {user_id, email, name, avatar_url, role, added_at}
 file      {id, path, kind, size, sha}
 commit    {commit, parent, at, message, editors: [string], files_changed}
 diff      {from, to, files: [{path, old_path, status, binary, diff}]}
@@ -784,6 +818,9 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 - `GET /api/auth/callback?token=`
 - `GET/PATCH /api/auth/me`. `PATCH` takes `name`, `timezone`, `naming_pattern`, `writing_days`,
   `reminders`, `reminder_days`, `reminder_hour` (§5, Reminders).
+- `PUT /api/auth/me/avatar` with the picture as the body, `DELETE /api/auth/me/avatar`.
+  Both answer with the user (§2, Profile picture).
+- `GET /api/avatars/{name}`
 - `POST /api/auth/api-token`, `POST /api/auth/api-token/rotate`
 - `POST /api/auth/logout`
 
@@ -856,6 +893,9 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
   `reviewer` and `viewer`. Only the owner can add `editor`.
 - `PATCH /api/projects/{ref}/members/{user_id} {role}` and `DELETE`. Owner
   only. The owner cannot be removed or changed.
+- `GET /api/people` returns `[{user_id, email, name, papers}]`, everyone who
+  shares a paper with you, those on the most papers with you first. "Add
+  someone" suggests their emails.
 
 ### Versions
 
@@ -928,6 +968,7 @@ Projects are addressed by name or id.
 | `meertex diff <project> <from> [<to>] [--word]` | Diff between refs. `to` defaults to `live`. |
 | `meertex folders` / `meertex folder add\|mv\|rm ...` / `meertex mv <project> <folder>` | The folder tree. |
 | `meertex service install\|uninstall` | A systemd user unit that runs `meertex sync`. |
+| `meertex service status [-n LINES] [-f]` | Whether the unit is installed, enabled and running (since when, pid, restarts, last exit), from `systemctl --user show`, and its last log lines (default 20) from `journalctl --user`. `-f` keeps printing new lines. Exits 1 when it does not run. |
 | `meertex refs <project> [check\|add\|mark\|unmark\|set ...]` | The reference check (§16, CLI). |
 
 ## 13. Reviews
@@ -964,8 +1005,8 @@ comment  {id, author: person, kind, body, suggestion, created_at, edited_at}
 - `comment.suggestion` is replacement text for the thread's span, or null.
   An empty string is a suggestion too, to delete the span.
 - `resolution` is null while the thread is open, and `accepted` is null
-  unless it is accepted. Reopening clears both. A thread can be accepted
-  without having been resolved, then `resolution` stays null.
+  unless it is accepted. Reopening clears both. A thread with a suggestion
+  can be accepted without having been resolved, then `resolution` stays null.
 
 ### Anchoring
 
@@ -1024,8 +1065,10 @@ to a snapshot instead, and mapped to the live text by diffing.
 - A pending thread takes replies from its reviewer, but it cannot be
   resolved, applied, accepted or reopened before the review is submitted
   (422).
-- Resolve and apply need an open thread. Accept needs an open or a resolved
-  one. Reopen needs a resolved or an accepted one. Anything else is 422.
+- Resolve and apply need an open thread. Accept needs a resolved one, or an
+  open one with a suggestion in one of its comments, because a plain comment
+  has nothing to accept before the authors resolve it. Reopen needs a
+  resolved or an accepted one. Anything else is 422.
 - **Resolve** takes a snapshot, and stores the word diff (git's
   `--word-diff=porcelain` format) between `quote` and the current `text`, the
   commit and an optional note. **Apply** writes a suggestion over the current
@@ -1111,10 +1154,16 @@ commands are in `cli/meertex/cmd_reviews.py`.
   review (on the current state, `HEAD` or a version).
 - A **review page** has three views. *Conversation*: every thread with its
   snippet, comments, suggestions, resolution diff and the buttons for the
-  next step. *Files*: the source at the review's commit with line numbers, its
-  threads under their lines, and the PDF of that commit next to it. Selecting
-  text, or double-clicking the PDF (SyncTeX finds the line), opens a comment
-  box with an optional suggestion. *Changes since this review*: the word diff
+  next step. *Files*: the source at the review's commit with line numbers and
+  the editor's LaTeX colours, its threads under their lines, and the PDF of
+  that commit next to it. Like the editor, the two fill the window below the
+  review's header, each scrolling on its own, with a divider between them.
+  Selecting text, or double-clicking the PDF (SyncTeX finds the line), opens a
+  comment box with an optional suggestion. Text selected in the PDF is marked
+  in the source, next to a "Comment" button for it: SyncTeX names the lines of
+  the selection's start and end, and the passage is looked for there as a
+  reader sees it, by its start and its end where math or a citation reads
+  differently. *Changes since this review*: the word diff
   to `live` and the latexdiff PDF. A pending review has a "Finish your review"
   dialog with the verdict and a summary.
 - The **editor** shows open threads as highlighted spans in the text (from
@@ -1239,7 +1288,9 @@ It exits 0 on `success` and 1 otherwise.
   browser).
 - The problems of the last compile as a list. Clicking one opens the file at
   its line.
-- Double-click in the PDF jumps to the source line (SyncTeX). A button jumps
+- A compile that made no PDF shows which file LaTeX compiled, says when it
+  is not in the paper, and points to Make main document.
+- A click in the PDF jumps to the source line (SyncTeX). A button jumps
   from the cursor to the PDF and marks the spot.
 - LaTeX autocomplete: commands, environments after `\begin{`, `\ref` and
   `\eqref` labels from every `\label{}` in the project, `\cite` keys from
@@ -1248,9 +1299,55 @@ It exits 0 on `success` and 1 otherwise.
 - Compile errors and warnings with a line are marked on their lines (a
   gutter icon, a red or amber line, the message on hover). Bad boxes stay in
   the problems list. The marks move with edits until the next compile.
-- A double-click in the PDF selects the clicked word in the source, found in
+- A click in the PDF selects the clicked word in the source, found in
   the SyncTeX line and the lines around it, and lights up the line and the
   word for a few seconds.
+
+### The page limit
+
+The PDF is checked against the paper's `page_limit` (§4) in the browser
+(`app/static/js/pagelimit.js`), in the editor's PDF pane and in a version's
+preview. A PDF that is too long gets an amber line above it and an amber page
+count. The page count's tooltip says where the references start and how the
+limit was read. Nothing is stored and the server does not read the PDF.
+
+- **Reading the limit.** The first number in the text is the pages for the
+  text. A second number after `+` or `plus`, or in the same clause as the
+  word references, is how many pages the references may add. Without one,
+  words next to "references" decide. "Plus", "+", "excluding", "without",
+  "unlimited", "extra" and "not counted" let them run on. "Including",
+  "incl." and "with" count them with the text. A limit that names no
+  references counts the whole PDF. A range (`6-10 pages`) allows its upper
+  end. Years, `2-column`, `10 pt` and `8.5 x 11 in` are not page counts.
+  Text without a page count turns the check off. The paper form says how it
+  reads what is typed. An (i) next to the field's label opens a dialog with
+  examples, each read by these same rules.
+
+  | Written | Read as |
+  | --- | --- |
+  | `8`, `6 pages including references` | the whole PDF, 8 or 6 pages |
+  | `8 + references`, `12 pages, references not counted` | 8 or 12 pages of text, the references free |
+  | `10 + 2`, `10 pages + 2 pages of references` | 10 pages of text, the PDF up to 12 |
+  | `no limit` | no check |
+
+- **Finding the references.** PDF.js gives the text of every page. Runs on
+  one baseline with no gap wider than most of a letter make a segment, so
+  two columns and a running head's two halves stay apart. The references
+  start at the last segment that reads References, Bibliography or the same
+  in German, French, Spanish, Italian or Dutch, after accents, case and
+  spaces are dropped (`R EFERENCES` from small capitals), also numbered
+  (`7 References`, `VII. References`). The last one counts, so a table cell
+  or a line of contents that reads References does not.
+- **The page the references start on** belongs to the text too when
+  anything comes before the heading on it. In two columns that is the left
+  column when the heading is in the right one. Running heads, footers, page
+  and line numbers do not count. They are text without letters, or a line of
+  which a part with letters stands at the same height on another page, its
+  numbers aside.
+- **Too long** is a PDF with more pages than the text and the references may
+  have together, text that takes more pages than the text may have, or a PDF
+  without a references heading that is longer than the text may be. Everything
+  after the references heading, an appendix too, counts as references.
 
 ## 15. Deployment
 
@@ -1277,6 +1374,9 @@ that refuses URLs and paths outside the job.
 | `REFERENCES_MAILTO` | The address the lookups give the services, `EMAIL_FROM` when empty. |
 | `SEMANTIC_SCHOLAR_API_KEY` | Optional. A key of its own gets a larger rate limit. |
 | `ANTHROPIC_API_KEY`, `REFERENCES_CLAUDE_MODEL` | Turn the claim check on (§16, Claims). Empty and `claude-opus-5-5`. |
+| `GRAMMAR_URL` | The LanguageTool server (§17). The compose files point it at their `languagetool` service. Empty turns the check off. |
+| `GRAMMAR_TIMEOUT_SECONDS`, `GRAMMAR_ALLOW_PUBLIC_HOSTS`, `GRAMMAR_MAX_CONCURRENT` | 20, `false`, 3 (§17, The checker). |
+| `LANGUAGETOOL_MEMORY` | `1536m`, the `languagetool` container's limit. |
 
 Traefik passes WebSockets through without extra settings.
 
@@ -1509,8 +1609,9 @@ run        {id, status, claims, refresh, total, done, error, started_at,
 ```
 
 - `GET /api/projects/{ref}/references` returns the report. Entries are in
-  file order. `problems` is what the tab counts, the entries that are
-  `error` or `changed` plus the broken ones. `missing` are `\cite` keys no
+  file order. `problems` is what the tab counts, the errors and the
+  warnings. These are the entries that are `error`, `changed` or `warning`,
+  the broken ones and the missing keys. `missing` are `\cite` keys no
   entry has. `broken` are the entries that cannot be parsed (`key` is null
   when not even the key could be read). `checked_at` is when a run last looked the entry up as it
   reads now, null when none has. `claims_at` is when its claims were
@@ -1581,3 +1682,176 @@ The commands are in `cli/meertex/cmd_refs.py`.
 - The missing keys are listed with links to their `\cite`.
 - The editor shows the reference errors and warnings in its problems list
   and on their lines. It reads them when it opens and after every compile.
+
+## 17. Spelling and grammar
+
+The editor underlines spelling and grammar mistakes while you type. The
+checker is meerail's, a LanguageTool server the install runs itself
+(`erikvl87/languagetool:6.8`, the `languagetool` service of both compose
+files). Only the server talks to it. The browser sends the open file to
+meertex, which turns LaTeX into LanguageTool's annotated text, so commands,
+math and citations are skipped and every offset that comes back is already an
+offset into the source. The code is in `app/grammar/` (`checker.py`,
+`latex.py`) and `app/routers/grammar.py`, the editor's half in
+`app/static/js/editor-grammar.js`.
+
+### The checker
+
+- `GRAMMAR_URL` is the server's base URL (a trailing `/v2` is fine). Empty
+  turns the feature off. Nothing is sent anywhere, `available` is false and
+  the editor keeps the browser's own spellchecker.
+- The privacy guard (meerail's). Before a request goes out, the host is
+  resolved, and one public address among its addresses refuses the check
+  (400) unless `GRAMMAR_ALLOW_PUBLIC_HOSTS` is true. The verdict is kept for
+  five minutes, a name that does not resolve for ten seconds (it is a
+  container that is not up yet, so 503). Requests follow no redirects and use
+  no proxy from the environment. No log line and no error sentence contains
+  any of the text.
+- At most `GRAMMAR_MAX_CONCURRENT` (3) requests are with LanguageTool at once,
+  for the whole server. A check waits up to 10 seconds for a slot, then
+  answers 503. One check per user runs at a time, a second one is 429.
+- `GRAMMAR_TIMEOUT_SECONDS` (20) is the read timeout, the connect timeout is
+  3 seconds.
+
+### Settings
+
+Each user's settings are a JSON object in `users.grammar`. `{}` reads as the
+defaults, which are these.
+
+```text
+{enabled: true, language: "auto", variants: [], picky: false, words: [], disabled_rules: []}
+```
+
+- `language` is a code LanguageTool knows (`en-US`, `de-DE`,
+  `ca-ES-valencia`) or `auto`. `variants` (at most 12) are the preferred
+  variants for `auto` (`en-GB` rather than `en-US`) and are only sent with
+  it. `picky` asks for LanguageTool's picky level.
+- `words` is the personal dictionary, at most 10,000 words of up to 100
+  characters, without line breaks or control characters. It is kept unique
+  ignoring case and sorted, and a spelling match on one of its words is
+  dropped, ignoring case. `disabled_rules` (at most 1000) are rule ids
+  (letters, digits, `_ . : -`) whose matches are dropped.
+- A write validates the whole value strictly. A stored value is read
+  leniently. A field that no longer passes takes its default, and a list
+  keeps the entries that still pass.
+
+### Checking
+
+1. The file is split into paragraphs, blocks between blank lines (empty or
+   only whitespace, so a `%` comment line is not blank). In a `.tex` file
+   with `\begin{document}` outside a comment, only the body is checked. A
+   blank line inside a skipped or math environment does not end its
+   paragraph, so a `verbatim` with blank lines is one block. An environment
+   that is never closed is ignored for this, so the rest of the file does not
+   become one paragraph while it is being typed.
+2. Each paragraph becomes a list of items whose sources, joined, are the
+   paragraph exactly (tested on random input). A paragraph without text
+   items is not sent.
+3. Results are cached in the server process, 20,000 paragraphs, least
+   recently used out, keyed by (kind, SHA-256 of the paragraph, language,
+   picky). An entry holds the matches relative to the paragraph before the
+   dictionary and the switched-off rules are applied, so everybody checking
+   the same language shares it, and `disabledRules` is never sent. With
+   `auto` nothing is looked up. The request goes out with `auto`, and the
+   results are stored under the language LanguageTool detected, which the
+   editor sends from then on.
+4. The paragraphs not in the cache go out in one request, in file order,
+   joined with `{"text": "\n\n"}`. They are picked nearest the cursor
+   (`focus`) first until 20,000 characters of paragraph source are used, and
+   at least one is always sent. The rest are `pending`.
+5. Offsets are UTF-16 code units, what Java, JavaScript and CodeMirror
+   count. A match not wholly inside one paragraph is dropped, and so is one
+   that lies wholly in markup (it is about a dummy word, not the text). Each
+   match keeps at most 6 replacements, and its `type` is `spelling` (a
+   dictionary miss), `style` or `grammar`.
+
+### LaTeX to annotated text
+
+A correct paper must stay quiet, so whatever is unclear becomes markup.
+
+- `%` comments are markup, their newline is text. Indentation, and the
+  whitespace a command that prints nothing leaves next to other whitespace or
+  before `.` and `,`, are markup too, because LanguageTool reports doubled
+  spaces and spaces after a line break.
+- Math becomes a dummy word: `$..$`, `\(..\)`, `$$..$$`, `\[..\]` and the
+  environments equation, align, alignat, gather, multline, flalign,
+  eqnarray, displaymath and math (also starred) are one item each. The dummy
+  is `Dummy<n>`, or `Ina<n>` when the math's first symbol is said with a vowel
+  sound (the letters a e f h i l m n o r s x, a number starting with 8, 11,
+  18, `\alpha`, `\epsilon`, `\ell` and a few more, after styling commands
+  like `\mathcal`), so "a $x$" is flagged and "an $x$" is not. `<n>` counts
+  per paragraph. Display math keeps a `.` or `,` at its end, and letters glued
+  to inline math (`$i$th`) belong to it.
+- Dummies too, with all their arguments: the `\cite` family, `\ref`,
+  `\eqref`, `\autoref`, `\cref`, `\pageref`, `\nameref`, `\url`, `\path`,
+  `\texttt`, `\verb`, and the quantities and acronyms of siunitx, acronym and
+  glossaries (`\SI`, `\num`, `\ac`, `\gls`, which take a or an by their
+  argument). `\href{url}{text}` keeps its text.
+- Prose commands keep their last argument as text: `\emph`, `\textbf` and
+  the other `\text..` font commands, `\underline`, `\mbox`, `\textcolor`,
+  `\enquote`, `\footnote` (read as a parenthesis), and `\title`, `\caption`
+  and the sectioning commands, whose closing brace reads as a blank line.
+  `\item` reads as a bullet, so list items are not sentences.
+- Skipped environments are one markup item: verbatim, Verbatim, lstlisting,
+  minted, comment, filecontents, tikzpicture, pgfpicture, tabular, tabular*,
+  tabularx, longtable, array, algorithmic and thebibliography (also
+  starred). `\begin` and `\end` of the others print nothing.
+- `~`, `\ `, `\,`, `\;`, `\quad`, `\qquad` and `\\` read as a space. `\%`
+  and the other escaped characters as the character, `--` and `---` as
+  dashes, two backticks and two quotes as quotation marks, `\ldots` as an
+  ellipsis, `\LaTeX` as LaTeX, `\eg`, `\ie`, `\etal`, `\cf`, `\etc` as their
+  words. Accents and letters compose (`\"a`, `\c{c}`, `\ss`).
+- Every other command prints nothing, with its `*`, `[..]` and `{..}`
+  arguments, and so does a brace that belongs to no command. Broken input
+  never raises, it only becomes more markup.
+
+### Routes
+
+Like every route (§11), they take the session cookie or the API token.
+
+```text
+grammar_config {available, enabled, language, variants, picky, words, disabled_rules}
+grammar_match  {offset, length, message, short, replacements: [string], rule,
+                rule_description, category, type}
+```
+
+- `GET /api/grammar/config` returns your settings. `available` is false when
+  `GRAMMAR_URL` is empty.
+- `PUT /api/grammar/config` takes any subset of the six settings, strictly
+  typed, null refused (422), and returns the config. The user row is read
+  `FOR UPDATE`, so two writes at once do not lose a word.
+- `POST /api/grammar/ignore {word?, rule?}` adds a word to the dictionary or
+  switches a rule off, at least one of the two. Idempotent. Returns the
+  config. A full list is 400.
+- `GET /api/grammar/languages` returns `{languages: [{code, name}]}` sorted by
+  name, cached for an hour.
+- `POST /api/grammar/check {text, kind?, language?, focus?}` checks the open
+  file. `text` is the whole file, at most 2,000,000 characters. `kind` is
+  `latex` (default) or `text` (plain paragraphs). `language` null means your
+  setting. `focus` is a UTF-16 offset, usually the cursor. It returns
+  `{language: {code, name, auto}, matches: [grammar_match], pending: [[start,
+  end]], complete}`. Matches are sorted by offset. `auto` is true while your
+  setting is `auto`. `pending` are the [start, end) UTF-16 ranges of the
+  paragraphs the budget left out, neighbours joined, and `complete` is
+  `pending == []`.
+- Errors carry a sentence that never quotes the text: 409 when `GRAMMAR_URL`
+  is empty or you turned the check off, 400 for a public host or a refusal
+  by the checker (an unknown language), 422 for bad input, 429 while a check
+  of yours is running, 503 when the checker is unreachable or busy, 502 when
+  it answers something that is not LanguageTool's.
+
+### In the web app
+
+- The editor checks `.tex` and `.ltx` files as `latex`, `.md` and `.txt` as
+  `text`, for people who may edit. The first check runs 150 ms after a file
+  opens, later ones 700 ms after the last change, one request at a time.
+  `complete: false` asks again after 250 ms, 429 after a second.
+- Underlines are red (spelling), amber (grammar) or blue and dotted (style).
+  They move with edits, and one an edit touches goes. Clicking one opens a
+  box with the message, up to six replacements, "Ignore", "Add to
+  dictionary" (spelling) or "Turn off this rule". Alt+Shift+G goes to the
+  next one.
+- The toolbar's Spellcheck button turns the check on and off and counts the
+  underlines. Without a checker it is the browser's spellchecker, as before.
+- Settings has a "Spelling and grammar" section: on or off, the language,
+  the preferred variants, picky, the dictionary and the rules turned off.

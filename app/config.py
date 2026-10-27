@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     verify_rate_max: int = 15
     login_rate_window_minutes: int = 15
 
+    # A profile picture (§2, Accounts), in DATA_DIR/avatars. The web app
+    # uploads a small square, far below this.
+    max_avatar_bytes: int = 1024 * 1024
+
     # SMTP. If smtp_host is empty, emails are printed to the console instead of sent.
     smtp_host: str = ""
     smtp_port: int = 587
@@ -83,6 +87,19 @@ class Settings(BaseSettings):
     # The claim check asks Claude. Without a key it is off.
     anthropic_api_key: str = ""
     references_claude_model: str = "claude-opus-5-5"
+
+    # --- Spelling and grammar (docs/DESIGN.md §17) -----------------------------------
+    # A LanguageTool server (its base URL, a trailing /v2 is fine). Empty turns
+    # the check off, and the editor keeps the browser's own spellchecker.
+    # docker-compose sets it to the bundled `languagetool` service.
+    grammar_url: str = ""
+    # Reading the answer. The first check in a language loads that language.
+    grammar_timeout_seconds: int = 20
+    # The privacy guard: a GRAMMAR_URL host with a public address is refused,
+    # so unpublished papers do not leave the server by accident.
+    grammar_allow_public_hosts: bool = False
+    # Requests with LanguageTool at once, for the whole server.
+    grammar_max_concurrent: int = 3
 
     # --- Reminders (docs/DESIGN.md §5, Reminders) ---------------------------------
     # The daily reminder mails before deadlines. False turns the background

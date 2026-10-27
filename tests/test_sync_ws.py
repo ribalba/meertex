@@ -374,11 +374,13 @@ def test_awareness_is_relayed_remembered_and_removed():
                 a.sync()
                 # A claims to be someone else. The server signs the state with
                 # who A really is before anybody sees it.
-                a_ws.send_bytes(_awareness(4711, 1, {"user": {"name": "Alice", "email": "alice@x", "color": "#123"}, "cursor": None}))
+                claim = {"name": "Alice", "email": "alice@x", "avatar_url": "/alice.png", "color": "#123"}
+                a_ws.send_bytes(_awareness(4711, 1, {"user": claim, "cursor": None}))
                 a.sync()
                 b.drain()
                 seen = [s for m in b.received if m[0] == 1 for s in _awareness_states(m)]
-                assert (4711, 1, {"user": {"name": me["email"], "email": me["email"], "color": "#123"}, "cursor": None}) in seen
+                signed = {"name": me["email"], "email": me["email"], "avatar_url": None, "color": "#123"}
+                assert (4711, 1, {"user": signed, "cursor": None}) in seen
 
                 # Someone who connects later sees who is there, signed too.
                 with bare.websocket_connect(_url(pid, bob_token)) as c_ws:

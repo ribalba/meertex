@@ -35,7 +35,6 @@ const STATUS_ORDER = ["error", "changed", "warning", "pending", "unverified", "v
 
 const FILTERS = [
   ["all", "All", null],
-  // Broader than the tab's counter, which leaves warnings out.
   ["problems", "Needs a look", ["error", "changed", "warning"]],
   ["pending", "Pending", ["pending"]],
   ["verified", "Verified", ["verified"]],
@@ -172,8 +171,8 @@ function paintCount(el, n) {
   el.classList.toggle("counter-attention", n > 0);
 }
 
-// The counter of the References tab: the entries that are error or changed,
-// and the broken ones. Hidden at 0.
+// The counter of the References tab: the errors and the warnings, so the
+// entries that need a look, the broken ones and the missing keys. Hidden at 0.
 export function problemsCounter(projectId) {
   const el = counter("", "rf-problem-count");
   el.hidden = true;

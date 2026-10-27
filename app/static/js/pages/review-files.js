@@ -11,13 +11,18 @@
 // single comment, start a review or add to the pending one, and suggest new
 // text. Next to the source is the PDF of the commit. A double-click there
 // asks SyncTeX for the source line and opens the comment box at it, and
-// picking a thread marks its lines in the PDF.
+// picking a thread marks its lines in the PDF. Text selected in the PDF is
+// marked in the source, with a "Comment" button next to the selection.
+//
+// Like the editor, the source and the PDF fill the window below the review's
+// header and scroll on their own, and LaTeX has the editor's colours.
 
 import { api, enc, encPath, projectUrl } from "../api.js";
 import { h, clear, debounce, plural } from "../dom.js";
 import { icon } from "../icons.js";
 import { navigate, onLeave, setQuery } from "../router.js";
 import { createPdfView } from "../pdfview.js";
+import { findPassage } from "../editor-spot.js";
 import { session } from "../session.js";
 import { blankslate, flash, flashBox, flashError, queueFlash, spinner } from "../ui.js";
 import {
@@ -25,7 +30,14 @@ import {
 } from "../threads.js";
 
 const PDF_KEY = "meertex.review.pdf";
+const PDF_WIDTH_KEY = "meertex.review.pdfwidth";
 const FINISHED = new Set(["success", "errors", "failure", "timeout", "unavailable"]);
+const PHONE = "(max-width: 767px)";
+// The editor's bundle (pages/editor.js) and the files it colours, for the same colours here.
+const BUNDLE = "/static/vendor/editor/editor.js";
+const LATEX = /\.(tex|sty|cls|ltx|dtx|ins|bbx|cbx|lbx|tikz)$/i;
+
+let colours = null;
 
 // --- PDF helpers, shared with the Changes view ---------------------------------------
 
@@ -41,7 +53,7 @@ export async function compileWait(ctx, path, body) {
 }
 
 // A box with a PDF in the viewer, its zoom, page count and a download link.
-export function pdfBox(host, { title, url, name, onDoubleClick = null, extra = null, cls = "" }) {
+export function pdfBox(host, { title, url, name, onDoubleClick = null, onSelect = null, extra = null, cls = "" }) {
   const zoom = h("span", { class: "pdf-zoom-text", text: "" });
   const pages = h("span", { class: "pdf-pages" });
   const view = { current: null };
@@ -59,6 +71,7 @@ export function pdfBox(host, { title, url, name, onDoubleClick = null, extra = n
   clear(host).append(h("div", { class: `box pdf-box ${cls}`.trim() }, header, body));
   view.current = createPdfView(body, {
     onDoubleClick,
+    onSelect,
     onChange: ({ page, pages: n, zoom: z }) => {
       zoom.textContent = `${Math.round(z * 100)}%`;
       pages.textContent = n ? `${page} / ${n}` : "";
@@ -71,21 +84,66 @@ export function pdfBox(host, { title, url, name, onDoubleClick = null, extra = n
   return view.current;
 }
 
-function readPdfPref() {
+function stored(key) {
   try {
-    const v = localStorage.getItem(PDF_KEY);
-    if (v === "on" || v === "off") return v === "on";
+    return localStorage.getItem(key);
   } catch {
-    // No storage, the width decides.
+    return null;
   }
-  return window.matchMedia("(min-width: 1012px)").matches;
 }
 
-function writePdfPref(on) {
+function store(key, value) {
   try {
-    localStorage.setItem(PDF_KEY, on ? "on" : "off");
+    localStorage.setItem(key, value);
   } catch {
     // Not remembered, which is fine.
+  }
+}
+
+// Without a choice, the width decides.
+function readPdfPref() {
+  const v = stored(PDF_KEY);
+  return v === "on" || v === "off" ? v === "on" : window.matchMedia("(min-width: 1012px)").matches;
+}
+
+// The PDF's share of the width.
+function readPdfWidth() {
+  const v = Number(stored(PDF_WIDTH_KEY));
+  return v >= 0.15 && v <= 0.85 ? v : 0.46;
+}
+
+// The spans of a LaTeX file to colour, [{from, to, cls}] in UTF-16 units: the
+// editor's mode, in its colours (the .tex-* rules of app.css). Other files,
+// and LaTeX when the bundle does not load, stay plain.
+async function texColours(path, text) {
+  if (!LATEX.test(path)) return [];
+  colours ??= import(BUNDLE).then((cm) => {
+    const t = cm.tags;
+    return {
+      cm,
+      language: cm.StreamLanguage.define(cm.stex),
+      highlighter: cm.tagHighlighter([
+        { tag: t.comment, class: "tex-comment" },
+        { tag: t.tagName, class: "tex-command" },
+        { tag: t.atom, class: "tex-atom" },
+        { tag: [t.keyword, t.special(t.variableName), t.number], class: "tex-keyword" },
+        { tag: t.bracket, class: "tex-bracket" },
+        { tag: t.string, class: "tex-string" },
+        { tag: t.invalid, class: "tex-invalid" },
+      ]),
+    };
+  }).catch((err) => {
+    colours = null;
+    throw err;
+  });
+  try {
+    const { cm, language, highlighter } = await colours;
+    const spans = [];
+    cm.highlightTree(language.parser.parse(text), highlighter, (from, to, cls) => spans.push({ from, to, cls }));
+    return spans;
+  } catch (err) {
+    console.warn("The LaTeX could not be coloured", err);
+    return [];
   }
 }
 
@@ -148,7 +206,11 @@ export async function renderFiles(ctx) {
     return;
   }
 
-  const state = { path: startPath, text: "", lines: [], starts: [], compose: null, anchorLine: null, selected: null, pending: null };
+  // pick is the text selected in the PDF as found in the source, {s16, e16} or
+  // {lines: true, line_start, line_end}.
+  const state = {
+    path: startPath, text: "", lines: [], starts: [], colours: [], compose: null, anchorLine: null, selected: null, pending: null, pick: null,
+  };
   const commitTexts = new FileTexts(p.id, commit);
   const cards = new Map();
   const pdf = { on: readPdfPref(), started: false, view: null, compile: null };
@@ -191,18 +253,23 @@ export async function renderFiles(ctx) {
     icon("pdf"), "PDF");
   pdfToggle.addEventListener("click", () => setPdf(!pdf.on));
 
+  const lineCount = h("span", { class: "text-small color-muted nowrap" });
+  const raw = h("a", { class: "btn btn-sm", target: "_blank", rel: "noopener", text: "Raw" });
   const toolbar = h("div", { class: "rv-files-toolbar" },
     select,
     h("span", { class: "text-small color-muted nowrap" }, "at ",
       h("a", { class: "sha", href: `${ctx.base}/commit/${enc(commit)}`, text: commit.slice(0, 7) })),
     h("span", { class: "flex-1" }),
+    lineCount,
+    raw,
     pdfToggle);
 
   const hint = perms.comment
     ? h("p", { class: "text-small color-muted rv-files-hint" },
       "Select text to comment on it, or click a line number. Shift-click a second one for a range. ",
-      h("span", { class: "rv-pdf-hint" }, "Double-click the PDF to comment on that line."))
-    : flashBox("You can read this review. Commenting needs the reviewer, editor or owner role.", "info");
+      h("span", { class: "rv-pdf-hint" }, "Select text in the PDF to find it here, or double-click the PDF to comment on that line."))
+    : flashBox(h("span", {}, "You can read this review. Commenting needs the reviewer, editor or owner role. ",
+      h("span", { class: "rv-pdf-hint" }, "Select text in the PDF to find it here.")), "info");
 
   // --- Threads made on a later state -----------------------------------------------------
 
@@ -221,12 +288,17 @@ export async function renderFiles(ctx) {
 
   const tbody = h("tbody");
   const table = h("table", { class: "code-table rv-code-table" }, tbody);
-  const codeHead = h("div", { class: "box-header" });
-  const codeBox = h("div", { class: "box code-box rv-code" }, codeHead, h("div", { class: "code-scroll" }, table));
   const floatBtn = h("button", { type: "button", class: "btn btn-sm btn-primary rv-float", hidden: true }, icon("comment", { size: 14 }), "Comment");
-  const codeCol = h("div", { class: "rv-code-col" }, codeBox, floatBtn);
+  const codeScroll = h("div", { class: "rv-code-scroll" }, h("div", { class: "rv-code-notes" }, hint, laterHost), table, floatBtn);
+  const codeCol = h("section", { class: "rv-code-col", "aria-label": "Source" }, toolbar, codeScroll);
+  const pdfFloat = h("button", { type: "button", class: "btn btn-sm btn-primary rv-pdf-float", hidden: true }, icon("comment", { size: 14 }), "Comment");
   const pdfCol = h("div", { class: "rv-pdf-col" });
-  const split = h("div", { class: "rv-files-split" }, codeCol, pdfCol);
+  const divider = h("div", {
+    class: "editor-divider rv-divider", role: "separator", "aria-orientation": "vertical", "aria-label": "Width of the PDF",
+    tabindex: "0", title: "Drag to change the width. A double-click makes both halves equal.",
+  });
+  const split = h("div", { class: "rv-files-split" }, codeCol, divider, pdfCol);
+  pdfCol.style.flexBasis = `${readPdfWidth() * 100}%`;
 
   function cardFor(t, opts = {}) {
     let card = cards.get(t.id);
@@ -244,11 +316,8 @@ export async function renderFiles(ctx) {
   }
 
   function paintHead() {
-    const n = state.lines.length;
-    clear(codeHead).append(
-      h("div", { class: "flex-1 truncate" }, h("strong", { class: "text-mono", text: state.path })),
-      h("span", { class: "text-small color-muted nowrap", text: plural(n, "line") }),
-      h("a", { class: "btn btn-sm", href: `${projectUrl(ctx.ref, `/files/${encPath(state.path)}`)}?ref=${enc(commit)}`, target: "_blank", rel: "noopener", text: "Raw" }));
+    lineCount.textContent = plural(state.lines.length, "line");
+    raw.href = `${projectUrl(ctx.ref, `/files/${encPath(state.path)}`)}?ref=${enc(commit)}`;
   }
 
   function paintCode() {
@@ -263,17 +332,30 @@ export async function renderFiles(ctx) {
     const byEnd = new Map();
     here.forEach((t) => byEnd.set(t.base.line_end, [...(byEnd.get(t.base.line_end) || []), t]));
     const c = state.compose;
+    const pick = state.pick && !state.pick.lines ? state.pick : null;
+    const pickedLines = state.pick?.lines ? state.pick : null;
+    const tokens = state.colours;
+    let next = 0;
     const rows = [];
     state.lines.forEach((line, i) => {
       const n = i + 1;
       const ls = state.starts[i];
       const le = ls + line.length;
       const cuts = new Set([ls, le]);
-      for (const sp of spans) {
-        if (sp.s < le && sp.e > ls) {
-          cuts.add(Math.max(ls, sp.s));
-          cuts.add(Math.min(le, sp.e));
+      const cut = (s, e) => {
+        if (s < le && e > ls) {
+          cuts.add(Math.max(ls, s));
+          cuts.add(Math.min(le, e));
         }
+      };
+      for (const sp of spans) cut(sp.s, sp.e);
+      if (pick) cut(pick.s16, pick.e16);
+      // The colours run in order, so each line starts where the last one stopped.
+      while (next < tokens.length && tokens[next].to <= ls) next += 1;
+      const coloured = [];
+      for (let k = next; k < tokens.length && tokens[k].from < le; k++) {
+        coloured.push(tokens[k]);
+        cut(tokens[k].from, tokens[k].to);
       }
       const sorted = [...cuts].sort((a, b) => a - b);
       const content = [];
@@ -282,14 +364,18 @@ export async function renderFiles(ctx) {
         const b = sorted[k + 1];
         if (a >= b) continue;
         const seg = state.text.slice(a, b);
+        const colour = coloured.find((tk) => tk.from <= a && tk.to >= b);
+        let node = colour ? h("span", { class: colour.cls, text: seg }) : seg;
+        if (pick && pick.s16 <= a && pick.e16 >= b) node = h("span", { class: "rv-pick" }, node);
         const over = spans.filter((sp) => sp.s <= a && sp.e >= b && sp.s < sp.e);
         content.push(over.length
-          ? h("mark", { class: `rv-mark${over.length > 1 ? " is-multi" : ""}`, dataset: { thread: over[over.length - 1].id }, title: "Show the comment", text: seg })
-          : seg);
+          ? h("mark", { class: `rv-mark${over.length > 1 ? " is-multi" : ""}`, dataset: { thread: over[over.length - 1].id }, title: "Show the comment" }, node)
+          : node);
       }
       const marked = spans.some((sp) => n >= sp.first && n <= sp.last);
       const chosen = c && n >= c.line_start && n <= c.line_end;
-      rows.push(h("tr", { class: ["rv-line", marked && "has-thread", chosen && "is-chosen"], id: `RL${n}`, dataset: { line: n } },
+      const picked = pickedLines && n >= pickedLines.line_start && n <= pickedLines.line_end;
+      rows.push(h("tr", { class: ["rv-line", marked && "has-thread", chosen && "is-chosen", picked && "is-picked"], id: `RL${n}`, dataset: { line: n } },
         h("td", perms.comment
           ? { class: "ln rv-ln", dataset: { ln: n }, tabindex: "0", role: "button", "aria-label": `Comment on line ${n}`, title: "Comment on this line. Shift-click for a range." }
           : { class: "ln", dataset: { ln: n } }),
@@ -309,14 +395,18 @@ export async function renderFiles(ctx) {
     setQuery({ path });
     if (!keepCompose) state.compose = null;
     state.anchorLine = null;
+    state.pick = null;
     hideFloat();
     tbody.replaceChildren(h("tr", {}, h("td", { colspan: "2", class: "rv-code-loading" }, spinner())));
-    const text = await commitTexts.get(path);
+    const text = (await commitTexts.get(path)) ?? "";
+    const tokens = await texColours(path, text);
     if (!ctx.alive() || state.path !== path) return;
-    state.text = text ?? "";
+    state.text = text;
+    state.colours = tokens;
     Object.assign(state, splitLines(state.text));
     paintHead();
     paintCode();
+    codeScroll.scrollTop = 0;
   }
 
   // --- The comment box -------------------------------------------------------------------
@@ -450,11 +540,13 @@ export async function renderFiles(ctx) {
       return;
     }
     state.pending = sel;
-    const col = codeCol.getBoundingClientRect();
+    // It sits in the scrolling source, so it scrolls with the selection.
+    const box = codeScroll.getBoundingClientRect();
     floatBtn.hidden = false;
     const width = floatBtn.offsetWidth || 100;
-    floatBtn.style.top = `${Math.round(sel.rect.bottom - col.top + 6)}px`;
-    floatBtn.style.left = `${Math.round(Math.max(8, Math.min(sel.rect.right - col.left - width / 2, col.width - width - 8)))}px`;
+    const left = sel.rect.right - box.left + codeScroll.scrollLeft - width / 2;
+    floatBtn.style.top = `${Math.round(sel.rect.bottom - box.top + codeScroll.scrollTop + 6)}px`;
+    floatBtn.style.left = `${Math.round(Math.max(8, Math.min(left, codeScroll.scrollLeft + codeScroll.clientWidth - width - 8)))}px`;
   }
 
   floatBtn.addEventListener("mousedown", (e) => e.preventDefault());
@@ -530,10 +622,12 @@ export async function renderFiles(ctx) {
 
   function setPdf(on) {
     pdf.on = on;
-    writePdfPref(on);
+    store(PDF_KEY, on ? "on" : "off");
     pdfToggle.setAttribute("aria-pressed", String(on));
     split.classList.toggle("has-pdf", on);
     pdfCol.hidden = !on;
+    hideFloat();
+    if (!on) clearPick();
     if (on && !pdf.started) startPdf();
   }
 
@@ -578,10 +672,108 @@ export async function renderFiles(ctx) {
       url: c.pdf_url,
       name: `${p.name}-${commit.slice(0, 7)}.pdf`,
       onDoubleClick: fromPdf,
+      onSelect: fromPdfSelection,
       extra: hide,
       cls: "rv-pdf",
     });
+    pdfCol.append(pdfFloat);
   }
+
+  // --- Text selected in the PDF ---------------------------------------------------------------
+
+  // SyncTeX names the lines of the selection's start and end, and the passage
+  // is looked for there (editor-spot.js). Where it is not found, its lines are
+  // marked. The marks go as soon as the selection does.
+  let pickToken = 0;
+
+  async function fromPdfSelection(sel) {
+    const mine = ++pickToken;
+    if (!sel) {
+      clearPick();
+      return;
+    }
+    if (!pdf.compile) return;
+    const ask = (point) => api.post(projectUrl(ctx.ref, `/compiles/${enc(pdf.compile.id)}/synctex/edit`), point)
+      .catch((err) => {
+        if (err.status === 404) return null;
+        throw err;
+      });
+    let a;
+    let b;
+    try {
+      [a, b] = await Promise.all([ask(sel.start), ask(sel.end)]);
+    } catch (err) {
+      if (mine === pickToken && ctx.alive()) flashError(err);
+      return;
+    }
+    if (mine !== pickToken || !ctx.alive()) return;
+    const at = a?.path ? a : b;
+    if (!at?.path) {
+      flash("SyncTeX knows no source line there. Select text of the paper's body.", "info");
+      return;
+    }
+    if (!textFiles.some((f) => f.path === at.path)) {
+      flash(`That text comes from ${at.path}, which is not a file of this state.`, "info");
+      return;
+    }
+    if (at.path !== state.path) await loadFile(at.path);
+    if (mine !== pickToken || !ctx.alive()) return;
+    const first = at.line;
+    const last = b?.path === at.path ? b.line : first;
+    const found = findPassage(sourceDoc(), first, last, sel.text);
+    state.pick = found
+      ? { s16: found.from, e16: found.to }
+      : { lines: true, line_start: Math.min(first, last), line_end: Math.max(first, last) };
+    paintCode();
+    table.querySelector(".rv-pick, tr.is-picked")?.scrollIntoView({ block: "center" });
+    placePdfFloat();
+  }
+
+  // The marks go without painting the source again, which would undo a
+  // selection someone is starting there.
+  function clearPick() {
+    pickToken += 1;
+    state.pick = null;
+    pdfFloat.hidden = true;
+    table.querySelectorAll(".rv-pick").forEach((el) => el.classList.remove("rv-pick"));
+    table.querySelectorAll("tr.is-picked").forEach((el) => el.classList.remove("is-picked"));
+  }
+
+  // The source as the doc findPassage reads, like CodeMirror's.
+  function sourceDoc() {
+    const line = (n) => ({ number: n, from: state.starts[n - 1], to: state.starts[n - 1] + state.lines[n - 1].length });
+    return {
+      lines: state.lines.length,
+      line,
+      lineAt: (pos) => line(lineOf(pos)),
+      sliceString: (a, b) => state.text.slice(a, b),
+    };
+  }
+
+  // The button sits under the selection's last line while it is in view.
+  function placePdfFloat() {
+    const sel = window.getSelection();
+    const rects = sel?.rangeCount ? [...sel.getRangeAt(0).getClientRects()].filter((r) => r.width > 0 && r.height > 0) : [];
+    const last = rects[rects.length - 1];
+    const col = pdfCol.getBoundingClientRect();
+    if (!perms.comment || !state.pick || !last || last.bottom < col.top + 48 || last.bottom > col.bottom - 40) {
+      pdfFloat.hidden = true;
+      return;
+    }
+    pdfFloat.hidden = false;
+    const width = pdfFloat.offsetWidth || 100;
+    pdfFloat.style.top = `${Math.round(last.bottom - col.top + 6)}px`;
+    pdfFloat.style.left = `${Math.round(Math.max(8, Math.min(last.right - col.left - width / 2, col.width - width - 8)))}px`;
+  }
+
+  pdfCol.addEventListener("scroll", placePdfFloat, { capture: true, passive: true });
+  pdfFloat.addEventListener("mousedown", (e) => e.preventDefault());
+  pdfFloat.addEventListener("click", () => {
+    const pick = state.pick;
+    clearPick();
+    window.getSelection()?.removeAllRanges();
+    if (pick) openCompose(pick.lines ? { ...pick } : { s16: pick.s16, e16: pick.e16 });
+  });
 
   async function fromPdf({ page, x, y }) {
     if (!pdf.compile) return;
@@ -623,12 +815,69 @@ export async function renderFiles(ctx) {
     pdf.view = null;
   });
 
+  // --- The layout -----------------------------------------------------------------------------
+
+  // The source and the PDF fill the window below the review's header, like the
+  // editor. On a phone they stack and the page scrolls.
+  function fit() {
+    if (!split.isConnected) return;
+    if (window.matchMedia(PHONE).matches) {
+      split.style.height = "";
+      return;
+    }
+    const top = split.getBoundingClientRect().top + window.scrollY;
+    const height = `${Math.max(320, Math.floor(window.innerHeight - top))}px`;
+    if (split.style.height !== height) split.style.height = height;
+  }
+  window.addEventListener("resize", fit);
+  // Flashes above the page and a wrapping header move it down.
+  const resized = new ResizeObserver(fit);
+  resized.observe(document.body);
+  onLeave(() => {
+    window.removeEventListener("resize", fit);
+    resized.disconnect();
+  });
+
+  // The divider between the source and the PDF, as in the editor.
+  const setWidth = (px) => {
+    const both = codeCol.getBoundingClientRect().width + pdfCol.getBoundingClientRect().width;
+    const width = Math.min(Math.max(240, px), both - 320);
+    const share = width / split.clientWidth;
+    pdfCol.style.flexBasis = `${share * 100}%`;
+    store(PDF_WIDTH_KEY, String(share));
+  };
+  divider.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    divider.setPointerCapture(e.pointerId);
+    split.classList.add("is-resizing");
+    hideFloat();
+    pdfFloat.hidden = true;
+    const move = (m) => setWidth(split.getBoundingClientRect().right - m.clientX);
+    const up = () => {
+      split.classList.remove("is-resizing");
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", up);
+      divider.removeEventListener("pointercancel", up);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", up);
+    divider.addEventListener("pointercancel", up);
+  });
+  divider.addEventListener("dblclick", () => setWidth((codeCol.offsetWidth + pdfCol.offsetWidth) / 2));
+  divider.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    setWidth(pdfCol.offsetWidth + (e.key === "ArrowLeft" ? 32 : -32));
+  });
+
   // --- Go ---------------------------------------------------------------------------------------
 
   paintLater();
-  clear(ctx.main).append(toolbar, hint, laterHost, split);
+  clear(ctx.main).append(split);
   pdfCol.hidden = !pdf.on;
   split.classList.toggle("has-pdf", pdf.on);
   await loadFile(state.path);
+  // The page goes up once this returns.
+  requestAnimationFrame(fit);
   if (pdf.on) startPdf();
 }

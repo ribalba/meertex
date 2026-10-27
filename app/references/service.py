@@ -42,7 +42,7 @@ logger = logging.getLogger("uvicorn.error")
 RESULT_MAX_AGE = timedelta(days=1)
 LOOKUP_THREADS = 4
 CLAIM_THREADS = 4
-PROBLEM_STATES = ("error", "changed")
+PROBLEM_STATES = ("error", "changed", "warning")
 STATUS_ORDER = ("error", "changed", "warning", "pending", "unverified", "verified", "checked")
 _KEY = re.compile(r"^[^\s,{}()\"#%'=~\\]{1,200}$")
 _FIELD = re.compile(r"^[a-z][a-z0-9_.:+-]{0,63}$")
@@ -260,7 +260,7 @@ def _build(db: DBSession, project: Project) -> tuple[dict, list[Entry]]:
         "network_enabled": settings.references_network,
         "files": parsed.files,
         "counts": counts,
-        "problems": sum(counts[s] for s in PROBLEM_STATES) + len(broken),
+        "problems": sum(counts[s] for s in PROBLEM_STATES) + len(broken) + len(missing),
         "missing": missing,
         "broken": broken,
         "entries": entries,

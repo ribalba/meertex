@@ -53,7 +53,7 @@ def project_url(name: str) -> str:
 def person(user: User | None) -> dict | None:
     if user is None:
         return None
-    return {"id": user.id, "email": user.email, "name": user.name}
+    return {"id": user.id, "email": user.email, "name": user.name, "avatar_url": user.avatar_url}
 
 
 def folder_dict(folder: Folder, path: str) -> dict:
@@ -173,6 +173,7 @@ def member_dict(m: Membership, user: User) -> dict:
         "user_id": user.id,
         "email": user.email,
         "name": user.name,
+        "avatar_url": user.avatar_url,
         "role": m.role,
         "added_at": iso(m.added_at),
     }

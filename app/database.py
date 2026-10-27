@@ -50,6 +50,8 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "reminder_days": "JSONB NOT NULL DEFAULT '[14, 3, 1, 0]'",
         "reminder_hour": "INTEGER NOT NULL DEFAULT 8",
         "reminded_at": "TIMESTAMP WITHOUT TIME ZONE",
+        "grammar": "JSONB NOT NULL DEFAULT '{}'",
+        "avatar": "VARCHAR(80)",
     },
     "memberships": {"reminders_muted": "BOOLEAN NOT NULL DEFAULT false"},
 }

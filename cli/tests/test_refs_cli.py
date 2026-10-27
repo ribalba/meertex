@@ -41,8 +41,9 @@ def a_run(status: str = "done", done: int = 6, total: int = 6, claims: bool = Fa
 
 def report(entries: list[dict], missing=(), run_=None, network: bool = True, broken=()) -> dict:
     counts = Counter(e["status"] for e in entries)
+    problems = counts["error"] + counts["changed"] + counts["warning"] + len(broken) + len(missing)
     return {"run": run_, "claims_enabled": True, "network_enabled": network, "files": ["refs.bib"],
-            "counts": dict(counts), "problems": counts["error"] + counts["changed"] + len(broken),
+            "counts": dict(counts), "problems": problems,
             "missing": list(missing), "broken": list(broken), "entries": entries}
 
 

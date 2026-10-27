@@ -50,6 +50,10 @@ outdated copy.
   can check whether a source supports the sentence that cites it. Mark an
   entry you checked by hand, and the mark breaks when the entry changes.
   `meertex refs` does the same from the shell.
+- **Spelling and grammar while you write.** The same self-hosted LanguageTool
+  meerail uses underlines mistakes in the editor. Commands, math and citations
+  are skipped, so a correct paper stays quiet. Your own dictionary and the
+  rules you turned off are in Settings. Nothing leaves your server.
 
 [docs/DESIGN.md](docs/DESIGN.md) is the contract for all of it.
 
@@ -73,7 +77,8 @@ newest one.
 ## Run your own server
 
 You need Docker with Compose. The server and Postgres need about 1 GB of memory,
-compiling adds up to 2 GB, and the TeX Live image takes about 6 GB of disk.
+compiling adds up to 2 GB, the spelling checker (LanguageTool) up to 1.5 GB, and
+the TeX Live image takes about 6 GB of disk.
 
 ```bash
 make up              # Postgres + server -> http://127.0.0.1:8060
@@ -111,7 +116,7 @@ development.
 
 | | |
 | --- | --- |
-| `app/` | The server (FastAPI). `app/live/` is the live document, its rooms, the sync endpoint and the git history. `app/references/` is the reference check. |
+| `app/` | The server (FastAPI). `app/live/` is the live document, its rooms, the sync endpoint and the git history. `app/references/` is the reference check, `app/grammar/` the spelling and grammar check. |
 | `app/static/` | The web app (plain JavaScript, no build step). The editor's libraries are one vendored module in `app/static/vendor/editor/`. |
 | `tools/editor/` | Builds that module (`make editor`), and the editor's browser tests. |
 | `compile/` | The compile service: TeX Live in a container of its own, behind a small HTTP API ([compile/README.md](compile/README.md)). |

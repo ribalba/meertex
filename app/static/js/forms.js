@@ -3,7 +3,8 @@
 
 import { h } from "./dom.js";
 import { icon } from "./icons.js";
-import { field, textInput } from "./ui.js";
+import { describeLimit, parseLimit } from "./pagelimit.js";
+import { field, openDialog, textInput } from "./ui.js";
 
 export const REVIEW_MODELS = [
   ["", "Not stated"],
@@ -31,6 +32,20 @@ export function venueFields(initial = {}, { split = false } = {}) {
     review_model: h("select", { class: "form-select input-block", value: initial.review_model || "" },
       REVIEW_MODELS.map(([v, t]) => h("option", { value: v }, t))),
   };
+  // How the PDF is checked against the limit (pagelimit.js), as it is typed.
+  const limitHint = h("span");
+  const paintLimit = () => {
+    const limit = parseLimit(inputs.page_limit.value);
+    limitHint.textContent = limit
+      ? `The PDF is checked against ${describeLimit(limit)}.`
+      : "With a number in it the PDF is checked, like 8 + references or 10 + 2 for references.";
+  };
+  inputs.page_limit.addEventListener("input", paintLimit);
+  paintLimit();
+  const limitInfo = h("button", {
+    type: "button", class: "btn-octicon form-info", "aria-label": "How to write the page limit", title: "How to write the page limit",
+    onclick: () => pageLimitHelp(),
+  }, icon("info", { size: 14 }));
   if (!document.getElementById("publisher-suggestions")) {
     document.body.append(h("datalist", { id: "publisher-suggestions" },
       ["ACM", "IEEE", "Springer", "LIPIcs", "USENIX", "Elsevier", "PMLR"].map((v) => h("option", { value: v }))));
@@ -43,7 +58,7 @@ export function venueFields(initial = {}, { split = false } = {}) {
     conference_url: field("Conference website", inputs.conference_url, { optional: true }),
     submission_url: field("Submission site", inputs.submission_url, { optional: true, hint: "HotCRP, EasyChair and so on." }),
     publisher: field("Publisher", inputs.publisher, { optional: true }),
-    page_limit: field("Page limit", inputs.page_limit, { optional: true }),
+    page_limit: withInfo(field("Page limit", inputs.page_limit, { optional: true, hint: limitHint }), limitInfo),
     template: field("LaTeX template", inputs.template, { optional: true }),
     review_model: field("Review model", inputs.review_model, { optional: true }),
   };
@@ -66,6 +81,45 @@ export function venueFields(initial = {}, { split = false } = {}) {
     row(f.template, f.review_model),
   );
   return { el, inputs, values };
+}
+
+// A field with a button next to its label, the (i) that explains it.
+function withInfo(group, button) {
+  const label = group.querySelector("label");
+  label.classList.add("form-label");
+  const row = h("div", { class: "form-label-row" });
+  label.before(row);
+  row.append(label, button);
+  return group;
+}
+
+// The examples of the page limit's help. The table says what the check
+// (pagelimit.js, DESIGN §14) makes of each, so it cannot tell a different story.
+const LIMIT_EXAMPLES = [
+  "8", "6 pages including references", "8 + references", "12 pages, references not counted",
+  "10 + 2", "10 pages + 2 pages of references", "6-10 pages", "no limit",
+];
+
+function pageLimitHelp() {
+  const rows = LIMIT_EXAMPLES.map((text) => {
+    const limit = parseLimit(text);
+    return h("tr", {}, h("td", {}, h("code", { text })), h("td", { text: limit ? describeLimit(limit) : "any number of pages, no check" }));
+  });
+  openDialog({
+    title: "How to write the page limit",
+    wide: true,
+    body: h("div", { class: "limit-help" },
+      h("p", { text: "Write the limit as the call for papers words it. The first number is the pages for the text. A second number or the words around it say what the references get." }),
+      h("table", { class: "limit-table" },
+        h("thead", {}, h("tr", {}, h("th", { text: "You write" }), h("th", { text: "The PDF may have" }))),
+        h("tbody", {}, rows)),
+      h("ul", {},
+        h("li", {}, h("strong", { text: "References free" }), " with + or plus, excluding, without, unlimited, extra or not counted."),
+        h("li", {}, h("strong", { text: "References counted" }), " with including, incl. or with, and when the limit does not name them."),
+        h("li", {}, h("strong", { text: "A range" }), " like 6-10 pages allows the larger number.")),
+      h("p", { text: "The references start at the last heading that reads References or Bibliography. The page with that heading counts as text too when text comes before it. An appendix after the references counts as references." }),
+      h("p", { class: "color-muted", text: "A PDF that is too long gets a warning in the editor and in a version's preview." })),
+  });
 }
 
 // Labels as removable pills with a text input, like GitHub's topics editor.

@@ -579,6 +579,30 @@ def back_and_forward_between_views(env, browser):
 
 
 @test
+def files_fill_the_window(env, browser):
+    ctx = env.context(browser, "rita")
+    page = env.go(env.page(ctx, "rita"), f"/reviews/{env.review}/files")
+    expect(page.locator("#RL1")).to_be_visible()
+    # LaTeX in the editor's colours, also under a thread's mark.
+    expect(page.locator("#RL1 .tex-command")).to_have_text("\\documentclass")
+    expect(page.locator("#RL2 .tex-atom")).to_have_text("document")
+    expect(page.locator("#RL3 .tex-command")).to_have_text("\\section")
+    expect(page.locator("#RL4 mark.rv-mark").first).to_be_visible()
+    # The source and the PDF fill the window below the header, as wide as it is.
+    page.wait_for_timeout(300)
+    box = page.locator(".rv-files-split").bounding_box()
+    assert abs(box["y"] + box["height"] - 900) <= 1 and box["width"] >= 1260, box
+    # The source scrolls on its own and the page stays.
+    scroll = page.locator(".rv-code-scroll")
+    scroll.evaluate("el => { el.scrollTop = el.scrollHeight; }")
+    assert scroll.evaluate("el => el.scrollTop") > 0
+    assert page.evaluate("window.scrollY") == 0
+    scroll.evaluate("el => { el.scrollTop = 0; }")
+    env.shot(page, "files-1280")
+    ctx.close()
+
+
+@test
 def phone_width(env, browser):
     ctx = env.context(browser, "bob", width=390, height=844)
     page = env.page(ctx, "bob")
@@ -626,6 +650,90 @@ def pdf_next_to_the_source(env, browser):
     expect(page.locator(".rv-pdf-col")).to_be_hidden()
     page.locator(".rv-pdf-toggle").click()
     expect(pdf.first).to_be_visible(timeout=60000)
+    ctx.close()
+
+
+def text_layer_box(page, needle, chars=None):
+    """The screen box of `needle` in the text layer of the review's PDF, or of
+    its characters `chars` (a start and an end index)."""
+    return page.evaluate(
+        """([needle, chars]) => {
+            const layer = document.querySelector('.rv-pdf-col .textLayer');
+            const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const i = node.data.indexOf(needle);
+                if (i < 0) continue;
+                const [a, b] = chars || [0, needle.length];
+                const r = document.createRange();
+                r.setStart(node, i + a);
+                r.setEnd(node, i + b);
+                const { left, top, right, bottom } = r.getBoundingClientRect();
+                return { left, top, right, bottom };
+            }
+            throw new Error(`${needle} is not in the text layer: ${layer.textContent}`);
+        }""",
+        [needle, chars],
+    )
+
+
+def text_layer_point(page, needle, end=False):
+    """The screen point in the first (with end, the last) character of `needle`."""
+    k = len(needle) - 1 if end else 0
+    box = text_layer_box(page, needle, [k, k + 1])
+    frac = 0.75 if end else 0.25
+    return {"x": box["left"] + (box["right"] - box["left"]) * frac, "y": (box["top"] + box["bottom"]) / 2}
+
+
+def drag_in_pdf(page, start, end):
+    a = text_layer_point(page, start)
+    b = text_layer_point(page, end, end=True)
+    page.mouse.move(a["x"], a["y"])
+    page.mouse.down()
+    page.mouse.move(b["x"], b["y"], steps=8)
+    page.mouse.up()
+
+
+def picked(page):
+    return page.evaluate("[...document.querySelectorAll('.rv-code-table .rv-pick')].map((el) => el.textContent).join('')")
+
+
+@test
+def pdf_selection_marks_the_source(env, browser):
+    if not env.compiling:
+        return "skipped, needs --compile or --compile-url"
+    ctx = env.context(browser, "rita")
+    page = env.go(env.page(ctx, "rita"), f"/reviews/{env.review}/files")
+    expect(page.locator(".rv-pdf-col .textLayer span").first).to_be_attached(timeout=120000)
+    # Across the PDF's line break, which the source does not have.
+    drag_in_pdf(page, "method", "shorter")
+    wait_until(lambda: picked(page) == "method in far too many words and should be a lot shorter", timeout=10, what="the passage marked")
+    assert page.locator(".rv-pick").first.evaluate("el => el.closest('tr').id") == "RL6"
+    float_btn = page.locator(".rv-pdf-float")
+    expect(float_btn).to_be_visible()
+    env.shot(page, "files-pdf-selection-1280")
+    float_btn.click()
+    compose = page.locator(".rv-compose")
+    expect(compose.locator(".rv-compose-head")).to_have_text("Comment on line 6")
+    expect(compose.locator(".rv-compose-quote")).to_have_text("method in far too many words and should be a lot shorter")
+    expect(page.locator(".rv-pick")).to_have_count(0)
+    compose.get_by_role("button", name="Cancel").click()
+    # Zoomed in, the selectable text still lies on the drawn one.
+    pdf_col = page.locator(".rv-pdf-col")
+    pdf_col.get_by_role("button", name="Zoom in").click()
+    pdf_col.get_by_role("button", name="Zoom in").click()
+    page.wait_for_timeout(500)
+    url = pdf_col.locator("a[download]").get_attribute("href")
+    drawn = pdf_word_point(env, None, page, "Forscherin", url=url, host=".rv-pdf-col")
+    box = text_layer_box(page, "Forscherin")
+    assert box["left"] < drawn["x"] < box["right"] and box["top"] - 2 < drawn["y"] < box["bottom"] + 2, (drawn, box)
+    # The PDF has "Gr¨uße" and "K¨oln" (TeX's OT1 fonts), the source "Grüße" and "Köln".
+    drag_in_pdf(page, "Gr", "ln")
+    wait_until(lambda: picked(page) == "Grüße aus Köln", timeout=10, what="the passage with umlauts marked")
+    # A click elsewhere ends the selection, and the marks go.
+    box = page.locator(".rv-pdf-col .pdfview").bounding_box()
+    page.mouse.click(box["x"] + 6, box["y"] + 6)
+    expect(page.locator(".rv-pick")).to_have_count(0)
+    expect(float_btn).to_be_hidden()
     ctx.close()
 
 
@@ -891,14 +999,17 @@ def page_text(page):
     return cm_eval(page, "return view.state.doc.toString();")
 
 
-def pdf_word_point(env, paper, page, needle, occurrence=0):
-    """The screen point of the `occurrence`th `needle` on the PDF's first page."""
-    with env.api("alice") as c:
-        latest = c.get(f"/api/projects/{paper['id']}/compiles/latest").json()
-    url = (latest or {}).get("pdf_url")
-    assert url, latest
+def pdf_word_point(env, paper, page, needle, occurrence=0, url=None, host=".editor-pdf"):
+    """The screen point of the `occurrence`th `needle` on the first page of the
+    PDF in `host`, from the PDF's own text. The PDF is the paper's latest
+    compile, or `url`."""
+    if url is None:
+        with env.api("alice") as c:
+            latest = c.get(f"/api/projects/{paper['id']}/compiles/latest").json()
+        url = (latest or {}).get("pdf_url")
+        assert url, latest
     return page.evaluate(
-        """async ([needle, occurrence, url]) => {
+        """async ([needle, occurrence, url, host]) => {
             const lib = await import('/static/vendor/pdfjs/pdf.js');
             lib.GlobalWorkerOptions.workerSrc = '/static/vendor/pdfjs/pdf.worker.js';
             const pdf = await lib.getDocument({ url }).promise;
@@ -912,7 +1023,7 @@ def pdf_word_point(env, paper, page, needle, occurrence=0):
                     const w = it.width / it.str.length;
                     const x = it.transform[4] + (i + needle.length / 2) * w;
                     const y = it.transform[5] + it.height * 0.3;
-                    const el = document.querySelector('.editor-pdf .pdfview-page[data-page="1"]');
+                    const el = document.querySelector(`${host} .pdfview-page[data-page="1"]`);
                     const r = el.getBoundingClientRect();
                     const [vx, vy] = page.getViewport({ scale: r.width / base.width }).convertToViewportPoint(x, y);
                     return { x: r.left + vx, y: r.top + vy };
@@ -920,7 +1031,7 @@ def pdf_word_point(env, paper, page, needle, occurrence=0):
             }
             throw new Error(`${needle} #${occurrence} is not in the PDF: ${items.map((it) => it.str).join("|")}`);
         }""",
-        [needle, occurrence, url],
+        [needle, occurrence, url, host],
     )
 
 
@@ -932,7 +1043,7 @@ def selection(page):
 
 
 @test
-def pdf_double_click_finds_the_word(env, browser):
+def pdf_click_finds_the_word(env, browser):
     if not env.compiling:
         return "skipped, needs --compile or --compile-url"
     paper = paper_with(env, f"Spot {env.run}", {"main.tex": SPOT})
@@ -945,7 +1056,7 @@ def pdf_double_click_finds_the_word(env, browser):
 
     # The second "alpha" of a long line, not the first.
     point = pdf_word_point(env, paper, page, "alpha", 1)
-    page.mouse.dblclick(point["x"], point["y"])
+    page.mouse.click(point["x"], point["y"])
     wait_until(lambda: selection(page)["text"] == "alpha", timeout=10, what="the word selected")
     got = selection(page)
     assert got["line"] == 3 and got["from"] == second, (got, second)
@@ -957,7 +1068,7 @@ def pdf_double_click_finds_the_word(env, browser):
 
     # The PDF has "na¨" and "ıve" for "naïve" (TeX's OT1 fonts), the source na\"ive.
     point = pdf_word_point(env, paper, page, "\u0131ve", 0)
-    page.mouse.dblclick(point["x"], point["y"])
+    page.mouse.click(point["x"], point["y"])
     wait_until(lambda: selection(page)["text"] == 'na\\"ive', timeout=10, what="the accented word selected")
     assert selection(page)["line"] == 5
     ctx.close()

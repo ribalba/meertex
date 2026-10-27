@@ -190,6 +190,8 @@ img { max-width: 100%; }
 .header-crumbs .sep { color: var(--fg-subtle); }
 .header-crumbs a { color: var(--fg); font-weight: 600; padding: 2px 6px; border-radius: var(--radius); }
 .header-crumbs a:hover { text-decoration: none; background: var(--bg-muted); }
+/* A page's own buttons sit in the header's row as if they were its own. */
+#header-page-actions { display: contents; }
 .header-search {
   width: 280px;
   max-width: 34vw;
@@ -214,6 +216,8 @@ img { max-width: 100%; }
 }
 .avatar-32 { width: 32px; height: 32px; font-size: 13px; }
 .avatar-40 { width: 40px; height: 40px; font-size: 15px; }
+.avatar-96 { width: 96px; height: 96px; font-size: 34px; }
+img.avatar { object-fit: cover; background: var(--bg-subtle); }
 .avatar-btn {
   display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; cursor: pointer;
   border-radius: 50%;
@@ -373,6 +377,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .form-label .optional, .form-group > label .optional { font-weight: 400; color: var(--fg-muted); }
 .form-hint { margin-top: 4px; color: var(--fg-muted); font-size: 12px; }
 .form-error { margin-top: 4px; color: var(--danger); font-size: 12px; }
+.form-label-row { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
+.form-label-row > .form-label { margin-bottom: 0; }
+.form-info { width: 20px; height: 20px; }
+.limit-table { width: 100%; margin-bottom: 12px; border-collapse: collapse; font-size: 13px; }
+.limit-table th, .limit-table td { padding: 6px 8px; text-align: left; border-top: 1px solid var(--border-muted); }
+.limit-table th { font-weight: 600; background: var(--bg-subtle); }
+.limit-help ul { margin: 0 0 10px; padding-left: 20px; }
+.limit-help li + li { margin-top: 4px; }
 .form-row { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .form-row > .form-group { min-width: 0; }
 .form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -713,26 +725,20 @@ dialog.dialog::backdrop { background: #1f232866; }
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+/* The paper's name is in the app header. Here are its title, labels and topics. */
 .repo-title {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 20px;
-  font-weight: 400;
-  line-height: 30px;
+  line-height: 24px;
   min-width: 0;
 }
-.repo-title > .icon { color: var(--fg-muted); }
-.repo-title .owner { color: var(--fg); }
-.repo-title .slash { color: var(--fg-muted); }
-.repo-title strong a { color: var(--accent); font-weight: 600; }
 .repo-title .Label { font-size: 12px; }
-.repo-subtitle { margin: 4px 0 0; color: var(--fg-muted); font-size: 16px; }
-.repo-head-top { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
-.repo-head-actions { display: flex; gap: 8px; margin-left: auto; }
+.repo-subtitle { color: var(--fg-muted); font-size: 16px; }
 .repo-head .topic-list { margin-top: 8px; }
 .repo-head nav { margin-top: 12px; }
+.repo-head .container > :first-child { margin-top: 0; }
 
 /* --- Page layouts -------------------------------------------------------- */
 
@@ -1135,9 +1141,9 @@ code.cmd {
 /* --- Editor -------------------------------------------------------------- */
 
 /* The file tree, the text and the PDF fill the window below the project
-   header. editor.js sets the shell's height and the PDF's width. On a phone
-   the tree folds away behind the Files button, and the PDF takes the place of
-   the text. */
+   header. editor.js sets the shell's height, the PDF's width and the tree's
+   width (--tree-width). On a phone the tree folds away behind the Files
+   button, and the PDF takes the place of the text. */
 .editor-shell {
   display: flex;
   height: 560px;
@@ -1148,11 +1154,11 @@ code.cmd {
 .editor-shell.is-resizing .editor-pdf { pointer-events: none; }
 .editor-tree {
   display: flex;
-  flex: 0 0 272px;
+  flex: 0 0 var(--tree-width, 272px);
   flex-direction: column;
   min-width: 0;
+  max-width: 50%;
   min-height: 0;
-  border-right: 1px solid var(--border);
 }
 .editor-tree-head, .editor-toolbar {
   display: flex;
@@ -1174,6 +1180,25 @@ code.cmd {
 .editor-tree .icon.dir { color: #54aeff; }
 .editor-tree .tree-link .Label { font-size: 11px; line-height: 16px; }
 @media (hover: none) { .editor-tree .tree-actions { opacity: 1; } }
+/* The outline under the files. Open, it takes what its headings need, at most
+   45% of the column. Folded, only its header stays. */
+.editor-outline { display: flex; flex: 0 0 auto; flex-direction: column; max-height: 45%; min-height: 0; border-top: 1px solid var(--border-muted); }
+.editor-outline-head { font-size: 14px; }
+.editor-outline-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 40px; padding: 8px 8px 8px 16px;
+  font: inherit; font-weight: 600; color: var(--fg); text-align: left; background: var(--bg-subtle); border: 0; cursor: pointer;
+}
+.editor-outline-toggle:hover { background: var(--bg-muted); }
+.editor-outline-toggle .icon { color: var(--fg-muted); }
+.editor-outline.is-open .editor-outline-toggle { border-bottom: 1px solid var(--border-muted); }
+.editor-outline-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 8px 12px 12px; }
+.editor-outline .tree-link { font-size: 13px; }
+.editor-outline .tree-link .untitled { color: var(--fg-muted); font-style: italic; }
+.editor-outline .tree-row[aria-current="location"] { background: var(--bg-muted); }
+.editor-outline .tree-row[aria-current="location"]::before {
+  content: ""; position: absolute; left: -6px; top: 6px; bottom: 6px; width: 4px; background: var(--accent); border-radius: 6px;
+}
+.editor-outline .tree-row[aria-current="location"] .tree-link { font-weight: 600; }
 
 .editor-main { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
 /* A narrow text column keeps its toolbar on one row with icons only. */
@@ -1182,10 +1207,10 @@ code.cmd {
 }
 .editor-divider { position: relative; z-index: 2; flex: 0 0 7px; margin: 0 -3px; cursor: col-resize; touch-action: none; }
 .editor-divider::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: var(--border); }
-.editor-divider:hover::after, .editor-divider:focus-visible::after, .is-resizing .editor-divider::after { left: 2px; width: 3px; background: var(--accent); }
+.editor-divider:hover::after, .editor-divider:focus-visible::after, .editor-divider.is-dragging::after, .rv-files-split.is-resizing .editor-divider::after { left: 2px; width: 3px; background: var(--accent); }
 .editor-divider:focus-visible { outline: none; }
 .editor-pdf { display: flex; flex: 0 0 42%; min-width: 0; min-height: 0; }
-.editor-shell.pdf-off .editor-divider, .editor-shell.pdf-off .editor-pdf { display: none; }
+.editor-shell.pdf-off .editor-divider:not(.editor-tree-divider), .editor-shell.pdf-off .editor-pdf { display: none; }
 .editor-toolbar { flex-wrap: wrap; row-gap: 4px; }
 .editor-files-btn, .editor-tree-close { display: none; }
 /* The path takes the room that is left and shrinks first, so the toolbar
@@ -1248,17 +1273,21 @@ code.cmd {
 .pdf-zoom { padding: 0 6px; font-variant-numeric: tabular-nums; }
 .pdf-pages { padding: 0 4px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pdf-hide { display: none; }
-.pdf-stale {
+.pdf-stale, .pdf-limit {
   display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px;
   background: var(--attention-bg); border-bottom: 1px solid var(--attention-border);
 }
-.pdf-stale .icon { color: var(--attention); }
+.pdf-stale .icon, .pdf-limit .icon { flex: 0 0 auto; color: var(--attention); }
+.pdf-pages.is-over { color: var(--attention); font-weight: 600; }
 .pdf-body { position: relative; flex: 1 1 auto; min-height: 0; }
 .pdf-view { position: absolute; inset: 0; }
 .pdf-message {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 16px; overflow: auto; background: var(--bg-muted);
 }
+.pdf-main-hint { max-width: 420px; margin: 24px auto 0; padding: 12px; font-size: 13px; text-align: left; }
+.pdf-main-hint > .icon { margin-bottom: 0; }
+.pdf-main-hint p { margin: 0 0 4px; max-width: none; }
 .pdf-problems { flex: 0 0 auto; max-height: 40%; overflow: auto; background: var(--bg); border-top: 1px solid var(--border); }
 .pdf-problems-head {
   position: sticky; top: 0; display: flex; align-items: center; gap: 8px; width: 100%;
@@ -1281,6 +1310,37 @@ code.cmd {
 .pdfview-page canvas { display: block; }
 .pdfview-mark { position: absolute; background: #ffdf5d66; outline: 2px solid #d4a72c; border-radius: 2px; pointer-events: none; }
 .pdfview-mark.is-fading { animation: pdfview-fade 4s ease-in forwards; }
+/* The text over a page, for selecting it (pdfview.js with onSelect). PDF.js's
+   own rules from its viewer (web/pdf_viewer.css): transparent text where the
+   drawn one is, sized from --total-scale-factor on the page. */
+.pdfview-page { --scale-round-x: 1px; --scale-round-y: 1px; }
+.pdfview .textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  position: absolute; inset: 0; z-index: 0; overflow: clip; opacity: 1;
+  line-height: 1; letter-spacing: normal; word-spacing: normal; text-align: initial;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText;
+}
+.pdfview .textLayer :is(span, br) {
+  position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text;
+}
+.pdfview .textLayer > :not(.markedContent), .pdfview .textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdfview .textLayer .markedContent { display: contents; }
+.pdfview .textLayer span[role="img"] { user-select: none; cursor: default; }
+.pdfview .textLayer ::selection { color: transparent; background: #0969da40; }
+.pdfview .textLayer br::selection { background: transparent; }
+/* While the mouse selects, it covers the page, so its blank parts keep the selection going. */
+.pdfview .textLayer .endOfContent { position: absolute; inset: 100% 0 0; z-index: 0; display: block; cursor: default; user-select: none; }
+.pdfview .textLayer.selecting .endOfContent { top: 0; }
 @keyframes pdfview-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 
 /* --- Versions ------------------------------------------------------------ */
@@ -1485,7 +1545,7 @@ kbd {
 
 @media (max-width: 1011px) {
   .container { padding-left: 24px; padding-right: 24px; }
-  .editor-tree { flex-basis: 232px; }
+  .editor-tree { flex-basis: var(--tree-width, 232px); }
   .layout-sidebar { grid-template-columns: 240px minmax(0, 1fr); gap: 24px; }
   .layout-repo { grid-template-columns: minmax(0, 1fr) 240px; }
   .date-row { grid-template-columns: 1fr 1fr 1fr; padding: 12px; border: 1px solid var(--border-muted); border-radius: var(--radius); }
@@ -1496,7 +1556,12 @@ kbd {
 @media (max-width: 767px) {
   .container { padding-left: 16px; padding-right: 16px; }
   .layout-sidebar, .layout-repo, .layout-settings { grid-template-columns: minmax(0, 1fr); }
-  .header-crumbs { display: none; }
+  /* A paper's name is only up here, so it stays and the logo's word goes. The
+     Check out menu spans the header instead of running off the left edge. */
+  .app-header-inner { position: relative; }
+  .app-header-inner:has(.header-crumbs a) .brand-word { display: none; }
+  .checkout-menu { position: static; }
+  .checkout-menu .dropdown-menu { left: 16px; right: 16px; max-width: none; }
   .project-row { position: relative; flex-direction: column; gap: 8px; }
   .project-main { padding-right: 32px; }
   .project-menu { position: absolute; top: 20px; right: 8px; margin: 0; }
@@ -1506,19 +1571,18 @@ kbd {
   .release-meta { flex-direction: row; flex-wrap: wrap; padding-top: 0; gap: 4px 12px; }
   .header-search { display: none; }
   .hide-sm { display: none !important; }
-  .repo-head-actions { margin-left: 0; }
   .timeline-item { padding: 12px; }
   .timeline-side { align-self: flex-start; }
   .subhead { flex-wrap: wrap; }
   .folders-details:not([open]) { margin-bottom: 0; }
-  .editor-tree { display: none; flex: 1 1 auto; border-right: 0; }
+  .editor-tree { display: none; flex: 1 1 auto; max-width: none; }
   .editor-shell.show-tree .editor-tree { display: flex; }
   .editor-divider, .editor-pdf { display: none; }
   .editor-shell.show-pdf .editor-pdf { display: flex; flex: 1 1 auto; }
   .editor-shell.show-tree .editor-main, .editor-shell.show-tree .editor-pdf, .editor-shell.show-pdf .editor-main { display: none; }
   .pdf-hide { display: inline-flex; order: -1; }
   .editor-files-btn, .editor-tree-close { display: inline-flex; }
-  .editor-tree-head, .editor-toolbar { padding-left: 12px; }
+  .editor-tree-head, .editor-toolbar, .editor-outline-toggle { padding-left: 12px; }
   .editor-person-name { display: none; }
   .editor-status { order: 1; }
   .editor-status.is-ok .editor-status-text {
@@ -1618,7 +1682,7 @@ a.rv-path:hover { color: var(--accent); }
 
 .rv-snippet { max-height: 280px; overflow: auto; border-bottom: 1px solid var(--border-muted); }
 .rv-snippet .code-table tr.is-span td { background: #fff8c54d; }
-.rv-snippet .code-table tr.is-span td.ln { color: var(--fg-muted); box-shadow: inset -2px 0 0 var(--attention-emph); }
+.rv-snippet .code-table tr:is(.is-span, .is-marked) td.ln { color: var(--fg-muted); box-shadow: inset -2px 0 0 var(--attention-emph); }
 .rv-snippet.is-outdated .lc { color: var(--fg-muted); }
 .rv-snippet-loading { display: flex; justify-content: center; padding: 12px; }
 .rv-hl { color: inherit; background: #ffe58f99; border-radius: 2px; box-shadow: 0 1px 0 #d4a72c; }
@@ -1700,17 +1764,33 @@ textarea.rv-textarea { min-height: 72px; }
   background: var(--attention-bg); border-left: 3px solid var(--attention-emph);
 }
 
-/* The Files view of a review. */
-.rv-files-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+/* The Files view of a review fills the window below the review's header, like
+   the editor: the source and the PDF side by side, each scrolling on its own.
+   review-files.js sets the height and the PDF's width. On a phone the PDF goes
+   above the source and the page scrolls. */
+.rv-files-head { padding-top: 24px; border-bottom: 1px solid var(--border); }
+.rv-files-head .rv-tabnav { margin-bottom: -1px; border-bottom: 0; }
+.rv-files-split { display: flex; height: 560px; min-height: 320px; border-bottom: 1px solid var(--border); }
+.rv-files-split.is-resizing { cursor: col-resize; user-select: none; }
+.rv-files-split.is-resizing .rv-pdf-col { pointer-events: none; }
+.rv-files-split:not(.has-pdf) .rv-pdf-hint, .rv-files-split:not(.has-pdf) .rv-divider { display: none; }
+.rv-code-col { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; }
+.rv-files-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; row-gap: 4px;
+  min-height: 48px; padding: 8px 8px 8px 16px; background: var(--bg-subtle); border-bottom: 1px solid var(--border-muted);
+}
 .rv-file-select { min-width: 0; max-width: 100%; }
-.rv-files-hint { margin-bottom: 12px; }
-.rv-files-hint ~ .flash, .rv-view > .flash { margin-bottom: 16px; }
-.rv-files-split.has-pdf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 44%); gap: 16px; align-items: start; }
-.rv-files-split:not(.has-pdf) .rv-pdf-hint { display: none; }
-.rv-code-col { position: relative; min-width: 0; }
-.rv-pdf-col { position: sticky; top: 8px; min-width: 0; }
-.rv-pdf-col .pdf-box-body { height: calc(100vh - 72px); min-height: 360px; }
-.rv-pdf-message .blankslate { padding: 48px 16px; }
+.rv-code-scroll { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; }
+.rv-code-notes { padding: 12px 16px 0; }
+.rv-files-hint { margin-bottom: 4px; }
+.rv-code-notes > .flash { margin-bottom: 12px; }
+.rv-view > .flash { margin-bottom: 16px; }
+.rv-pdf-col { position: relative; display: flex; flex: 0 0 46%; flex-direction: column; min-width: 0; min-height: 0; }
+.rv-pdf-col > .box { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; border: 0; border-radius: 0; }
+.rv-pdf-col > .box > .box-header { min-height: 48px; border-radius: 0; }
+.rv-pdf-col .pdf-box-body { flex: 1 1 auto; height: auto; min-height: 0; }
+.rv-pdf-col .pdf-box-body .pdfview { border-radius: 0; }
+.rv-pdf-message .blankslate { margin: auto 0; padding: 48px 16px; }
 .rv-code-table td.rv-ln { cursor: pointer; }
 .rv-code-table td.rv-ln:hover { color: var(--accent); text-decoration: underline; }
 .rv-code-table tr.has-thread td.ln { box-shadow: inset -2px 0 0 var(--attention-emph); }
@@ -1724,12 +1804,27 @@ textarea.rv-textarea { min-height: 72px; }
 }
 .rv-code-table .rv-thread-row .diff-table td { padding-top: 0; padding-bottom: 0; }
 .rv-code-loading { padding: 24px !important; text-align: center; }
-.rv-float { position: absolute; z-index: 5; box-shadow: var(--shadow-overlay); }
+.rv-float, .rv-pdf-float { position: absolute; z-index: 5; box-shadow: var(--shadow-overlay); }
+/* Text selected in the PDF, where it is in the source. */
+.rv-pick { background: #c8e1ff; border-radius: 2px; box-shadow: 0 1px 0 #54aeff; }
+.rv-code-table tr.is-picked td { background: #ddf4ff; }
+.rv-code-table tr.is-picked td.ln { box-shadow: inset -2px 0 0 var(--accent); }
 
-@media (max-width: 1011px) {
-  .rv-files-split.has-pdf { display: flex; flex-direction: column; }
-  .rv-pdf-col { position: static; order: -1; width: 100%; }
-  .rv-pdf-col .pdf-box-body { height: 70vh; min-height: 320px; }
+/* LaTeX's colours in a review's source, the editor's (editorLooks in pages/editor.js). */
+.tex-comment { color: #6e7781; font-style: italic; }
+.tex-command { color: #0550ae; }
+.tex-atom { color: #953800; }
+.tex-keyword { color: #116329; }
+.tex-bracket { color: #59636e; }
+.tex-string { color: #0a3069; }
+.tex-invalid { color: #d1242f; }
+
+@media (max-width: 767px) {
+  .rv-files-split { flex-direction: column; min-height: 0; }
+  .rv-code-col { flex: none; }
+  .rv-code-scroll { overflow: visible; }
+  .rv-pdf-col { flex-basis: auto !important; order: -1; border-bottom: 1px solid var(--border); }
+  .rv-pdf-col .pdf-box-body { flex: none; height: 70vh; min-height: 320px; }
 }
 
 @media (max-width: 767px) {
@@ -1785,12 +1880,59 @@ textarea.rv-textarea { min-height: 72px; }
 .editor-host .cm-editor .cm-tooltip-lint { padding: 0; font-family: var(--font); font-size: 12px; }
 .editor-host .cm-editor .cm-diagnostic { padding: 6px 10px; }
 
-/* The place a double-click in the PDF points at (editor-spot.js): the line and
+/* The place a click in the PDF points at (editor-spot.js): the line and
    the word light up in the accent's blue and fade out. */
 .editor-host .cm-editor .cm-syncLine { animation: sync-line 3s ease-out forwards; }
 .editor-host .cm-editor .cm-syncWord { border-radius: 2px; animation: sync-word 3s ease-out forwards; }
 @keyframes sync-line { 0%, 50% { background-color: #ddf4ffcc; } 100% { background-color: transparent; } }
 @keyframes sync-word { 0%, 60% { background-color: #54aeff66; box-shadow: 0 0 0 1px #54aeff; } 100% { background-color: transparent; box-shadow: none; } }
+
+/* Spelling and grammar in the editor's text (editor-grammar.js). Red for
+   spelling, amber for grammar and a dotted blue for style, the colours every
+   checker has taught people to read. The words whose suggestions are up get
+   a light blue, so the box visibly belongs to them. */
+.editor-host .cm-editor .cm-grammar {
+  text-decoration-line: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; text-decoration-skip-ink: none;
+}
+.editor-host .cm-editor .cm-grammar-spelling { text-decoration-style: wavy; text-decoration-color: var(--danger); }
+.editor-host .cm-editor .cm-grammar-grammar { text-decoration-style: wavy; text-decoration-color: var(--attention-emph); }
+.editor-host .cm-editor .cm-grammar-style { text-decoration-style: dotted; text-decoration-thickness: 2px; text-decoration-color: var(--accent); }
+.editor-host .cm-editor .cm-grammar.is-active { background-color: var(--accent-bg); border-radius: 2px; }
+/* The suggestions for one underline, under it in the editor's host, like
+   CodeMirror's own tooltips (editorLooks() in pages/editor.js). */
+.grammar-box {
+  position: absolute; z-index: 7; width: max-content; max-width: min(360px, calc(100% - 16px));
+  font-size: 13px; line-height: 20px; color: var(--fg); background: var(--bg);
+  border-radius: 8px; box-shadow: var(--shadow-overlay);
+}
+.grammar-box-body { padding: 8px 12px 10px; }
+.grammar-box-kind { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.grammar-box-kind::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.grammar-box-kind.is-grammar::before { background: var(--attention-emph); }
+.grammar-box-kind.is-style::before { background: var(--accent); }
+.grammar-box-msg { margin: 2px 0 0; }
+.grammar-box-sugs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.grammar-sug {
+  height: 26px; padding: 0 10px; font: inherit; font-weight: 600; color: var(--accent);
+  background: var(--accent-bg); border: 1px solid transparent; border-radius: var(--radius); cursor: pointer;
+}
+.grammar-sug:hover { border-color: var(--accent-border); }
+.grammar-sug em { font-weight: 400; }
+.grammar-box-acts { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 6px; border-top: 1px solid var(--border-muted); }
+.grammar-act {
+  height: 24px; padding: 0 6px; font: inherit; font-size: 12px; color: var(--fg-muted);
+  background: none; border: 0; border-radius: var(--radius); cursor: pointer;
+}
+.grammar-act:hover { color: var(--fg); background: var(--bg-muted); }
+/* The Spellcheck button with the checker: the count of underlines in the
+   open file, dimmed while a check is out rather than relabelled, since most
+   answer in a fraction of a second. Amber when the checker failed. */
+.editor-spell-btn .counter { transition: opacity .15s ease; }
+.editor-spell-btn.is-busy .counter { opacity: .55; }
+.editor-spell-btn.is-failed .icon { color: var(--attention); }
+/* The dictionary and the rules turned off, on the Settings page (pages/account.js). */
+.grammar-lists-head { margin: 32px 0 8px; font-size: 16px; font-weight: 600; }
+.grammar-row { min-height: 45px; }
 
 /* --- References ---------------------------------------------------------- */
 

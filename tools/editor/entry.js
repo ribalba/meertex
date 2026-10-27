@@ -5,6 +5,8 @@
 // y-codemirror.next pull in most of it anyway. StateField, StateEffect and
 // Decoration draw the comments' highlights (app/static/js/editor-comments.js),
 // and @codemirror/lint the compile's problems (app/static/js/editor-problems.js).
+// The Files view of a review (app/static/js/pages/review-files.js) colours its
+// LaTeX with the same mode, through highlightTree and tagHighlighter.
 
 export * as Y from "yjs";
 export { WebsocketProvider } from "y-websocket";
@@ -34,5 +36,5 @@ export {
 } from "@codemirror/language";
 export { acceptCompletion, autocompletion, snippet, startCompletion } from "@codemirror/autocomplete";
 export { forEachDiagnostic, lintGutter, setDiagnostics } from "@codemirror/lint";
-export { tags } from "@lezer/highlight";
+export { highlightTree, tagHighlighter, tags } from "@lezer/highlight";
 export { stex } from "@codemirror/legacy-modes/mode/stex";

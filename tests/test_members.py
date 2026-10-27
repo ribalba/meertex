@@ -29,7 +29,7 @@ def test_invite_creates_the_account_and_mails_a_link(monkeypatch):
         r = client.post(f"/api/projects/{p['id']}/members", json={"email": " Arne@Example.com ", "role": "editor"})
         assert r.status_code == 201, r.text
         member = r.json()
-        assert set(member) == {"user_id", "email", "name", "role", "added_at"}
+        assert set(member) == {"user_id", "email", "name", "avatar_url", "role", "added_at"}
         assert (member["email"], member["role"]) == ("arne@example.com", "editor")
         [mail] = sent
         assert (mail["to"], mail["inviter"], mail["title"], mail["role"]) == (
@@ -104,3 +104,26 @@ def test_roles_change_and_members_leave(monkeypatch):
         assert client.delete(f"{url}/{me['id']}").status_code == 422
         assert client.delete(f"{url}/{ed['user_id']}").status_code == 200
         assert [m["role"] for m in client.get(url).json()] == ["owner"]
+
+
+def test_people_are_those_who_share_a_paper(monkeypatch):
+    _invites(monkeypatch)
+    with running_app() as client:
+        sign_in(client)
+        green = client.post("/api/projects", json={"name": "green"}).json()
+        blue = client.post("/api/projects", json={"name": "blue"}).json()
+        client.post(f"/api/projects/{green['id']}/members", json={"email": "vic@example.com", "role": "viewer"})
+        client.post(f"/api/projects/{green['id']}/members", json={"email": "ed@example.com", "role": "editor"})
+        client.post(f"/api/projects/{blue['id']}/members", json={"email": "ed@example.com", "role": "reviewer"})
+        with second_client("eve@example.com") as eve:
+            # Eve's coauthor is no one else's business.
+            own = eve.post("/api/projects", json={"name": "red"}).json()
+            eve.post(f"/api/projects/{own['id']}/members", json={"email": "mal@example.com", "role": "viewer"})
+            assert [x["email"] for x in eve.get("/api/people").json()] == ["mal@example.com"]
+
+        people = client.get("/api/people").json()
+        # Ed shares two papers with Didi and comes first. Didi is not on the list.
+        assert [(x["email"], x["papers"]) for x in people] == [("ed@example.com", 2), ("vic@example.com", 1)]
+        assert set(people[0]) == {"user_id", "email", "name", "papers"}
+        with second_client("vic@example.com") as vic:
+            assert [x["email"] for x in vic.get("/api/people").json()] == ["didi@example.com", "ed@example.com"]

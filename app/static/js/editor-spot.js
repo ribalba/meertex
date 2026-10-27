@@ -1,4 +1,4 @@
-// The spot a double-click in the PDF points at, shown in the editor.
+// The spot a click in the PDF points at, shown in the editor.
 //
 // SyncTeX names a line only, and a LaTeX paragraph is often one long line. So
 // the PDF view also says which word was clicked, with a few characters around
@@ -10,10 +10,15 @@
 //
 //   extensions: spotExtension(cm)        in every text file's EditorState
 //   showSpot(view, cm, {line, word, before, after})  returns the position to scroll to
+//
+// findPassage does the same for a passage selected in the PDF, for the Files
+// view of a review (pages/review-files.js).
 
 const FADE_MS = 3200;
 const AROUND = 3;
 const WORD = /[\p{L}\p{N}]/u;
+// The shortest start or end of a passage that counts as found.
+const ENOUGH = 6;
 
 // Accent commands and the combining marks they stand for.
 const ACCENTS = {
@@ -149,6 +154,101 @@ export function findWord(doc, line, word, before = "", after = "") {
     if (best) break;
   }
   return best ? { from: best.from, to: best.to } : null;
+}
+
+// White space and hyphens are left out of a passage, because the PDF breaks
+// lines and words where the source does not. Quotes count as straight ones.
+const SKIP = /[\s\u00AD-]/;
+const QUOTES = { "\u2018": "'", "\u2019": "'", "`": "'", "\u201C": '"', "\u201D": '"' };
+
+function fold(text, caseless) {
+  let out = "";
+  for (const ch of text) {
+    if (SKIP.test(ch)) continue;
+    const c = QUOTES[ch] ?? ch;
+    const lower = caseless ? c.toLowerCase() : c;
+    out += lower.length === c.length ? lower : c;
+  }
+  return out;
+}
+
+// plainText folded, keeping the source range of every UTF-16 unit.
+function foldPlain(plain, caseless) {
+  let text = "";
+  const from = [];
+  const to = [];
+  for (let k = 0; k < plain.text.length; k++) {
+    const c = fold(plain.text[k], caseless);
+    if (c.length !== 1) continue;
+    text += c;
+    from.push(plain.from[k]);
+    to.push(plain.to[k]);
+  }
+  return { text, from, to };
+}
+
+// The longest n for which has(n) holds, given that it holds for every smaller n.
+function longest(max, has) {
+  let lo = 0;
+  let hi = max;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (has(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+// Where a passage selected in the PDF is in the lines around `first` to `last`
+// (1-based, SyncTeX's lines of its start and its end): {from, to} in the doc,
+// or null. Math, citations and references read differently in the PDF, so a
+// passage that is not there as a whole is found by its start and its end. Each
+// is the longest beginning (or ending) of the passage that is there, with
+// words at the edge left out while it is not, and the place nearest to its
+// SyncTeX line wins.
+export function findPassage(doc, first, last, passage) {
+  const words = squash(passage).normalize("NFKC").trim().split(" ");
+  const lo = Math.max(1, Math.min(first, last) - AROUND);
+  const hi = Math.min(doc.lines, Math.max(first, last) + AROUND);
+  const start = doc.line(lo).from;
+  const plain = plainText(doc.sliceString(start, doc.line(hi).to));
+  for (const caseless of [false, true]) {
+    const hay = foldPlain(plain, caseless);
+    const parts = words.map((w) => fold(w, caseless)).filter(Boolean);
+    if (!parts.length) return null;
+    const lineAt = (k) => doc.lineAt(start + hay.from[k]).number;
+    // The occurrence of `needle` at or after `after` nearest to `line`.
+    const nearest = (needle, line, after = 0) => {
+      let best = -1;
+      let distance = Infinity;
+      for (let k = hay.text.indexOf(needle, after); k >= 0; k = hay.text.indexOf(needle, k + 1)) {
+        const d = Math.abs(lineAt(k) - line);
+        if (d < distance) [best, distance] = [k, d];
+      }
+      return best;
+    };
+    const span = (a, b) => ({ from: start + hay.from[a], to: start + hay.to[b] });
+
+    const whole = parts.join("");
+    const at = nearest(whole, first);
+    if (at >= 0) return span(at, at + whole.length - 1);
+
+    let from = -1;
+    for (let i = 0; i < parts.length && from < 0; i++) {
+      const rest = parts.slice(i).join("");
+      const n = longest(rest.length, (m) => hay.text.includes(rest.slice(0, m)));
+      if (n >= Math.min(ENOUGH, rest.length) && n > 1) from = nearest(rest.slice(0, n), first);
+    }
+    if (from < 0) continue;
+    let to = -1;
+    for (let j = parts.length; j > 0 && to < 0; j--) {
+      const head = parts.slice(0, j).join("");
+      const n = longest(head.length, (m) => hay.text.indexOf(head.slice(head.length - m), from) >= 0);
+      if (n >= Math.min(ENOUGH, head.length) && n > 1) to = nearest(head.slice(head.length - n), last, from) + n - 1;
+    }
+    if (to >= from) return span(from, to);
+  }
+  return null;
 }
 
 // --- The highlight -------------------------------------------------------------------
