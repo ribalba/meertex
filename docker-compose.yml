@@ -1,0 +1,152 @@
+# meertex: Postgres, the server and the compile service, on your machine.
+#
+#   make up        (or: docker compose up --build -d)  ->  http://127.0.0.1:8060
+#
+# The project name is set explicitly, and is not the directory name. Compose
+# derives it from the directory otherwise, and two stacks with one name share
+# containers and the database volume (meerpad's reasoning).
+#
+# Everything is configured from the environment: the `environment:` block below
+# reads .env (copy .env.example, `make config` does) and falls back to
+# development defaults that work out of the box. Coolify deploys
+# docker-compose.coolify.yml instead, see COOLIFY.md.
+name: meertex
+
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-meertex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meertex}
+      POSTGRES_DB: ${POSTGRES_DB:-meertex}
+    ports:
+      # On the host's loopback so `make dev` and the tests can reach it. The
+      # 127.0.0.1 prefix is load-bearing. Drop it and Docker publishes on
+      # 0.0.0.0, straight through the host firewall to a database with the
+      # default password.
+      #
+      # 5436: meerail has 5432, meercal 5433, meerpic 5434 and meerpad 5435.
+      - "127.0.0.1:${MEERTEX_DB_PORT:-5436}:5432"
+    volumes:
+      # Postgres 18+ wants a single mount at /var/lib/postgresql.
+      - meertex-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meertex} -d ${POSTGRES_DB:-meertex}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      args:
+        MEERTEX_VERSION: ${MEERTEX_VERSION:-0.0.0}
+    image: meertex-server:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Where the app is reachable from a browser. Sign-in links and invite
+      # mails are built from it. Must match the port published below.
+      BASE_URL: ${BASE_URL:-http://localhost:8060}
+      # Signs login codes. CHANGE THIS anywhere but your own laptop.
+      SECRET_KEY: ${SECRET_KEY:-dev-insecure-secret-change-me}
+
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meertex}:${POSTGRES_PASSWORD:-meertex}@db:5432/${POSTGRES_DB:-meertex}
+      DATA_DIR: /data
+
+      MAX_TEXT_BYTES: ${MAX_TEXT_BYTES:-2097152}
+      MAX_BLOB_BYTES: ${MAX_BLOB_BYTES:-52428800}
+      MAX_SYNC_MESSAGE_BYTES: ${MAX_SYNC_MESSAGE_BYTES:-67108864}
+      SNAPSHOT_IDLE_SECONDS: ${SNAPSHOT_IDLE_SECONDS:-60}
+      SNAPSHOT_MAX_SECONDS: ${SNAPSHOT_MAX_SECONDS:-600}
+      ROOM_IDLE_SECONDS: ${ROOM_IDLE_SECONDS:-300}
+
+      # The `compile` service below (docs/DESIGN.md §14). Not read from .env,
+      # where COMPILE_URL is the address for `make dev`.
+      COMPILE_URL: http://compile:8000
+      COMPILE_TOKEN: ${COMPILE_TOKEN:-dev-compile-token}
+      COMPILE_TIMEOUT_SECONDS: ${COMPILE_TIMEOUT_SECONDS:-90}
+
+      # The reference check (docs/DESIGN.md §16). The claim check needs a key.
+      REFERENCES_NETWORK: ${REFERENCES_NETWORK:-true}
+      REFERENCES_MAILTO: ${REFERENCES_MAILTO:-}
+      SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      REFERENCES_CLAUDE_MODEL: ${REFERENCES_CLAUDE_MODEL:-claude-opus-5-5}
+
+      # The daily reminder mails before deadlines (docs/DESIGN.md §5).
+      REMINDERS_ENABLED: ${REMINDERS_ENABLED:-true}
+
+      LOGIN_TOKEN_TTL_MINUTES: ${LOGIN_TOKEN_TTL_MINUTES:-30}
+      SESSION_TTL_MINUTES: ${SESSION_TTL_MINUTES:-43200}
+      LOGIN_CODE_MAX_ATTEMPTS: ${LOGIN_CODE_MAX_ATTEMPTS:-5}
+      LOGIN_RATE_MAX: ${LOGIN_RATE_MAX:-5}
+      VERIFY_RATE_MAX: ${VERIFY_RATE_MAX:-15}
+      LOGIN_RATE_WINDOW_MINUTES: ${LOGIN_RATE_WINDOW_MINUTES:-15}
+
+      # Leave SMTP_HOST empty and the sign-in link and code are printed to the
+      # container log instead (`make logs`), which is all a laptop needs.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      EMAIL_FROM: ${EMAIL_FROM:-hello@meertex.com}
+    volumes:
+      # Every project's git history and blobs. Back it up together with
+      # meertex-db.
+      - meertex-data:/data
+    ports:
+      # 8060: meerail has 8000, meercal 8010, meerink 8030, meerpic 8040,
+      # meerpad 8050.
+      - "${MEERTEX_BIND:-127.0.0.1}:${MEERTEX_PORT:-8060}:8000"
+    networks:
+      - default
+      - compile
+    restart: unless-stopped
+
+  # TeX Live and a small HTTP service that compiles (compile/README.md). Only
+  # `web` reaches it. It sits on the internal `compile` network alone, which
+  # has no way out, and nothing is published on the host.
+  compile:
+    build:
+      context: compile
+      args:
+        MEERTEX_VERSION: ${MEERTEX_VERSION:-0.0.0}
+    image: meertex-compile:local
+    environment:
+      COMPILE_TOKEN: ${COMPILE_TOKEN:-dev-compile-token}
+      COMPILE_TIMEOUT_SECONDS: ${COMPILE_TIMEOUT_SECONDS:-90}
+      COMPILE_KEEP_JOBS: ${COMPILE_KEEP_JOBS:-30}
+      COMPILE_WORKERS: ${COMPILE_WORKERS:-2}
+    # A real init as PID 1 reaps what a killed job leaves behind.
+    init: true
+    read_only: true
+    tmpfs:
+      # HOME and the font caches. exec, because TeX Live's biber unpacks a
+      # Perl interpreter into /tmp and runs it from there.
+      - /tmp:size=512m,exec
+    volumes:
+      # The job folders, kept for SyncTeX. The service removes old ones.
+      - meertex-compile-jobs:/jobs
+    networks:
+      - compile
+    mem_limit: ${COMPILE_MEMORY:-2g}
+    cpus: ${COMPILE_CPUS:-2}
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  compile:
+    internal: true
+
+volumes:
+  meertex-db:
+  meertex-data:
+  meertex-compile-jobs:

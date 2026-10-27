@@ -1,0 +1,69 @@
+# The narration of the demo video, one scene per [section] and one sentence per line.
+#
+# make_video.py speaks every sentence on its own, so the subtitles and the cuts follow
+# the sentences. The section names are the scene ids of make_video.py, and the number
+# of sentences must match what the shots of a scene speak. A line "shown | spoken"
+# shows the first part as the subtitle and speaks the second.
+#
+# Voice: Kokoro v1.0 (82M, Apache 2.0) through kokoro-onnx, voice af_heart at speed
+# 0.95 (kokoro_say.py), the same voice as meerora's demo video.
+#
+# Pronunciation. Kokoro speaks the words of [pronounce] as the phonemes given there
+# (espeak style IPA, en-us) and the rest of a sentence through espeak-ng.
+#
+#   Written        Said as                  Phonemes     Why
+#   meertex        MEER-tek, like TeX       mˈɪɹtɛk      espeak says MEER-teks
+#   LaTeX          LAY-tek                  lˈeɪtɛk      espeak spells it out, L A T E X
+#   a LaTeX        uh LAY-tek               ɐ lˈeɪtɛk    "a" before a lexicon word came out as the letter A
+#   Meerverse      MEER-verse, /ˈmɪɹvɝs/    mˈɪɹvɜːs     as in meerora's video
+#   meertex.com    "meertex dot com"        (spoken form in the line below)
+#
+# The narration avoids written forms that read badly, such as AoE, CLI or latexdiff,
+# which only appear on screen.
+
+[pronounce]
+meertex = mˈɪɹtɛk
+LaTeX = lˈeɪtɛk
+a LaTeX = ɐ lˈeɪtɛk
+Meerverse = mˈɪɹvɜːs
+
+[intro]
+This is meertex, a LaTeX workspace for papers and the people who write them.
+All your papers are in one place, each with its next deadline.
+
+[local]
+You write on your own computer, in your own editor or together with Claude.
+Every save reaches your coauthors within a second.
+
+[browser]
+Your coauthors edit the same document in the browser, and you see where they type.
+Autocomplete knows your citations, and the PDF compiles as you write.
+
+[refs]
+Before you hand it in, meertex checks every reference against the publishers' records.
+It catches wrong details and citations that do not exist.
+
+[venue]
+Every paper knows its venue and its deadlines, in the venue's time zone.
+When a deadline passes, meertex asks what happened.
+Say yes, and it keeps what you handed in as a fixed version.
+
+[compare]
+Compare any two versions, down to a PDF with every change marked.
+
+[review]
+Reviews work like pull requests on GitHub.
+Reviewers comment on the text or right on the PDF.
+When a comment is resolved, they see how the text was changed.
+
+[timeline]
+The timeline shows all your papers and where their writing time overlaps.
+
+[agents]
+Everything is there for agents too, through a command line tool and an API.
+Ask Claude what is due this month, or let it work through the open review comments.
+
+[ending]
+meertex. Write LaTeX locally. Your coauthors see it live.
+meertex is part of the Meerverse.
+Free and open source, at meertex.com. | Free and open source, at meertex dot com.

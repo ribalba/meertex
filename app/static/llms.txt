@@ -1,0 +1,158 @@
+# meertex
+
+> meertex is a free, open-source (AGPL-3.0-or-later) LaTeX workspace for academic papers, hosted at https://meertex.com or on your own server. You write locally, in VS Code, vim or with Claude Code, and a small sync client keeps the folder in step with the server within a second. Coauthors edit the same document in the browser, with live cursors, LaTeX autocomplete and a PDF that compiles as they type. Every paper carries its venue, its deadlines with countdowns in the venue's time zone, and fixed versions of what was handed in.
+
+https://meertex.com is the hosted meertex. Anyone can sign in there with an email address, and coauthors need nothing but a browser. meertex is also free software, so anyone can run their own server with Docker Compose on a laptop or with Coolify on a server. A meertex server holds the papers of the people who sign in to it. This file is served by every meertex server at `/llms.txt`, and its landing page is `/` for visitors who are not signed in.
+
+- [Source code and documentation](https://github.com/ribalba/meertex)
+- [A two-minute tour](https://meertex.com/static/video/meertex-tour.mp4), a narrated video of the real app with a made-up demo account and burned-in subtitles.
+- Status is a young, pre-1.0 project (version 0.1.0) under active development.
+- meertex is part of the [Meerverse](https://meerverse.com/), the family of open-source meer* apps: [meercal](https://meercal.com/) for calendars, [meerail](https://meerail.com/) for mail, [meerato](https://meerato.com/) for tasks, [meerpic](https://meerpic.com/) for photos and [meerpad](https://meerpad.com/) for notes.
+
+## Who it is for
+
+- Researchers who write papers in LaTeX with coauthors and want to keep their own editor, their own folder and their own tools.
+- People who write with Claude Code or another agent on a local checkout, while their coauthors work in a browser.
+- Anyone who keeps track of many papers, venues, deadlines and resubmissions at once.
+
+## Features
+
+- **Live sync of a local folder.** `meertex sync` keeps every checkout (by default `~/papers/<name>`) in step with the server and merges edits from everyone character by character. The document is a CRDT in the Yjs format (pycrdt on the server and in the CLI, yjs in the browser). Files deleted by someone else move to `.meertex/trash/`. Build outputs (`*.aux`, `*.log`, the main PDF and similar) and `.git`, `.claude` and `.venv` are never synced. `.meertexignore` adds more rules.
+- **Git history.** The server commits snapshots of each paper to a git repository, a minute after the last edit or ten minutes after the first edit that is not in a commit yet. Any two states can be compared.
+- **Browser editor.** CodeMirror on the same live document, with other people's cursors and names, a file tree with uploads, and LaTeX autocomplete for commands, environments after `\begin{`, `\ref` labels from every `\label{}` in the project, `\cite` keys from every `.bib` file, and file paths in `\input`, `\include` and `\includegraphics`. Viewers and reviewers get a read-only editor.
+- **Compiling.** A separate TeX Live container compiles with latexmk and pdflatex, xelatex or lualatex. The editor compiles two seconds after the last edit, on Ctrl or Cmd and Enter, and on a button. Errors, warnings and bad boxes appear as a list that opens the file at its line. SyncTeX works in both directions.
+- **Papers with their venue.** Conference, full name, year, track, links to the call for papers and the submission site, location, publisher, page limit, template, review model, notes and labels.
+- **Dates and countdowns.** Abstract registration, submission, supplementary material, rebuttal, notification, revision, camera-ready and the conference itself, each in the venue's time zone (AoE by default, or UTC, an offset or an IANA zone). The next date shows as a countdown, amber under 14 days and red under 3 days. A moved deadline keeps its history.
+- **Questions when a date passes.** "Did you hand it in?" makes the fixed submission version from the state at the deadline. "Was the paper accepted?" sets the outcome (accepted, rejected, revision, withdrawn or not submitted). Other dates ask about the abstract, the rebuttal, the revision and the camera-ready version.
+- **Versions.** Submission, rebuttal, Revision N, camera-ready, arXiv and snapshots are git tags. Each one is compiled to a PDF on the server, can carry the PDF that was actually handed in, and downloads as a zip. Any two states compare as a line diff, a word diff or a latexdiff PDF.
+- **Outcome filter.** "All my accepted papers" is `meertex projects --outcome accepted`, or one filter in the web app.
+- **Folders and names.** Each person sorts the papers into their own folder tree. Project names follow a pattern, by default `{year}-{conference|lower}-{paper|lower}`, which gives names like `2027-icse-green-llm`.
+- **Templates and resubmission.** A new paper can start empty, from a basic `main.tex` and `refs.bib`, or from a publisher's template zip, whose sample paper becomes the main file. A rejected paper is resubmitted to another venue as a fork that keeps its files and links back.
+- **Reviews.** GitHub-style reviews on a fixed state of the paper. A reviewer comments on spans or lines of the text, or double-clicks the PDF and SyncTeX finds the line. A comment can carry a suggestion (replacement text). Authors reply, apply suggestions and resolve threads. Resolving records how the text changed, and the reviewer accepts or reopens. Threads follow their text through later edits and renames.
+- **Reference check.** Every `.bib` entry is looked up at doi.org, Crossref, Semantic Scholar, DBLP, arXiv and Open Library, and its links are fetched. It finds DOIs that do not exist or belong to another work, titles no index has, authors who did not write the paper, wrong years, venues and pages, dead links, retracted papers and preprints that have been published since, with the record's value one click away. Checks that need no network catch placeholders, impossible arXiv ids, bad ISBNs and years in the future. On request, Claude reads each cited abstract and says whether it supports the sentences that cite it. A person who checked an entry by hand marks it in the entry itself (`meertex-checked`), and the mark breaks when the entry changes. New entries come from a DOI, an arXiv id, an ISBN or a link.
+- **Email notifications.** Invitations, submitted reviews, new comments and every reply, resolve, accept or reopen in a thread are mailed to the people concerned.
+- **Reminders before deadlines.** One digest mail a day per person, by default 14, 3 and 1 days before a deadline and on the day, counted in the venue's time zone, with when to start writing and the questions waiting. Each person picks the days and the hour and can mute a paper. `meertex reminders` prints what the next one says.
+- **Members and roles.** Owner, editor, reviewer and viewer, invited by email.
+- **Sign-in without passwords.** An emailed link or a six-character code.
+
+## For agents
+
+meertex is built to be used by agents such as Claude Code. Reading is always safe. Every change (creating projects, editing fields or dates, answering questions, creating versions, replying to or resolving review threads) is visible to every coauthor at once, and some of them send email. An agent should only change things when its user asks.
+
+### The checkout
+
+A checkout is a plain folder. An agent edits the `.tex` files directly. When the sync service runs (`meertex status` says so), every save reaches the server within a second. When it does not, run `meertex sync --once` before and after a batch of edits.
+
+### The CLI
+
+Every command takes `--json` and addresses projects by name or id.
+
+```bash
+meertex projects                                   # the list with countdowns
+meertex projects --outcome accepted                # all accepted papers
+meertex show 2027-icse-green-llm                   # fields, dates, questions, versions
+meertex questions                                  # lifecycle questions waiting for an answer
+meertex diff 2027-icse-green-llm submission --word # what changed since the submission
+meertex compile 2027-icse-green-llm                # compile on the server, print problems, save the PDF
+meertex refs 2027-icse-green-llm check             # look every .bib entry up, print what is wrong
+meertex refs 2027-icse-green-llm add 10.1145/3290605.3300857   # a new entry from a DOI, arXiv id, ISBN or link
+meertex new --from-json new.json --zip kit.zip --checkout
+meertex fork 2027-icse-green-llm --from-json venue.json --checkout
+```
+
+Review threads work the same way.
+
+```bash
+meertex threads 2027-icse-green-llm                # open threads with file, current lines, quote and conversation
+meertex reply 2027-icse-green-llm a1b2c3d4 "Now cites the census."
+meertex apply 2027-icse-green-llm a1b2c3d4         # write a suggestion into the text and resolve
+meertex resolve 2027-icse-green-llm a1b2c3d4 --note "Rewrote the paragraph."
+meertex comment 2027-icse-green-llm main.tex:42 "This claim needs a citation." --review
+meertex review 2027-icse-green-llm submit --verdict changes_requested --summary "Two things."
+```
+
+`meertex login --server meertex.com` mails a code and stores an API token in `~/.meertex/token`. A self-hosted server takes its own address instead. `MEERTEX_SERVER` and `MEERTEX_TOKEN` override the stored values.
+
+### The token API
+
+The same token works as `Authorization: Bearer <token>` on every route under `/api`. A project is addressed by its id or its name.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "$MEERTEX/api/projects?outcome=accepted"
+curl -H "Authorization: Bearer $TOKEN" "$MEERTEX/api/projects/2027-icse-green-llm"
+curl -H "Authorization: Bearer $TOKEN" "$MEERTEX/api/projects/2027-icse-green-llm/files/main.tex"
+curl -H "Authorization: Bearer $TOKEN" "$MEERTEX/api/threads?state=open"
+```
+
+Errors are `{"detail": ...}`. 401 means a wrong token, 403 a role too low for the change, 404 a project that does not exist or is not shared with you, 409 an ambiguous name, and 422 a refused request with the reason in `detail`. Every route and every shape is in [docs/DESIGN.md](https://github.com/ribalba/meertex/blob/main/docs/DESIGN.md).
+
+### The skills
+
+- [meertex-new-paper](https://github.com/ribalba/meertex/blob/main/skills/meertex-new-paper/SKILL.md) turns a conference or call-for-papers URL into a project. It reads the CFP and the pages it links to, extracts the venue's fields and every deadline with its time zone, creates the project with `meertex new --from-json`, imports the publisher's author kit with `--zip`, and checks it out into `~/papers/<name>`.
+- [docs/agent.md](https://github.com/ribalba/meertex/blob/main/docs/agent.md) describes how an agent reads and, when asked, changes the user's papers, dates, versions and review threads.
+
+These two commands install the new-paper skill for Claude Code.
+
+```bash
+mkdir -p ~/.claude/skills/meertex-new-paper
+curl -o ~/.claude/skills/meertex-new-paper/SKILL.md \
+  https://raw.githubusercontent.com/ribalba/meertex/main/skills/meertex-new-paper/SKILL.md
+```
+
+In a clone of the repository, `make install-skill` links it instead.
+
+## How it works
+
+A meertex server is three containers.
+
+- **web** is the FastAPI server and the web app (plain HTML, CSS and JavaScript). It holds each open paper in memory as a live document, takes the WebSocket sync of the CLI and the browser (the y-websocket protocol), and keeps the git history of every paper. It runs as one process with one worker on purpose.
+- **db** is PostgreSQL. It stores accounts, projects, dates, versions, reviews and the live documents.
+- **compile** is TeX Live 2025 behind a small HTTP service. It runs as an unprivileged user with a read-only root file system and no capabilities. TeX runs without shell escape and in kpathsea's paranoid mode, so a document reads and writes only inside its own job folder.
+
+The CLI is a Python package (`pipx install meertex`). Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
+
+## Get started
+
+Sign in at https://meertex.com/login with an email address. The browser editor needs nothing else. For a local folder, install the CLI (Python 3.11 or newer).
+
+```bash
+pipx install meertex                       # or: uv tool install meertex
+meertex login --server meertex.com         # mails a sign-in code
+meertex checkout 2027-icse-green-llm       # or: meertex new ... --checkout
+meertex service install                    # a systemd user unit that runs meertex sync
+```
+
+The background sync service is a systemd user unit. On systems without systemd (macOS, Windows), run `meertex sync` in a terminal.
+
+## Run your own server
+
+```bash
+git clone https://github.com/ribalba/meertex.git
+cd meertex
+make up          # Postgres, the server and the compile service on http://127.0.0.1:8060
+make logs        # without SMTP the sign-in link and code are printed here
+meertex login --server http://127.0.0.1:8060
+```
+
+On a server, Coolify deploys `docker-compose.coolify.yml`. Set `BASE_URL` and the SMTP variables, give the web service its domain and deploy. [COOLIFY.md](https://github.com/ribalba/meertex/blob/main/COOLIFY.md) has every step.
+
+Requirements are Docker with Compose, about 1 GB of memory for the server and Postgres plus up to 2 GB while compiling, and about 6 GB of disk for the TeX Live image.
+
+## Common questions
+
+- **Is meertex free?** Yes. meertex.com is free to use, and the code is free software under the GNU AGPL-3.0-or-later.
+- **Is there a hosted version?** Yes, https://meertex.com. You can also run your own server, and your papers then stay on it.
+- **Do coauthors need to install anything?** No. Coauthors can work entirely in the browser. The CLI is for people who want a local folder.
+- **Which editor do I need locally?** Any editor that saves files. The sync client watches the folder, not the editor.
+- **What happens when two people edit the same line?** Both edits are kept. The document is a CRDT, so concurrent edits merge character by character without conflicts.
+- **Can it compile without the compile service?** No. Without it, the compile routes answer 503 and say why, and everything else works.
+- **Can I import an existing paper?** Yes. `meertex link <dir>` turns an existing folder into a checkout, and a template zip can be imported into a new project.
+
+## Documentation
+
+- [README](https://github.com/ribalba/meertex#readme) covers running your own server, development and the layout of the repository.
+- [docs/DESIGN.md](https://github.com/ribalba/meertex/blob/main/docs/DESIGN.md) is the contract for every field, route and command.
+- [docs/agent.md](https://github.com/ribalba/meertex/blob/main/docs/agent.md) explains how an agent uses meertex.
+- [COOLIFY.md](https://github.com/ribalba/meertex/blob/main/COOLIFY.md) explains deployment with Coolify.
+- [compile/README.md](https://github.com/ribalba/meertex/blob/main/compile/README.md) describes the compile service.
+- [License](https://github.com/ribalba/meertex/blob/main/LICENSE) is the GNU AGPL-3.0.

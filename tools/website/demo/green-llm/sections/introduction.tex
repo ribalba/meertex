@@ -1,0 +1,18 @@
+\section{Introduction}\label{sec:intro}
+
+Serving large language models is now one of the largest uses of data-centre GPUs~\cite{kessler2025inference}.
+Operators who want to report the carbon footprint of a request, or price it fairly, need to know how much energy that request used.
+On a dedicated GPU the answer is the integral of the board's power over the request's runtime.
+Production deployments rarely look like that.
+Requests are batched, models share devices, and the power sensor reports one number for everything that runs on the board~\cite{varga2024sensors}.
+
+Existing tools attribute energy by time share~\cite{quintero2023carbon}, or they assume that every request in a batch costs the same.
+Both assumptions break down under load.
+In our measurements a short prompt that joins a full batch costs a third of what the same prompt costs on an idle GPU, while a long generation in a busy batch costs more than the time-share estimate suggests (Section~\ref{sec:eval}).
+
+This paper makes three contributions.
+\begin{itemize}
+  \item \sysname{}, a method that splits GPU energy across concurrent inference requests using kernel traces and the device's power readings (Section~\ref{sec:method}).
+  \item An evaluation on four open-weight models and two GPU generations against isolated reference runs (Section~\ref{sec:eval}).
+  \item A public data set of 1.2 million attributed requests.
+\end{itemize}

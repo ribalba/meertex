@@ -1,0 +1,24 @@
+# meertex-server dependencies. meerpad's pins, plus the live document.
+fastapi==0.141.1
+starlette==1.7.0            # pinned directly, not left to FastAPI's range (see meerpad).
+                            # >=1.3.1 is a floor (CVE-2025-62727, CVE-2026-54283).
+uvicorn[standard]==0.54.0   # [standard] brings the websockets implementation
+sqlalchemy==2.1.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
+email-validator==2.3.0
+python-multipart==0.0.32    # floor (CVE-2026-42561, CVE-2026-53540)
+psycopg[binary]==3.3.6
+tzdata==2026.4              # IANA zones on hosts that ship none (containers)
+
+# The live document (docs/DESIGN.md §8): Yjs-compatible CRDT, and the
+# character diffs that turn an uploaded file into minimal edits.
+pycrdt==0.14.10
+diff-match-patch==20241021
+
+# The compile service is called over HTTP (docs/DESIGN.md §14). The CLI pins the same.
+# The reference lookups use it too (§16).
+httpx==0.28.1
+
+# The claim check of the references (docs/DESIGN.md §16, Claims).
+anthropic==2.3.0

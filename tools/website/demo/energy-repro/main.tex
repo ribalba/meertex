@@ -1,0 +1,62 @@
+% Demo paper for the meertex website screenshots, as it was submitted. Every
+% name, number and reference in it is made up. revision/main.tex is the same
+% paper after the reviews.
+\documentclass[acmsmall,review,anonymous]{acmart}
+
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\acmJournal{TOSEM}
+
+\begin{document}
+
+\title{Reproducible Energy Measurements for Software Engineering Research}
+
+\author{Lena Vogt}
+\affiliation{\institution{Example University}\country{Germany}}
+\email{lena@example.com}
+
+\begin{abstract}
+Energy measurements of software are hard to repeat. Results change with the
+machine, its temperature, the background load and the measurement tool. We
+reviewed 120 studies that report the energy use of software and found that
+few of them report enough detail to repeat the measurement. We propose a
+checklist of twelve items and show on three case studies that it makes
+measurements repeatable within 3\,\%.
+\end{abstract}
+
+\maketitle
+
+\section{Introduction}
+
+Software engineering research increasingly reports the energy use of
+programs, libraries and development practices. A result that cannot be
+repeated on another machine says little about the software and a lot about
+the setup it was measured on.
+
+\section{Literature Review}
+
+We searched four digital libraries for studies that measure the energy of
+software and kept 120 of them. For each study we recorded the hardware, the
+measurement tool, the number of repetitions and whether idle power was
+subtracted. Few studies report all four.
+
+\section{The Checklist}
+
+The checklist has twelve items in three groups. The first group describes
+the machine, the second the measurement and the third the analysis. Each item
+is a question a reader must be able to answer from the paper alone.
+
+\section{Case Studies}
+
+We applied the checklist to three earlier studies and repeated their
+measurements on a second machine. With the checklist the results agreed
+within 3\,\%. Without it they differed by up to 40\,\%.
+
+\section{Conclusion}
+
+Repeatable energy measurements need a description of the setup that is as
+careful as the description of the software under test. The checklist is a
+first step towards it.
+
+\end{document}

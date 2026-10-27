@@ -1,0 +1,71 @@
+% Demo paper for the meertex website screenshots. Every name, number and
+% reference in it is made up.
+\documentclass[conference]{IEEEtran}
+
+\usepackage{booktabs}
+\usepackage{cite}
+
+\begin{document}
+
+\title{Carbon-Aware Scheduling for Continuous Integration}
+
+\author{\IEEEauthorblockN{Anonymous Authors}
+\IEEEauthorblockA{Submission 318}}
+
+\maketitle
+
+\begin{abstract}
+Continuous integration runs millions of builds a day, and most of them are not
+urgent. We study how much of a project's build energy can move to hours with a
+cleaner electricity mix without delaying the developers who wait for the
+result. On the build histories of 214 open-source projects, deferring nightly
+and documentation jobs by at most six hours cuts their emissions by 31\,\%.
+Pull request builds stay where they are.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+A continuous integration service starts a build for every push. Developers
+wait for some of these builds and ignore most of the others. Nightly builds,
+dependency updates and documentation jobs can run a few hours later without
+anyone noticing. The carbon intensity of the grid changes by a factor of two
+over a day in many regions~\cite{brandvold2024grid}.
+
+We ask how much of the build energy of a project could move to cleaner hours,
+and what that costs in waiting time.
+
+\section{Method}\label{sec:method}
+
+We replayed the build histories of 214 projects against hourly carbon
+intensity data for twelve regions. A job may move when nobody waits for it,
+which we approximate by its trigger. Jobs started by a schedule, a bot or a
+documentation change may move by up to six hours.
+
+\section{Results}\label{sec:results}
+
+\begin{table}[t]
+  \caption{Emissions of movable jobs, before and after deferral.}
+  \label{tab:results}
+  \centering
+  \begin{tabular}{lrr}
+    \toprule
+    Job type & Share of energy & Saved \\
+    \midrule
+    Nightly builds & 22\,\% & 34\,\% \\
+    Dependency updates & 9\,\% & 29\,\% \\
+    Documentation & 4\,\% & 27\,\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Table~\ref{tab:results} lists the job types that may move. Together they are
+35\,\% of a project's build energy, and deferring them saves 31\,\% of their
+emissions.
+
+\begin{thebibliography}{1}
+\bibitem{brandvold2024grid}
+I.~Brandvold, ``Hourly carbon intensity of twelve electricity grids,'' in
+\emph{Proc. Workshop on Sustainable Computer Systems}, 2024, pp. 5--11.
+\end{thebibliography}
+
+\end{document}

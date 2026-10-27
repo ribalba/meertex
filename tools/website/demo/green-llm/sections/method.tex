@@ -1,0 +1,11 @@
+\section{Method}\label{sec:method}
+
+\sysname{} samples the board power at 100\,Hz through the vendor's management library and records every kernel launch with its request.
+For each sampling interval it knows which kernels ran and on whose behalf.
+The energy of the interval is split in proportion to each request's share of the busy cycles of the streaming multiprocessors.
+
+Idle power is the fixed cost of keeping the GPU available.
+We report it separately rather than spreading it over the requests, because it depends on the operator's provisioning and not on the request~\cite{ostrowski2023idle}.
+
+\paragraph{Calibration.} The power sensor lags the load by up to 40\,ms.
+We estimate the lag once per device with a square-wave workload and shift the power trace accordingly~\cite{varga2022lag}.

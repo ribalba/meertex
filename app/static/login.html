@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sign in to meertex</title>
+  <meta name="theme-color" content="#f6f8fa" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/img/favicon-64.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/img/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="login-body">
+  <main class="login-wrap">
+    <img class="login-logo" src="/static/img/logo-192.png" alt="meertex" width="64" height="64" />
+
+    <!-- Step 1 asks for the email. -->
+    <div id="step-email">
+      <h1>Sign in to meertex</h1>
+      <div class="login-message" id="message-email" role="alert"></div>
+      <form class="login-box" id="email-form" novalidate>
+        <label class="form-label" for="email">Email address</label>
+        <input class="form-control" type="email" id="email" name="email" autocomplete="email" autocapitalize="off" spellcheck="false" required autofocus />
+        <button class="btn btn-primary btn-block" type="submit" id="email-submit">Continue</button>
+      </form>
+      <div class="login-alt">
+        No password needed. We email you a sign-in link and a code.
+        A new address gets an account on its first sign-in.
+      </div>
+    </div>
+
+    <!-- Step 2 takes the code, for when the emailed link opens somewhere else. -->
+    <div id="step-code" hidden>
+      <h1>Enter your code</h1>
+      <div class="login-message" id="message-code" role="alert"></div>
+      <form class="login-box" id="code-form" novalidate>
+        <p class="login-lede">We emailed a link and a 6-character code to <strong id="sent-to"></strong>. Either one signs you in.</p>
+        <label class="form-label" for="code">Sign-in code</label>
+        <!-- The placeholder avoids 0, 1, I, L and O, because they are not in the
+             code alphabet (app/security.py). -->
+        <input class="form-control code-input" id="code" name="code" placeholder="K7QW4N" inputmode="text"
+               autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="6" required />
+        <button class="btn btn-primary btn-block" type="submit" id="code-submit">Sign in</button>
+        <div class="login-links">
+          <button type="button" class="btn-link" id="resend">Send a new code</button>
+          <button type="button" class="btn-link" id="other-email">Use a different email</button>
+        </div>
+      </form>
+      <div class="login-alt">The code expires after 30 minutes and signs you in on this device.</div>
+    </div>
+
+    <p class="login-footer">meertex keeps your papers, deadlines and versions in one place. <a href="/">What is meertex?</a></p>
+  </main>
+  <script type="module" src="/static/js/login.js"></script>
+</body>
+</html>

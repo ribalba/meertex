@@ -1,0 +1,9 @@
+{
+  "name": "meertex-video",
+  "private": true,
+  "description": "The terminal of the demo video (make_video.py serves xterm.js from node_modules).",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@xterm/xterm": "6.0.0"
+  }
+}

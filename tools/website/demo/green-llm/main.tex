@@ -1,0 +1,61 @@
+% Demo paper for the meertex website screenshots. Every name and number in
+% it is made up, and so are most references (refs.bib says which are real).
+\documentclass[sigconf,review,anonymous]{acmart}
+
+\settopmatter{printacmref=false}
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\acmConference[EuroSys '27]{The European Conference on Computer Systems}{2027}{}
+\acmSubmissionID{142}
+
+\usepackage{booktabs}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\newcommand{\sysname}{Wattson}
+
+\begin{document}
+
+\title{Measuring the Energy of LLM Inference on Shared GPUs}
+
+\author{Lena Vogt}
+\affiliation{\institution{Example University}\country{Germany}}
+\email{lena@example.com}
+
+\author{Tom\'as Ibarra}
+\affiliation{\institution{Example Institute of Technology}\country{Spain}}
+\email{tomas@example.com}
+
+\begin{abstract}
+Large language models are increasingly served from GPUs that several tenants share.
+Operators need per-request energy figures for carbon accounting and pricing, but the board's power sensor only sees the whole device.
+We present \sysname{}, a method that attributes GPU energy to individual inference requests from kernel traces and the device's power readings.
+On four open-weight models and two GPU generations, \sysname{} attributes 94\,\% of the measured energy, with a median error of 6.1\,\% per request against isolated runs.
+Batching hides most of the energy cost of short prompts, and a request's share varies by a factor of three with the load around it.
+\end{abstract}
+
+\keywords{energy measurement, GPU, LLM inference, carbon accounting}
+
+\maketitle
+
+\input{sections/introduction}
+\input{sections/method}
+\input{sections/evaluation}
+
+\section{Related Work}\label{sec:related}
+
+Census studies of inference clusters report where the energy goes at the level of whole services~\cite{kessler2025inference}.
+Carbon accounting tools for shared accelerators split energy by time share~\cite{quintero2023carbon}, which is the baseline we compare against.
+Work on continuous batching studies throughput and latency~\cite{teller2024batching}.
+We add the energy of each request in the batch.
+
+\section{Conclusion}\label{sec:conclusion}
+
+Per-request energy on a shared GPU can be measured to within a few percent, once the power trace is aligned with the kernels that ran.
+The load around a request matters as much as the request itself.
+\sysname{} and the data set will be released with the camera-ready version.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs}
+
+\end{document}

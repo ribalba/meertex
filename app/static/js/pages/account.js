@@ -1,0 +1,331 @@
+// /settings is your account. It holds name and time zone, the naming pattern
+// with a live example, your usual writing time, the reminder mails, the API
+// token, and how to set up the command line.
+
+import { api } from "../api.js";
+import { h, clear, debounce } from "../dom.js";
+import { icon } from "../icons.js";
+import { session } from "../session.js";
+import { patternProblem, previewName } from "../naming.js";
+import { allTimezones } from "../time.js";
+import { avatar, busy, commandLine, confirmDialog, copyButton, field, flash, flashError, openDialog, setTitle, textInput } from "../ui.js";
+import { onLeave } from "../router.js";
+import { writingDaysField } from "./timeline.js";
+
+const EXAMPLES = [
+  { conference: "ICSE", year: 2027, title: "Towards Green Large Language Models", track: "Research Track", paper: "" },
+  { conference: "EuroSys", year: 2027, title: "Pacer: Energy-aware Scheduling for Serverless", track: "", paper: "pacer" },
+];
+
+const PLACEHOLDERS = ["{year}", "{conference}", "{conference|lower}", "{paper}", "{paper|lower}", "{track}", "{title}"];
+
+export async function render(ctx) {
+  setTitle("Settings");
+  const me = session.me;
+
+  const menu = h("nav", { class: "side-menu", "aria-label": "Settings" },
+    h("a", { href: "#profile" }, icon("person"), "Profile"),
+    h("a", { href: "#naming" }, icon("book"), "Naming"),
+    h("a", { href: "#writing" }, icon("calendar"), "Writing time"),
+    h("a", { href: "#reminders" }, icon("bell"), "Reminders"),
+    h("a", { href: "#token" }, icon("key"), "API token"),
+    h("a", { href: "#cli" }, icon("terminal"), "Command line"));
+
+  const content = h("div", {},
+    profileSection(me),
+    namingSection(me),
+    writingSection(me),
+    remindersSection(me),
+    tokenSection(me),
+    cliSection(),
+  );
+
+  clear(ctx.main).append(h("div", { class: "container container-md page" },
+    h("div", { class: "flex mb-4" },
+      avatar(me, 40),
+      h("div", {},
+        h("h1", { style: { fontSize: "20px" }, text: me.name || me.email }),
+        h("div", { class: "color-muted", text: me.name ? `${me.email} · your personal account` : "Your personal account" }))),
+    h("div", { class: "layout-settings" }, h("div", {}, menu), content)));
+}
+
+function profileSection(me) {
+  const name = textInput({ value: me.name || "", autocomplete: "name", maxlength: "200" });
+  const email = textInput({ value: me.email, disabled: true });
+  const zones = allTimezones();
+  if (me.timezone && !zones.includes(me.timezone)) zones.unshift(me.timezone);
+  const tz = h("select", { class: "form-select input-block", value: me.timezone || "UTC" }, zones.map((z) => h("option", { value: z }, z)));
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const useBrowser = browserTz && browserTz !== me.timezone
+    ? h("button", { type: "button", class: "btn-link text-small", text: `Use this device's zone (${browserTz})`, onclick: () => { tz.value = browserTz; } })
+    : null;
+  const save = h("button", { type: "submit", class: "btn btn-primary", text: "Update profile" });
+  const form = h("form", { class: "settings-section", id: "profile" },
+    h("div", { class: "subhead" }, h("h2", { text: "Profile" })),
+    field("Name", name, { hint: "Shown to your coauthors next to your edits." }),
+    field("Email", email, { hint: "You sign in with this address. It cannot be changed here." }),
+    field("Time zone", tz, { hint: h("span", {}, "Times in the history and tooltips use it. Deadlines are always shown in the venue's zone. ", useBrowser) }),
+    h("div", { class: "form-actions" }, save));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const updated = await busy(save, () => api.patch("/api/auth/me", { name: name.value.trim(), timezone: tz.value }));
+      Object.assign(session.me, updated);
+      flash("Profile saved.", "success");
+    } catch (err) {
+      flashError(err);
+    }
+  });
+  return form;
+}
+
+function namingSection(me) {
+  const pattern = textInput({ value: me.naming_pattern || "{year}-{conference|lower}-{paper|lower}", spellcheck: "false", class: "form-control input-block input-mono" });
+  pattern.id = "naming-pattern";
+  const examples = EXAMPLES.map(() => h("span", { class: "name" }));
+  const error = h("div", { class: "form-error", role: "alert" });
+  let saved = me.naming_pattern;
+  let token = 0;
+
+  const serverCheck = debounce(async () => {
+    const mine = ++token;
+    // The server's dry run knows the saved pattern only, so it confirms the
+    // example once the typed pattern is the saved one.
+    if (pattern.value.trim() !== saved) return;
+    try {
+      const res = await api.post("/api/projects", { ...EXAMPLES[0], dry_run: true, dates: [] });
+      // An example that collides with a real paper gets "-2" from the server.
+      // That suffix says nothing about the pattern, so it is left off.
+      const local = previewName(saved, EXAMPLES[0]);
+      const name = res?.name && res.name.replace(/-\d+$/, "") === local ? local : res?.name;
+      if (mine === token && name && pattern.value.trim() === saved) examples[0].textContent = name;
+    } catch {
+      // The local preview stays.
+    }
+  }, 300);
+
+  const paint = () => {
+    const value = pattern.value.trim();
+    const problem = patternProblem(value);
+    if (problem) {
+      error.textContent = problem;
+      examples.forEach((ex) => { ex.textContent = "…"; });
+      return;
+    }
+    error.textContent = "";
+    EXAMPLES.forEach((ex, i) => { examples[i].textContent = previewName(value, ex) || "…"; });
+    serverCheck();
+  };
+  pattern.addEventListener("input", paint);
+
+  const chips = h("div", { class: "topic-list mt-2" }, PLACEHOLDERS.map((ph) => {
+    const b = h("button", { type: "button", class: "topic", style: { border: "0", cursor: "pointer" }, text: ph, title: `Insert ${ph}` });
+    b.addEventListener("click", () => {
+      const start = pattern.selectionStart ?? pattern.value.length;
+      const end = pattern.selectionEnd ?? start;
+      pattern.value = pattern.value.slice(0, start) + ph + pattern.value.slice(end);
+      pattern.focus();
+      pattern.setSelectionRange(start + ph.length, start + ph.length);
+      paint();
+    });
+    return b;
+  }));
+
+  const save = h("button", { type: "submit", class: "btn btn-primary", text: "Save pattern" });
+  const reset = h("button", { type: "button", class: "btn", text: "Use the default" });
+  reset.addEventListener("click", () => { pattern.value = "{year}-{conference|lower}-{paper|lower}"; paint(); });
+  const form = h("form", { class: "settings-section", id: "naming" },
+    h("div", { class: "subhead" }, h("h2", { text: "Naming pattern" })),
+    h("p", { class: "color-muted", text: "A new paper gets its name from this pattern once, when it is created. The name is the folder of every checkout, so it stays fixed after that." }),
+    h("div", { class: "form-group" },
+      h("label", { class: "form-label", for: pattern.id, text: "Pattern" }),
+      pattern,
+      error,
+      chips,
+      h("div", { class: "form-hint" }, "Values become slugs. ", h("code", { text: "|lower" }), " and ", h("code", { text: "|upper" }),
+        " change the case. An empty placeholder disappears together with its separator. Between placeholders use only letters, digits, dot, underscore and dash.")),
+    h("div", { class: "box mb-3" },
+      h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title", text: "Examples" })),
+      EXAMPLES.map((ex, i) => h("div", { class: "box-row box-row-sm" },
+        h("div", { class: "color-muted text-small" },
+          `${ex.conference} ${ex.year}${ex.track ? `, ${ex.track}` : ""}, "${ex.title}"${ex.paper ? `, short name ${ex.paper}` : ""}`),
+        h("div", { class: "flex gap-4 mt-0" }, icon("arrow-right", { cls: "color-muted" }),
+          h("span", { class: "text-mono text-bold" }, examples[i]))))),
+    h("div", { class: "form-actions" }, save, reset));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const value = pattern.value.trim();
+    if (patternProblem(value)) { pattern.focus(); return; }
+    try {
+      const updated = await busy(save, () => api.patch("/api/auth/me", { naming_pattern: value }));
+      Object.assign(session.me, updated);
+      saved = updated?.naming_pattern || value;
+      flash("Naming pattern saved. It applies to papers you create from now on.", "success");
+      paint();
+    } catch (err) {
+      error.textContent = err.message;
+    }
+  });
+  paint();
+  return form;
+}
+
+// The same field as on the timeline. It saves while you type.
+function writingSection(me) {
+  const days = writingDaysField({ value: me.writing_days || 30 });
+  onLeave(() => days.flush());
+  return h("section", { class: "settings-section", id: "writing" },
+    h("div", { class: "subhead" }, h("h2", { text: "Writing time" })),
+    h("p", { class: "color-muted" },
+      "How long it usually takes you to write a paper. The ", h("a", { href: "/timeline", text: "timeline" }),
+      " starts each paper's writing window this many days before its submission deadline. A paper can have its own time in its row's menu on the timeline."),
+    h("div", { class: "form-group" }, days.el));
+}
+
+// The daily reminder mail (DESIGN §5, Reminders): on or off, how many days
+// before a date it mentions it, and the hour of your own day it comes at.
+const REMINDER_DAYS = [30, 14, 7, 3, 1, 0];
+
+function reminderDayText(d) {
+  if (d === 0) return "On the day";
+  return d === 1 ? "1 day before" : `${d} days before`;
+}
+
+function remindersSection(me) {
+  const on = h("input", { type: "checkbox", id: "reminders-on" });
+  on.checked = me.reminders !== false;
+  const chosen = new Set(me.reminder_days ?? [14, 3, 1, 0]);
+  // Days set through the API that the boxes do not offer stay in the list.
+  const offered = [...new Set([...REMINDER_DAYS, ...chosen])].sort((a, b) => b - a);
+  const boxes = offered.map((d) => {
+    const box = h("input", { type: "checkbox", id: `reminder-day-${d}`, value: String(d) });
+    box.checked = chosen.has(d);
+    return box;
+  });
+  const hour = h("select", { class: "form-select", id: "reminder-hour", style: { width: "auto" } },
+    Array.from({ length: 24 }, (_, i) => h("option", { value: String(i) }, `${String(i).padStart(2, "0")}:00`)));
+  hour.value = String(me.reminder_hour ?? 8);
+  const zoneHint = h("span", { text: `In your time zone, ${me.timezone || "UTC"}. Change it under Profile.` });
+
+  const sync = () => { [...boxes, hour].forEach((el) => { el.disabled = !on.checked; }); };
+  on.addEventListener("change", sync);
+  sync();
+
+  const save = h("button", { type: "submit", class: "btn btn-primary", text: "Save reminders" });
+  const preview = h("button", { type: "button", class: "btn", text: "Preview the next mail" });
+  preview.addEventListener("click", async () => {
+    try {
+      const data = await busy(preview, () => api.get("/api/reminders/preview"));
+      openDialog({
+        title: "Your next reminder mail",
+        wide: true,
+        body: data?.body
+          ? h("div", {},
+            h("p", { class: "color-muted text-small", text: "Everything within your reminder days, also what an earlier mail said already." }),
+            h("p", { class: "text-bold", text: data.subject }),
+            h("pre", { class: "box box-body text-small", style: { whiteSpace: "pre-wrap", margin: "0" }, text: data.body }))
+          : h("p", { class: "mb-0", text: "Nothing to remind you of right now." }),
+      });
+    } catch (err) {
+      flashError(err);
+    }
+  });
+
+  const form = h("form", { class: "settings-section", id: "reminders" },
+    h("div", { class: "subhead" }, h("h2", { text: "Reminders" })),
+    h("p", { class: "color-muted", text: "One mail a day, and only when there is something to say. It lists the deadlines that come within the days below, when to start writing a paper, and the questions about dates that just passed. It covers the papers where you are the owner or an editor. A paper's overview can mute it for that paper." }),
+    h("div", { class: "form-checkbox" }, on, h("label", { for: on.id, text: "Email me before deadlines" })),
+    h("fieldset", { class: "form-group" },
+      h("legend", { text: "Remind me" }),
+      h("div", { class: "flex flex-wrap", style: { gap: "0 20px" } },
+        offered.map((d, i) => h("div", { class: "form-checkbox" }, boxes[i], h("label", { for: boxes[i].id, text: reminderDayText(d) }))))),
+    field("Send it at", hour, { hint: zoneHint }),
+    h("div", { class: "form-actions" }, save, preview));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const days = boxes.filter((b) => b.checked).map((b) => Number(b.value));
+    try {
+      const updated = await busy(save, () => api.patch("/api/auth/me", { reminders: on.checked, reminder_days: days, reminder_hour: Number(hour.value) }));
+      Object.assign(session.me, updated);
+      zoneHint.textContent = `In your time zone, ${session.me.timezone || "UTC"}. Change it under Profile.`;
+      flash(on.checked ? "Reminders saved." : "Reminders are off. You get no reminder mails.", "success");
+    } catch (err) {
+      flashError(err);
+    }
+  });
+  return form;
+}
+
+function tokenSection(me) {
+  const out = h("section", { class: "settings-section", id: "token" });
+  const paint = () => {
+    const token = session.me.api_token;
+    clear(out).append(
+      h("div", { class: "subhead" }, h("h2", { text: "API token" })),
+      h("p", { class: "color-muted" },
+        "The token lets the command line, scripts and agents act as you. Send it as ",
+        h("code", { text: "Authorization: Bearer <token>" }), ". Keep it secret, it works like a password."),
+    );
+    if (!token) {
+      const create = h("button", { type: "button", class: "btn btn-primary" }, icon("key"), "Create a token");
+      create.addEventListener("click", async () => {
+        try {
+          const updated = await busy(create, () => api.post("/api/auth/api-token"));
+          Object.assign(session.me, updated);
+          paint();
+          flash("Token created. meertex login also creates one for you.", "success");
+        } catch (err) {
+          flashError(err);
+        }
+      });
+      out.append(h("p", { text: "You have no token yet." }), create);
+      return;
+    }
+    const field2 = h("input", { type: "password", class: "form-control token-field", readonly: true, value: token, "aria-label": "API token" });
+    const show = h("button", { type: "button", class: "btn", "aria-label": "Show the token", title: "Show" }, icon("eye"));
+    show.addEventListener("click", () => {
+      const hidden = field2.type === "password";
+      field2.type = hidden ? "text" : "password";
+      show.replaceChildren(icon(hidden ? "eye-closed" : "eye"));
+      show.setAttribute("aria-label", hidden ? "Hide the token" : "Show the token");
+      show.title = hidden ? "Hide" : "Show";
+    });
+    const rotate = h("button", { type: "button", class: "btn btn-danger" }, "Rotate");
+    rotate.addEventListener("click", async () => {
+      const ok = await confirmDialog({
+        title: "Rotate the API token?",
+        message: "The current token stops working right away. Every CLI and script that uses it needs the new one (meertex login on each machine).",
+        confirmText: "Rotate token",
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const updated = await busy(rotate, () => api.post("/api/auth/api-token/rotate"));
+        Object.assign(session.me, updated);
+        paint();
+        flash("New token created. The old one no longer works.", "success");
+      } catch (err) {
+        flashError(err);
+      }
+    });
+    out.append(h("div", { class: "flex flex-wrap" },
+      h("div", { class: "copy-field flex-1", style: { minWidth: "240px" } }, field2, show,
+        copyButton(() => session.me.api_token, { label: "Copy the token", cls: "btn" })),
+      rotate));
+  };
+  paint();
+  return out;
+}
+
+function cliSection() {
+  return h("section", { class: "settings-section", id: "cli" },
+    h("div", { class: "subhead" }, h("h2", { text: "Use meertex from the command line" })),
+    h("p", { class: "color-muted", text: "The meertex command keeps a folder on your computer in step with a paper, so you can write in VS Code, with Claude, or in any editor." }),
+    h("div", { class: "box" }, h("div", { class: "box-body cmd-list" },
+      commandLine("pipx install ./cli", "1. Install it from a checkout of the meertex repository (uv tool install ./cli works too)"),
+      commandLine(`meertex login --server ${location.origin}`, "2. Sign in. It emails you a code and stores a token in ~/.meertex"),
+      commandLine("meertex checkout <paper>", "3. Copy a paper to ~/papers/<paper>"),
+      commandLine("meertex sync", "4. Keep every checkout in sync while you write"),
+      commandLine("meertex service install", "Or run the sync in the background with your session"))),
+  );
+}

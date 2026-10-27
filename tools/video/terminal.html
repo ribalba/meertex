@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Terminal</title>
+  <!-- The terminal window of the demo video. stage.py serves this page, xterm.js
+       from node_modules and the output of a real bash in a pseudo terminal as
+       server-sent events. The window frame is drawn here, the rest is xterm.js. -->
+  <link rel="stylesheet" href="/xterm.css" />
+  <style>
+    :root {
+      --frame: #2d333b;
+      --frame-fg: #adbac7;
+      --bg: #1c2128;
+    }
+    html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    .bar {
+      flex: none;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      background: var(--frame);
+      color: var(--frame-fg);
+      font: 600 13px "Noto Sans", sans-serif;
+      border-bottom: 1px solid #444c56;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .title { flex: 1; text-align: center; margin-right: 52px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #term { flex: 1; padding: 10px 6px 6px 14px; min-height: 0; }
+    .xterm .xterm-viewport { overflow: hidden !important; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <span class="dot" style="background:#ff5f57"></span>
+    <span class="dot" style="background:#febc2e"></span>
+    <span class="dot" style="background:#28c840"></span>
+    <span class="title" id="title">Terminal</span>
+  </div>
+  <div id="term"></div>
+  <script src="/xterm.js"></script>
+  <script>
+    // GitHub's dark dimmed palette, so the terminal sits well next to the app.
+    const term = new Terminal({
+      fontFamily: '"Source Code Pro", "Noto Sans Mono", monospace',
+      fontSize: 13,
+      lineHeight: 1.18,
+      cursorBlink: false,
+      cursorStyle: "block",
+      scrollback: 0,
+      allowProposedApi: true,
+      theme: {
+        background: "#1c2128",
+        foreground: "#adbac7",
+        cursor: "#adbac7",
+        cursorAccent: "#1c2128",
+        selectionBackground: "#4184e44d",
+        black: "#545d68", red: "#f47067", green: "#57ab5a", yellow: "#c69026",
+        blue: "#539bf5", magenta: "#b083f0", cyan: "#39c5cf", white: "#909dab",
+        brightBlack: "#636e7b", brightRed: "#ff938a", brightGreen: "#6bc46d", brightYellow: "#daaa3f",
+        brightBlue: "#6cb6ff", brightMagenta: "#dcbdfb", brightCyan: "#56d4dd", brightWhite: "#cdd9e5",
+      },
+    });
+    const host = document.getElementById("term");
+    term.open(host);
+
+    // Fit the grid to the window. stage.py reads window.termSize and gives the
+    // pseudo terminal the same size before anything runs in it.
+    function fit() {
+      const cell = term._core._renderService.dimensions.css.cell;
+      const style = getComputedStyle(host);
+      const width = host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const height = host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const cols = Math.max(20, Math.floor(width / cell.width));
+      const rows = Math.max(5, Math.floor(height / cell.height));
+      term.resize(cols, rows);
+      window.termSize = { cols, rows };
+    }
+
+    document.fonts.ready.then(() => {
+      fit();
+      const events = new EventSource("/stream");
+      events.addEventListener("out", (e) => {
+        const raw = atob(e.data);
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+        term.write(bytes);
+      });
+      events.addEventListener("title", (e) => {
+        document.getElementById("title").textContent = e.data;
+      });
+      window.termReady = true;
+    });
+  </script>
+</body>
+</html>
