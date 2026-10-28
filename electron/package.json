@@ -1,0 +1,54 @@
+{
+  "name": "meertex-desktop",
+  "productName": "meertex",
+  "version": "0.1.0",
+  "description": "Desktop wrapper for meertex, a LaTeX editor for the whole life of a paper.",
+  "main": "main.js",
+  "desktopName": "meertex.desktop",
+  "author": {
+    "name": "Didi Hoffmann",
+    "email": "didi@ribalba.de"
+  },
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://meertex.com",
+  "scripts": {
+    "start": "electron . --class=meertex",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "44.10.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.meertex.desktop",
+    "productName": "meertex",
+    "directories": { "buildResources": "build", "output": "dist" },
+    "files": ["main.js", "preload.js", "package.json", "build/icon.png"],
+    "protocols": [
+      { "name": "meertex", "schemes": ["meertex"] }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg", "zip"],
+      "icon": "build/icon.png",
+      "artifactName": "meertex-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "artifactName": "meertex-linux-${arch}.${ext}",
+      "category": "Office",
+      "icon": "build/icon.png",
+      "synopsis": "Desktop wrapper for meertex.",
+      "syncDesktopName": true,
+      "executableName": "meertex",
+      "desktop": {
+        "entry": { "StartupWMClass": "meertex" }
+      }
+    },
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "meertex-windows-setup.${ext}"
+    }
+  }
+}

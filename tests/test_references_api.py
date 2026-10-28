@@ -128,6 +128,14 @@ def test_report_before_any_run():
         assert todo["status"] == "error"
         assert {"placeholder", "year", "not_cited"} <= _codes(todo)
         assert entries["gmt"]["status"] == "pending"
+        # The whole entry as the file has it, also the fields the comparison leaves out.
+        assert entries["gmt"]["bibtex"] == (
+            "@misc{gmt,\n"
+            "  title = {Green Metrics Tool},\n"
+            "  url = {https://www.green-coding.io/products/green-metrics-tool/},\n"
+            "  urldate = {2026-01-10},\n"
+            "}"
+        )
         # The error, the broken entry and the missing key count. Pending ones do not.
         assert data["problems"] == 3
         assert client.get(f"/api/projects/{pid}/references/summary").json() == {"problems": 3, "total": 4}

@@ -77,6 +77,33 @@ that changes it publishes a new version. `meertex update` brings the newest
 one, however it was installed, and restarts the sync service. Once a day the
 CLI also looks for a newer version by itself and asks whether to update.
 
+## The desktop app
+
+`electron/` is a thin Electron window around the web app, meerpad's shape. It
+has its own persistent login (separate from your browser), opens other sites
+in the system browser and PDFs and logs in a window of its own, and asks before
+closing over edits the server has not seen yet. Sign-in is by deep link. In the
+app the page asks with `client: "desktop"`, the server mails a
+`meertex://login?token=...` link, and clicking it finishes sign-in **inside the
+window**. The code in the same mail works too.
+
+The landing page's Download section links the installers for macOS, Windows and
+Linux. `.github/workflows/desktop.yml` builds them on every push to `main` that
+changes `electron/` or `VERSION` and publishes them as a GitHub release
+(`desktop-0.1.0.42`, VERSION plus the run number, like the CLI). The links point
+to `releases/latest/download/<file>`, so they always fetch the newest one.
+Dependabot (`.github/dependabot.yml`) opens a pull request when Electron has a
+new version, and merging it builds a new release. The builds are not signed, so
+macOS and Windows warn once on the first start.
+
+```bash
+cd electron && npm install && npm start   # against https://meertex.com
+make desktop                              # against the local server
+cd electron && make distinstall           # build and register it with the desktop
+```
+
+[electron/README.md](electron/README.md) has the details.
+
 ## Run your own server
 
 You need Docker with Compose. The server and Postgres need about 1 GB of memory,
@@ -98,6 +125,11 @@ On a server, Coolify deploys `docker-compose.coolify.yml` behind TLS. Set
 
 Development: `make venv`, `make dev` (native server with reload), `make compile-dev`
 (the compile service with your TeX Live), `make test-db`, `make test`, `make lint`.
+
+Every Monday Dependabot (`.github/dependabot.yml`) opens pull requests for
+updates of the server, the CLI, the desktop app, the editor bundle, the images
+and the GitHub Actions. Minor and patch updates come grouped, majors one by
+one. An editor update needs `make editor` on its branch before merging.
 
 ## Releasing the CLI
 
@@ -124,6 +156,7 @@ development.
 | `tools/editor/` | Builds that module (`make editor`), and the editor's browser tests. |
 | `compile/` | The compile service: TeX Live in a container of its own, behind a small HTTP API ([compile/README.md](compile/README.md)). |
 | `cli/` | The `meertex` command and its sync client. |
+| `electron/` | The desktop app, a window around the web app. |
 | `skills/` | The Claude Code skill that starts a paper from a CFP (`make install-skill`). |
 | `docs/DESIGN.md` | The contract every part codes against. |
 | `docs/agent.md` | How an agent uses meertex. |

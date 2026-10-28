@@ -52,11 +52,18 @@ def _set_session_cookie(response: Response, session_token: str) -> None:
 @router.post("/login")
 def request_login(payload: LoginRequest, db: DB) -> dict:
     """Email a magic sign-in link and a short sign-in code for the same account.
-    The CLI (``client="cli"``) asks for the code, the browser takes either."""
+    The CLI (``client="cli"``) asks for the code, the browser takes either.
+
+    The desktop app (electron/) sends ``client="desktop"``. Its link is a
+    ``meertex://`` deep link that finishes sign-in inside the app window rather
+    than in the user's browser. The code, typed into the window, always works."""
     enforce_login_rate(db, payload.email)
     token = create_login_token(db, payload.email, _safe_next(payload.next))
     code = create_login_code(db, payload.email)
-    link = f"{settings.base_url}/api/auth/callback?token={token}"
+    if payload.client == "desktop":
+        link = f"meertex://login?token={token}"
+    else:
+        link = f"{settings.base_url}/api/auth/callback?token={token}"
     send_login_link(payload.email, link, code)
     return {"ok": True, "message": "Check your email for a sign-in link and code."}
 

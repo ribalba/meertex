@@ -16,7 +16,7 @@ MEERTEX_PORT    ?= 8060
 MEERTEX_DB_PORT ?= 5436
 
 .PHONY: help config up down logs build infra psql dev compile-dev venv test-db test lint images \
-        cli install-skill editor
+        cli install-skill editor desktop
 
 help:
 	@echo "meertex $(VERSION):"
@@ -34,6 +34,7 @@ help:
 	@echo "  make editor        - rebuild app/static/vendor/editor/editor.js from tools/editor (needs node)"
 	@echo "  make cli           - install the meertex CLI with pipx (from ./cli)"
 	@echo "  make install-skill - link the new-paper skill into ~/.claude/skills"
+	@echo "  make desktop       - run the desktop app (electron/) against the local server"
 
 config:
 	@test -f .env || { cp .env.example .env && chmod 600 .env \
@@ -101,6 +102,13 @@ images:
 # result is committed, so the server and its image never need node.
 editor:
 	cd tools/editor && npm ci && node build.mjs
+
+# The desktop app defaults to the hosted https://meertex.com. From a checkout
+# it means this one. ELECTRON_RUN_AS_NODE is unset because a terminal inside an
+# Electron app (VS Code) can export it, and it makes Electron start as plain Node.
+desktop:
+	cd electron && npm install && env -u ELECTRON_RUN_AS_NODE \
+	  MEERTEX_URL=$${MEERTEX_URL:-http://localhost:$(MEERTEX_PORT)} npm start
 
 # --- the CLI and the skill ---------------------------------------------------
 

@@ -13,8 +13,9 @@ from pydantic import BaseModel, EmailStr, Field, field_serializer
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    # "cli" only changes nothing but the log line today. The CLI types the code.
-    client: Literal["web", "cli"] = "web"
+    # "desktop" makes the emailed link a meertex:// deep link for the desktop
+    # app (see routers/auth.py). "cli" changes nothing, the CLI types the code.
+    client: Literal["web", "cli", "desktop"] = "web"
     # Where to land after signing in, e.g. an invited project.
     # Only same-site paths are honoured.
     next: str | None = None

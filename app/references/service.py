@@ -67,6 +67,7 @@ class Parsed:
     broken: list[bibtex.Problem]
     cites: list[latex.Cite]
     tex: dict[str, str] = field(default_factory=dict)
+    bib: dict[str, str] = field(default_factory=dict)
 
 
 def _is_bib(path: str) -> bool:
@@ -95,7 +96,7 @@ def _parse(texts: dict[str, str]) -> Parsed:
     bibtex.resolve_crossrefs(entries)
     tex = {p: t for p, t in texts.items() if _is_tex(p)}
     cites = [c for path in sorted(tex) for c in latex.cites(tex[path], path)]
-    return Parsed(bibs, entries, broken, cites, tex)
+    return Parsed(bibs, entries, broken, cites, tex, {p: texts[p] for p in bibs})
 
 
 # --- The report ---------------------------------------------------------------------
@@ -228,6 +229,7 @@ def _build(db: DBSession, project: Project) -> tuple[dict, list[Entry]]:
             "end_line": e.end_line,
             "fingerprint": fp,
             "fields": e.values(),
+            "bibtex": parsed.bib.get(e.path, "")[e.start:e.end],
             "status": status,
             "mark": mark,
             "record": _public_record(result.record if result else None),

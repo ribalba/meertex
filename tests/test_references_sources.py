@@ -185,6 +185,34 @@ def test_crossref_updates_prefix_and_search():
     assert [x["title"] for x in s.crossref_search("A", "Roussou", 2019).records] == ["A"]
 
 
+def test_subtitles_and_every_container_title():
+    works = {
+        "/works/10.1145/3177754": {**CSL, "title": ["RAPL in Action"],
+                                   "subtitle": ["Experiences in Using RAPL for Power Measurements"]},
+        "/works/10.1145/3555050.3569131": {**CSL, "title": ["How gullible are web measurement tools?"],
+                                           "subtitle": ["a case study analysing and strengthening OpenWPM's reliability"]},
+        "/works/10.1007/978-3-032-12092-2_15": {
+            **CSL, "title": ["Toward Greener Background Processes"], "subtitle": [],
+            "container-title": ["Lecture Notes in Computer Science", "Product-Focused Software Process Improvement"]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in works:
+            return httpx.Response(200, json={"message": works[request.url.path]})
+        return httpx.Response(404)
+
+    s = make(handler)
+    assert s.crossref_work("10.1145/3177754").record["title"] == \
+        "RAPL in Action: Experiences in Using RAPL for Power Measurements"
+    # A title that ends in a question mark takes the subtitle after a space.
+    assert s.crossref_work("10.1145/3555050.3569131").record["title"] == \
+        "How gullible are web measurement tools? a case study analysing and strengthening OpenWPM's reliability"
+    r = s.crossref_work("10.1007/978-3-032-12092-2_15").record
+    assert r["title"] == "Toward Greener Background Processes"
+    assert r["venue"] == "Lecture Notes in Computer Science"
+    assert r["venues"] == ["Lecture Notes in Computer Science", "Product-Focused Software Process Improvement"]
+
+
 def test_semantic_scholar_dblp_arxiv_and_open_library():
     atom = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
       <entry><id>http://arxiv.org/abs/1706.03762v7</id><published>2017-06-12T17:57:34Z</published>

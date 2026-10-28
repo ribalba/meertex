@@ -1,5 +1,6 @@
 // Answering the questions a passed date asks (DESIGN §6), from the home
-// page's "Waiting for you" box and from the banners on a project.
+// page's "Waiting for you" box and from the banners on a project, and the
+// check mark that answers "yes" from a date on the Overview.
 //
 // "It moved" opens a small inline form for the new date. "Yes" on a hand-in
 // (submission, rebuttal, revision, camera-ready) creates a version, so it asks
@@ -51,22 +52,7 @@ export function questionControls(q, { onAnswered, date = null }) {
 
   const done = async (project, given) => {
     await onAnswered?.(project, given);
-    if (q.kind === "notification" && given === "revision") {
-      addDateDialog(q.project_id, {
-        kind: "revision",
-        title: "When is the revision due?",
-        text: "The outcome is now Revision. Add the deadline for the revised paper so meertex can count down to it.",
-        onDone: onAnswered,
-      });
-    }
-    if (q.kind === "revision" && given === "yes") {
-      addDateDialog(q.project_id, {
-        kind: "notification",
-        title: "When is the next notification?",
-        text: "The paper is under review again. Add the date the venue will decide.",
-        onDone: onAnswered,
-      });
-    }
+    followUp(q, given, onAnswered);
   };
 
   for (const a of q.answers || []) {
@@ -146,8 +132,52 @@ export function questionControls(q, { onAnswered, date = null }) {
   return el;
 }
 
+// The next date an answer asks for. Skipping it is fine.
+function followUp(q, given, onDone) {
+  if (q.kind === "notification" && given === "revision") {
+    addDateDialog(q.project_id, {
+      kind: "revision",
+      title: "When is the revision due?",
+      text: "The outcome is now Revision. Add the deadline for the revised paper so meertex can count down to it.",
+      onDone,
+    });
+  }
+  if (q.kind === "revision" && given === "yes") {
+    addDateDialog(q.project_id, {
+      kind: "notification",
+      title: "When is the next notification?",
+      text: "The paper is under review again. Add the date the venue will decide.",
+      onDone,
+    });
+  }
+}
+
+// The check mark on a date of project `p`: "yes" to its question, also before
+// the day. A hand-in freezes a version, so it opens the same dialog as the
+// question does.
+export async function markDone(p, date, { button = null, onDone }) {
+  const q = { project_id: p.id, project_name: p.name, date_id: date.id, kind: date.kind, label: dateLabel(date), due_at: date.due_at };
+  const finish = async (project) => {
+    await onDone?.(project);
+    followUp(q, "yes", onDone);
+  };
+  if (VERSION_FOR[q.kind]) {
+    versionDialog(q, { date, onSaved: finish });
+    return;
+  }
+  try {
+    const project = await busy(button, () => answer(q, { answer: "yes" }));
+    flash(`Marked ${q.label} as done.`, "success");
+    await finish(project);
+  } catch (err) {
+    flashError(err);
+  }
+}
+
 function versionDialog(q, { date, onSaved }) {
   const kind = VERSION_FOR[q.kind];
+  // Before the deadline there is only the current state to keep.
+  const early = Date.parse(q.due_at) > Date.now();
   const when = date ? formatDue(date) : formatInMyZone(q.due_at);
   const radio = (value, checked) => h("input", { type: "radio", name: "at", value, checked });
   const atDeadline = radio("deadline", true);
@@ -158,7 +188,7 @@ function versionDialog(q, { date, onSaved }) {
 
   const body = h("div", {},
     h("p", { text: "meertex keeps the files as a fixed version, so you can always see what was handed in." }),
-    h("fieldset", { class: "form-group" },
+    early ? null : h("fieldset", { class: "form-group" },
       h("legend", { text: "Which state should the version keep?" }),
       h("label", { class: "choice" }, atDeadline,
         h("div", {}, h("strong", { text: "The state at the deadline" }),
@@ -189,7 +219,7 @@ function versionDialog(q, { date, onSaved }) {
       return;
     }
     try {
-      const at = atNow.checked ? "now" : "deadline";
+      const at = early || atNow.checked ? "now" : "deadline";
       const project = await busy(save, () => answer(q, { answer: "yes", version: { at, note: note.value.trim() } }));
       const version = (project?.versions || [])
         .filter((v) => v.date_id === q.date_id || v.kind === kind)

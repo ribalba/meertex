@@ -167,6 +167,23 @@ def send_review_submitted(
     send_email(to, f"{reviewer} reviewed {project_title}", "\n\n".join(parts))
 
 
+def send_review_request(
+    to: str, requester: str, project_title: str, version: str | None, note: str, link: str
+) -> None:
+    """An author asks a member to review the paper, on a version (its label)
+    or on the text as it was then. The link starts the review there."""
+    what = f'the version "{version}" of "{project_title}"' if version else f'"{project_title}" as it reads now'
+    parts = [f"{requester} asked you to review {what}."]
+    if note.strip():
+        parts.append(note.strip())
+    parts.append(
+        "The link starts your review there. Your comments stay pending, and only you see them,"
+        " until you finish the review."
+    )
+    parts.append(link)
+    send_email(to, f"{requester} asked you to review {project_title}", "\n\n".join(parts))
+
+
 def send_thread_event(
     to: str, actor: str, project_title: str, event: str, where: str, quote: str, text: str, link: str
 ) -> None:

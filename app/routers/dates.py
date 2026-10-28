@@ -1,8 +1,9 @@
 """A project's dates and answering their questions (DESIGN §5, §6, §11).
 
-Adding, changing and removing a date returns the date. Answering returns the
-whole project, because an answer can change the outcome, the versions and the
-next date at once, and the client redraws all of it.
+Adding, changing and removing a date returns the date. Answering and taking
+an answer back return the whole project, because an answer can change the
+outcome, the versions and the next date at once, and the client redraws all
+of it.
 """
 
 from fastapi import APIRouter
@@ -52,5 +53,14 @@ def answer(ref: str, date_id: str, body: AnswerIn, db: DB, user: SessionOrTokenU
     project, membership = resolve_project(db, user, ref, "editor")
     d = services.find_date(db, project, date_id)
     services.answer_date(db, project, d, body, user)
+    db.commit()
+    return services.detail(db, user, project, membership)
+
+
+@router.delete("/projects/{ref}/dates/{date_id}/answer")
+def clear_answer(ref: str, date_id: str, db: DB, user: SessionOrTokenUser) -> dict:
+    project, membership = resolve_project(db, user, ref, "editor")
+    d = services.find_date(db, project, date_id)
+    services.clear_answer(project, d)
     db.commit()
     return services.detail(db, user, project, membership)

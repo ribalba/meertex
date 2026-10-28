@@ -19,6 +19,10 @@ Mails go out after the database commit, as background tasks, so a slow mail
 server never holds a request and a write that failed never mails anybody.
 Whoever a comment, a note or a summary @-mentions (app/mentions.py) is found
 when it is written and stored with it.
+
+A review request asks a member to review a fixed state. Its mail links to the
+web app, which starts the review there. Submitting any review answers the
+reviewer's open request.
 """
 
 import re
@@ -34,7 +38,7 @@ from sqlalchemy.orm import Query as OrmQuery
 from sqlalchemy.orm import Session as DBSession
 
 from .. import emailer, live, mentions
-from ..access import resolve_project
+from ..access import can, resolve_project
 from ..anchors import (
     Anchorer,
     Span,
@@ -53,12 +57,19 @@ from ..models import (
     Membership,
     Project,
     Review,
+    ReviewRequest,
     Thread,
     User,
     Version,
     utcnow,
 )
-from ..review_serialize import People, review_dict, thread_dict, thread_people
+from ..review_serialize import (
+    People,
+    request_dict,
+    review_dict,
+    thread_dict,
+    thread_people,
+)
 from ..security import SessionOrTokenUser
 from ..serialize import project_url
 from .files import call_live
@@ -84,6 +95,14 @@ class ReviewIn(BaseModel):
 class SubmitIn(BaseModel):
     verdict: Verdict
     summary: str | None = Field(default=None, max_length=MAX_BODY)
+
+
+class RequestIn(BaseModel):
+    # The member to ask, by user id or email.
+    reviewer: str = Field(min_length=1, max_length=320)
+    # What to review, as for a review. HEAD when omitted.
+    ref: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=MAX_BODY)
 
 
 class ThreadIn(BaseModel):
@@ -201,6 +220,11 @@ def _find_comment(db: DBSession, user: User, project: Project, comment_id: str) 
     return comment, db.get(Thread, comment.thread_id)
 
 
+def _find_request(db: DBSession, project: Project, request_id: str) -> ReviewRequest:
+    query = db.query(ReviewRequest).filter(ReviewRequest.project_id == project.id)
+    return _by_id(query, ReviewRequest.id, request_id, "review request")
+
+
 def _pending_review(db: DBSession, project: Project, user: User) -> Review | None:
     return (
         db.query(Review)
@@ -247,12 +271,22 @@ def _counts(db: DBSession, review_ids: list[str]) -> dict[str, dict[str, int]]:
     return out
 
 
+def _versions(db: DBSession, rows: list[Review] | list[ReviewRequest]) -> dict[str, Version]:
+    ids = {r.version_id for r in rows if r.version_id}
+    return {v.id: v for v in db.query(Version).filter(Version.id.in_(ids)).all()} if ids else {}
+
+
 def _reviews_out(db: DBSession, reviews: list[Review]) -> list[dict]:
     counts = _counts(db, [r.id for r in reviews])
-    version_ids = {r.version_id for r in reviews if r.version_id}
-    versions = {v.id: v for v in db.query(Version).filter(Version.id.in_(version_ids)).all()} if version_ids else {}
+    versions = _versions(db, reviews)
     people = People(db, (i for r in reviews for i in (r.reviewer_id, *(r.mentions or []))))
     return [review_dict(r, people, versions.get(r.version_id or ""), counts[r.id]) for r in reviews]
+
+
+def _requests_out(db: DBSession, requests: list[ReviewRequest]) -> list[dict]:
+    versions = _versions(db, requests)
+    people = People(db, (i for rq in requests for i in (rq.reviewer_id, rq.requested_by)))
+    return [request_dict(rq, people, versions.get(rq.version_id or "")) for rq in requests]
 
 
 def _threads_out(db: DBSession, threads: list[Thread], projects: dict[str, Project] | None = None) -> list[dict]:
@@ -377,36 +411,44 @@ def list_reviews(ref: str, db: DB, user: SessionOrTokenUser) -> list[dict]:
     return _reviews_out(db, reviews)
 
 
+def _start(db: DBSession, project: Project, user: User, commit: str, version_id: str | None) -> tuple[Review, bool]:
+    """A new pending review on ``commit``, or the one the user has already.
+    True when it is new."""
+    # One pending review per person and project. The membership row
+    # serialises two starts at the same moment.
+    db.query(Membership).filter(
+        Membership.project_id == project.id, Membership.user_id == user.id
+    ).with_for_update().one()
+    pending = _pending_review(db, project, user)
+    if pending is not None:
+        return pending, False
+    review = Review(
+        id=new_id(),
+        project_id=project.id,
+        reviewer_id=user.id,
+        commit=commit,
+        version_id=version_id,
+        state="pending",
+        summary="",
+    )
+    db.add(review)
+    db.commit()
+    return review, True
+
+
 @router.post("/projects/{ref}/reviews", status_code=201)
 def start_review(ref: str, response: Response, db: DB, user: SessionOrTokenUser, body: ReviewIn | None = None) -> dict:
     """201 with a new pending review, or 200 with the one you have already."""
     project, _ = resolve_project(db, user, ref, "reviewer")
-    pending = _pending_review(db, project, user)
-    if pending is None:
+    review, created = _pending_review(db, project, user), False
+    if review is None:
         at = (body.ref if body and body.ref else "HEAD").strip()
         commit = call_live(live.commit_of, project.id, at)
-        # One pending review per person and project. The membership row
-        # serialises two starts at the same moment.
-        db.query(Membership).filter(
-            Membership.project_id == project.id, Membership.user_id == user.id
-        ).with_for_update().one()
-        pending = _pending_review(db, project, user)
-        if pending is None:
-            version = _version_for(db, project, at, commit)
-            review = Review(
-                id=new_id(),
-                project_id=project.id,
-                reviewer_id=user.id,
-                commit=commit,
-                version_id=version.id if version else None,
-                state="pending",
-                summary="",
-            )
-            db.add(review)
-            db.commit()
-            return _reviews_out(db, [review])[0]
-    response.status_code = 200
-    return _reviews_out(db, [pending])[0]
+        version = _version_for(db, project, at, commit)
+        review, created = _start(db, project, user, commit, version.id if version else None)
+    if not created:
+        response.status_code = 200
+    return _reviews_out(db, [review])[0]
 
 
 @router.get("/projects/{ref}/reviews/{review_id}")
@@ -430,11 +472,16 @@ def submit_review(
     review = db.query(Review).filter(Review.id == review.id).with_for_update().populate_existing().one()
     if review.state != "pending":
         raise unprocessable("This review is submitted already")
+    now = utcnow()
     review.state = "submitted"
     review.verdict = body.verdict
     review.summary = (body.summary or "").strip()
     review.mentions = mentions.mentioned_ids(db, project, review.summary)
-    review.submitted_at = utcnow()
+    review.submitted_at = now
+    # It answers the reviewer's open request, whatever state it is on.
+    db.query(ReviewRequest).filter(
+        ReviewRequest.project_id == project.id, ReviewRequest.reviewer_id == user.id, ReviewRequest.state == "open"
+    ).update({"state": "done", "review_id": review.id, "done_at": now}, synchronize_session=False)
     db.commit()
 
     out = _reviews_out(db, [review])[0]
@@ -485,6 +532,123 @@ def review_changes(ref: str, review_id: str, db: DB, user: SessionOrTokenUser, w
     project, _ = resolve_project(db, user, ref)
     review = _find_review(db, user, project, review_id)
     return call_live(live.diff, project.id, review.commit, "live", word)
+
+
+# --- Review requests -------------------------------------------------------------------
+
+
+def _request_link(project: Project, rq: ReviewRequest) -> str:
+    return f"{project_url(project.name)}/reviews/requests/{rq.id}"
+
+
+@router.get("/projects/{ref}/review-requests")
+def list_requests(ref: str, db: DB, user: SessionOrTokenUser) -> list[dict]:
+    """The open requests, newest first. A request to somebody who left, or who
+    is a viewer now, is left out, because they cannot answer it."""
+    project, _ = resolve_project(db, user, ref)
+    requests = (
+        db.query(ReviewRequest)
+        .join(Membership, (Membership.project_id == ReviewRequest.project_id)
+              & (Membership.user_id == ReviewRequest.reviewer_id))
+        .filter(ReviewRequest.project_id == project.id, ReviewRequest.state == "open", Membership.role != "viewer")
+        .order_by(ReviewRequest.created_at.desc())
+        .all()
+    )
+    return _requests_out(db, requests)
+
+
+@router.post("/projects/{ref}/review-requests", status_code=201)
+def request_review(
+    ref: str, body: RequestIn, response: Response, background: BackgroundTasks, db: DB, user: SessionOrTokenUser
+) -> dict:
+    """Ask a member to review a fixed state, and mail them a link that starts
+    the review there. 201, or 200 when this replaces their open request."""
+    project, _ = resolve_project(db, user, ref, "editor")
+    who = body.reviewer.strip().lower()
+    row = (
+        db.query(Membership, User)
+        .join(User, User.id == Membership.user_id)
+        .filter(Membership.project_id == project.id, or_(User.id == who, func.lower(User.email) == who))
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"{body.reviewer.strip()} is not a member of this paper")
+    membership, reviewer = row
+    if reviewer.id == user.id:
+        raise unprocessable("You cannot ask yourself for a review. Start one instead.")
+    if not can(membership, "reviewer"):
+        raise unprocessable(f"{_name(reviewer)} is a viewer and cannot review. Make them a reviewer first.")
+    at = (body.ref or "HEAD").strip()
+    commit = call_live(live.commit_of, project.id, at)
+    version = _version_for(db, project, at, commit)
+    # One open request per person and project. Their membership row
+    # serialises two requests at the same moment.
+    db.query(Membership).filter(
+        Membership.project_id == project.id, Membership.user_id == reviewer.id
+    ).with_for_update().one()
+    # Locked, so a review submitted right now answers it after this change.
+    rq = (
+        db.query(ReviewRequest)
+        .filter(ReviewRequest.project_id == project.id, ReviewRequest.reviewer_id == reviewer.id,
+                ReviewRequest.state == "open")
+        .with_for_update()
+        .first()
+    )
+    if rq is None:
+        rq = ReviewRequest(id=new_id(), project_id=project.id, reviewer_id=reviewer.id, state="open")
+        db.add(rq)
+    else:
+        response.status_code = 200
+    rq.requested_by = user.id
+    rq.commit = commit
+    rq.version_id = version.id if version else None
+    rq.note = (body.note or "").strip()
+    rq.created_at = utcnow()
+    db.commit()
+
+    background.add_task(
+        emailer.send_review_request, reviewer.email, _name(user), project.title or project.name,
+        (version.label or version.tag) if version else None, rq.note, _request_link(project, rq),
+    )
+    return _requests_out(db, [rq])[0]
+
+
+@router.get("/projects/{ref}/review-requests/{request_id}")
+def get_request(ref: str, request_id: str, db: DB, user: SessionOrTokenUser) -> dict:
+    """One request, open or done."""
+    project, _ = resolve_project(db, user, ref)
+    return _requests_out(db, [_find_request(db, project, request_id)])[0]
+
+
+@router.post("/projects/{ref}/review-requests/{request_id}/start", status_code=201)
+def start_requested_review(
+    ref: str, request_id: str, response: Response, db: DB, user: SessionOrTokenUser
+) -> dict:
+    """Start the review you were asked for, on the state of the request. 201
+    with the new pending review, or 200 with the one you have already,
+    whatever state that one is on."""
+    project, _ = resolve_project(db, user, ref, "reviewer")
+    rq = _find_request(db, project, request_id)
+    if rq.reviewer_id != user.id:
+        raise forbidden("Only the person who was asked can start this review")
+    if rq.state != "open":
+        raise unprocessable("This request is answered already")
+    review, created = _start(db, project, user, rq.commit, rq.version_id)
+    if not created:
+        response.status_code = 200
+    return _reviews_out(db, [review])[0]
+
+
+@router.delete("/projects/{ref}/review-requests/{request_id}")
+def withdraw_request(ref: str, request_id: str, db: DB, user: SessionOrTokenUser) -> dict:
+    """Withdraw an open request. A review started from it stays."""
+    project, _ = resolve_project(db, user, ref, "editor")
+    rq = _find_request(db, project, request_id)
+    if rq.state != "open":
+        raise unprocessable("This request is answered already")
+    db.delete(rq)
+    db.commit()
+    return {"ok": True}
 
 
 # --- Threads -------------------------------------------------------------------------

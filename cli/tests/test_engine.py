@@ -426,6 +426,29 @@ def test_remote_blob_rename_copies_locally(make, server):
     assert server.blobs.downloads == 0
 
 
+def test_new_blobs_with_the_same_content_all_arrive(make, server):
+    co = make()
+    for path in ("a.png", "shots/b.png", "shots/c.png"):
+        write(co.root, path, PNG)
+    sync(co, server)
+    files = server.files()
+    assert all(files[p].kind == "blob" for p in ("a.png", "shots/b.png", "shots/c.png"))
+    assert server.blobs.uploads == 1
+
+
+def test_blobs_changed_to_the_same_content_all_arrive(make, server):
+    co = make()
+    write(co.root, "a.png", PNG)
+    write(co.root, "b.png", PNG + b"b")
+    sync(co, server)
+    write(co.root, "a.png", PNG + b"new")
+    write(co.root, "b.png", PNG + b"new")
+    sync(co, server)
+    files = server.files()
+    assert files["a.png"].sha == files["b.png"].sha
+    assert server.blobs.data[files["a.png"].sha] == PNG + b"new"
+
+
 def test_blob_upload_waits_for_the_server(make, server):
     co = make()
     server.blobs.online = False

@@ -167,3 +167,79 @@ def test_questions_across_projects():
             assert vic.get("/api/projects/a").json()["question_count"] == 1
         with second_client("ed@example.com") as ed:
             assert [q["project_name"] for q in ed.get("/api/questions").json()] == ["a"]
+
+
+def _clear(client, p: dict, kind: str):
+    return client.delete(f"/api/projects/{p['id']}/dates/{_date(p, kind)['id']}/answer")
+
+
+def test_done_before_the_day_and_back():
+    with running_app() as client:
+        sign_in(client)
+        p = _project(
+            client,
+            "early",
+            [{"kind": "abstract", "date": "2099-01-08"}, {"kind": "submission", "date": "2099-01-15"}],
+        )
+        assert p["next_date"]["kind"] == "abstract"
+        p = _answer(client, p, "abstract", "yes").json()
+        assert _date(p, "abstract")["answer"] == "yes"
+        assert p["next_date"]["kind"] == "submission"
+        # Handed in early: the version is the current state.
+        p = _answer(client, p, "submission", "yes", version={"at": "deadline"}).json()
+        assert [v["tag"] for v in p["versions"]] == ["submission"]
+        assert p["next_date"] is None
+
+        r = _clear(client, p, "submission")
+        assert r.status_code == 200, r.text
+        p = r.json()
+        d = _date(p, "submission")
+        assert d["answer"] is None and d["answered_at"] is None
+        assert p["next_date"]["kind"] == "submission"
+        # The version stays.
+        assert [v["tag"] for v in p["versions"]] == ["submission"]
+        p = _clear(client, p, "abstract").json()
+        assert p["next_date"]["kind"] == "abstract"
+        # Nothing to take back is fine too.
+        assert _clear(client, p, "abstract").status_code == 200
+
+        client.post(f"/api/projects/{p['id']}/members", json={"email": "vic@example.com", "role": "viewer"})
+        with second_client("vic@example.com") as vic:
+            assert vic.delete(f"/api/projects/{p['id']}/dates/{_date(p, 'abstract')['id']}/answer").status_code == 403
+
+
+def test_taking_an_answer_back_resets_its_outcome():
+    with running_app() as client:
+        sign_in(client)
+        p = _project(
+            client,
+            "undo",
+            [
+                {"kind": "submission", "date": "2026-01-15"},
+                {"kind": "notification", "date": "2026-03-01"},
+                {"kind": "revision", "date": "2026-05-01"},
+            ],
+        )
+        p = _answer(client, p, "submission", "no").json()
+        assert p["outcome"] == "not_submitted"
+        p = _clear(client, p, "submission").json()
+        assert p["outcome"] is None
+        assert [q["kind"] for q in p["questions"]] == ["submission"]
+
+        p = _answer(client, p, "submission", "yes").json()
+        p = _answer(client, p, "notification", "revision").json()
+        p = _answer(client, p, "revision", "yes").json()
+        assert p["outcome"] is None
+        # Waiting for the revision again.
+        p = _clear(client, p, "revision").json()
+        assert p["outcome"] == "revision"
+        assert [q["kind"] for q in p["questions"]] == ["revision"]
+
+        p = _clear(client, p, "notification").json()
+        assert p["outcome"] is None
+        assert [q["kind"] for q in p["questions"]] == ["notification"]
+
+        # An outcome set since stays.
+        p = _answer(client, p, "notification", "accepted").json()
+        client.patch(f"/api/projects/{p['id']}", json={"outcome": "withdrawn"})
+        assert _clear(client, p, "notification").json()["outcome"] == "withdrawn"

@@ -177,7 +177,7 @@ class _Todo:
 
     skip: set[str] = field(default_factory=set)  # paths left alone this step
     again: set[str] = field(default_factory=set)  # paths to run through another step
-    uploads: dict[str, str] = field(default_factory=dict)  # sha -> path
+    uploads: dict[str, set[str]] = field(default_factory=dict)  # sha -> paths
     downloads: dict[str, set[str]] = field(default_factory=dict)  # sha -> paths
     changed: bool = False  # shadows or document changed, so state is saved
     reload_rules: bool = False
@@ -407,7 +407,7 @@ class Engine:
             out.deleted.append(p)
         for q, content in sorted(creations.items()):
             if content.kind == "blob" and not self._have_blob(content.sha):
-                todo.uploads[content.sha] = q
+                todo.uploads.setdefault(content.sha, set()).add(q)
                 todo.skip.add(q)
                 continue
             self._add(q, content)
@@ -416,7 +416,7 @@ class Engine:
     def _push_change(self, p: str, base: Shadow, cur: y.Entry | None, content: Content,
                      todo: _Todo, out: Report) -> None:
         if content.kind == "blob" and not self._have_blob(content.sha):
-            todo.uploads[content.sha] = p
+            todo.uploads.setdefault(content.sha, set()).add(p)
             todo.skip.add(p)
             return
         if cur is None:
@@ -730,23 +730,26 @@ class Engine:
         if self.blobs is None:
             out.pending = True
             return retry
-        for sha, p in todo.uploads.items():
-            try:
-                data = (self.root / p).read_bytes()
-            except OSError:
-                retry.add(p)
-                continue
-            if sha256(data) != sha:
-                retry.add(p)  # changed again meanwhile, the next step reads it anew
+        for sha, paths in todo.uploads.items():
+            # Files with the same content share one upload, which any of them can feed.
+            for p in sorted(paths):
+                try:
+                    data = (self.root / p).read_bytes()
+                except OSError:
+                    continue
+                if sha256(data) == sha:
+                    break
+            else:
+                retry |= paths  # changed again meanwhile, the next step reads them anew
                 continue
             try:
                 await self.blobs.upload(sha, data)
             except Exception as exc:  # noqa: BLE001 - network or server, retried later
                 out.pending = True
-                self._warn_once(out, f"Cannot upload {p} yet ({exc})")
+                self._warn_once(out, f"Cannot upload {', '.join(sorted(paths))} yet ({exc})")
                 continue
             self._uploaded.add(sha)
-            retry.add(p)
+            retry |= paths
         for sha, paths in todo.downloads.items():
             try:
                 data = await self.blobs.download(sha)

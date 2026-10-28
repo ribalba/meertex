@@ -416,6 +416,23 @@ def answer_date(db: DBSession, project: Project, d: ProjectDate, body: AnswerIn,
     project.updated_at = utcnow()
 
 
+def clear_answer(project: Project, d: ProjectDate) -> None:
+    """Take the answer back, as unticking a date's check mark does. The outcome
+    the answer set goes back too, unless it was changed since. Versions the
+    answer made stay. The caller commits."""
+    if d.answer is None:
+        return
+    if d.kind == "notification" and project.outcome == d.answer:
+        set_outcome(project, None)
+    elif d.kind == "revision" and d.answer == "yes" and project.outcome is None:
+        # Waiting for the revision again.
+        set_outcome(project, "revision")
+    elif d.kind in ("submission", "abstract") and d.answer == "no" and project.outcome == "not_submitted":
+        set_outcome(project, None)
+    _clear_answer(d)
+    project.updated_at = utcnow()
+
+
 # --- Projects as the API sends them (§11) ------------------------------------------
 
 

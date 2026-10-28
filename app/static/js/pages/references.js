@@ -1,7 +1,8 @@
 // The References tab (docs/DESIGN.md §16, In the web app), like GitHub's issue
 // list. /p/<name>/references shows the last check at the top, a filter by
 // status and a search, and one row per .bib entry. A row opens to its
-// findings, the record next to the entry, the claims and the checked mark.
+// findings, the record next to the entry, the whole entry as the .bib file
+// has it, the claims and the checked mark.
 //
 // The .bib files stay the source. Every write here ("Take this value", the
 // checked mark, a new entry) is an edit of them made by the server, and the
@@ -560,6 +561,7 @@ function entryDetail(state, entry) {
     }));
 
   if (entry.record) parts.push(compareTable(entry));
+  if (entry.bibtex) parts.push(sourceBlock(entry));
   if (claims.length) parts.push(claimList(state, claims, entry));
 
   // Where it is, when it was looked up, the mark, the citations.
@@ -657,6 +659,13 @@ function compareTable(entry) {
             r.source ? h("span", { class: "color-muted text-normal", text: ` from ${r.source}` }) : null,
             link ? [" ", h("a", { href: link, target: "_blank", rel: "noopener", "aria-label": "Open the record", title: "Open the record" }, icon("link", { size: 12 }))] : null))),
         h("tbody", {}, rows))));
+}
+
+// Every field, also the ones the table leaves out (url, note, urldate, ...).
+function sourceBlock(entry) {
+  return h("div", { class: "rf-source" },
+    h("div", { class: "rf-source-head text-small color-muted", text: `The entry in ${where(entry.path, entry.line)}` }),
+    h("pre", { class: "rf-bibtex", text: entry.bibtex }));
 }
 
 function claimList(state, claims, entry) {

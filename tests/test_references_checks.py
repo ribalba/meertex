@@ -237,6 +237,78 @@ def test_a_hit_of_the_entrys_year_wins_over_a_copy():
     assert codes(checks.lookup(entry(text), src).findings) == {"year": "warning"}
 
 
+SWAPPED = rec(
+    "doi.org", doi="10.1109/GREENS66463.2025.00009",
+    title="PowerLetrics: An Open-Source Framework for Power and Energy Metrics for Linux",
+    people=[{"family": "Geerd-Dietger", "given": "Hoffmann"}, {"family": "Verena", "given": "Majuntke"}],
+    years=[2025], venue="2025 IEEE/ACM 9th International Workshop on Green and Sustainable Software (GREENS)",
+    pages="28-30",
+)
+POWERLETRICS = r"""@inproceedings{p,
+  author = {Hoffmann, Geerd-Dietger and Majuntke, Verena},
+  title = {{PowerLetrics}: An Open-Source Framework for Power and Energy Metrics for {Linux}},
+  booktitle = {Proceedings of the IEEE/ACM 9th International Workshop on Green and Sustainable Software (GREENS)},
+  pages = {28--30},
+  year = {2025},
+  doi = {10.1109/GREENS66463.2025.00009},
+}"""
+
+
+def test_names_the_record_has_the_wrong_way_round():
+    src = FakeSources(doi={SWAPPED["doi"].lower(): found(SWAPPED)})
+    f = checks.lookup(entry(POWERLETRICS), src).findings
+    assert codes(f) == {"authors": "warning"}
+    assert "Geerd-Dietger Hoffmann and Verena Majuntke the wrong way round" in f[0]["message"]
+    # The swapped names are no value to take.
+    assert f[0]["record_value"] is None
+
+    initials = POWERLETRICS.replace("Geerd-Dietger and Majuntke, Verena", "G.-D. and Majuntke, V.")
+    assert codes(checks.lookup(entry(initials), src).findings) == {"authors": "warning"}
+
+    # Found by its title, it is the same work and not one no source has.
+    search = FakeSources(crossref_search={SWAPPED["title"].lower(): found(SWAPPED)})
+    no_doi = POWERLETRICS.replace("  doi = {10.1109/GREENS66463.2025.00009},\n", "")
+    f = checks.lookup(entry(no_doi), search).findings
+    assert codes(f) == {"authors": "warning", "suggest_doi": "info"}
+
+
+LNCS = "Lecture Notes in Computer Science"
+PROFES = "Product-Focused Software Process Improvement. Industry, Doctoral-Symposium, Tutorial, and Workshop Papers"
+CHAPTER = rec("doi.org", doi="10.1007/978-3-032-12092-2_15",
+              title="Toward Greener Background Processes: Measuring Energy Cost of Autosave Feature",
+              people=["Maria Küüsvek", "Hina Anwar"], years=[2025], venue=LNCS, pages="206-217")
+AUTOSAVE = r"""@inproceedings{k,
+  author = {K{\"u}{\"u}svek, Maria and Anwar, Hina},
+  title = {Toward Greener Background Processes: Measuring Energy Cost of Autosave Feature},
+  booktitle = {Product-Focused Software Process Improvement (PROFES)},
+  series = {Lecture Notes in Computer Science},
+  pages = {206--217},
+  year = {2025},
+  doi = {10.1007/978-3-032-12092-2_15},
+}"""
+
+
+def test_a_book_in_a_series():
+    work = rec("crossref", doi=CHAPTER["doi"], title=CHAPTER["title"], venues=[LNCS, PROFES])
+    src = FakeSources(doi={CHAPTER["doi"]: found(CHAPTER)}, crossref_work={CHAPTER["doi"]: found(work)})
+    assert checks.lookup(entry(AUTOSAVE), src).findings == []
+
+    # The series in booktitle, as taking doi.org's venue would have made it.
+    series = AUTOSAVE.replace("Product-Focused Software Process Improvement (PROFES)", LNCS)
+    f = checks.lookup(entry(series), src).findings
+    assert codes(f) == {"venue": "warning"} and "by hand" in f[0]["message"]
+    assert f[0]["record_value"] is None
+
+    other = AUTOSAVE.replace("Product-Focused Software Process Improvement (PROFES)", "Nature")
+    f = checks.lookup(entry(other), src).findings
+    assert codes(f) == {"venue": "warning"} and "more than one venue" in f[0]["message"]
+    assert f[0]["record_value"] is None
+
+    # Without Crossref's titles the series is all doi.org has, and the entry names it in series.
+    alone = FakeSources(doi={CHAPTER["doi"]: found(CHAPTER)})
+    assert checks.lookup(entry(AUTOSAVE), alone).findings == []
+
+
 def test_books_compare_only_what_editions_share():
     book = rec("openlibrary", type="book", title="Deep Learning", years=[2017], isbn="9780262035613",
                people=["Ian Goodfellow", "Yoshua Bengio", "Aaron Courville", "Francis Bach"])

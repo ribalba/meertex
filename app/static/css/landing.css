@@ -429,6 +429,9 @@ code {
 .card p { color: var(--fg-muted); font-size: 15px; }
 .card-wide { grid-column: 1 / -1; }
 .card .code { font-size: 12px; }
+/* The download buttons line up at the bottom of cards of different lengths. */
+#download .docs-links { margin-top: auto; padding-top: 6px; }
+.download-note { max-width: 720px; margin: 32px auto 0; color: var(--fg-muted); font-size: 15px; text-align: center; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .chip {
@@ -657,6 +660,8 @@ code {
 /* --- Narrow screens -------------------------------------------------------------- */
 
 @media (max-width: 1099px) {
+  /* The nav would wrap with it. The hero and the footer link the section too. */
+  .site-nav a[href="#download"] { display: none; }
   .grid, .map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* Nine cards and a wide one in two columns leave the last card alone. It
      takes the whole row. */

@@ -19,8 +19,10 @@ dist/
 data/
 *.log
 
-# --- node ----------------------------------------------------------------------
+# --- node / electron -----------------------------------------------------------
 node_modules/
+# The desktop app's icon. Python's build/ above would hide it.
+!electron/build/
 
 # --- editors / OS ------------------------------------------------------------
 .DS_Store

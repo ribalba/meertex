@@ -1,0 +1,122 @@
+# Builds the desktop app (electron/) for macOS, Windows and Linux on every push
+# to main that changes it, and publishes the installers as a GitHub release.
+# The landing page links to the newest one under fixed names
+# (releases/latest/download/<file>), so its links never go stale. A merged
+# Dependabot pull request for Electron ships the same way.
+#
+# The version is VERSION plus the run number (0.1.0.42), like the CLI's. The
+# app itself says VERSION, and the run number is its build number (macOS
+# CFBundleVersion, Windows FileVersion) and the release tag desktop-0.1.0.42.
+#
+# The builds are not signed with a paid certificate. macOS gets an ad-hoc
+# signature, so Gatekeeper lets a person allow it once under System Settings,
+# Privacy & Security, "Open Anyway". Windows shows SmartScreen, "More info",
+# "Run anyway". Signing needs an Apple Developer ID or a Windows code signing
+# certificate as secrets (https://electron.build/code-signing).
+
+name: Desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "electron/**"
+      - "VERSION"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release at a time, in push order, so "latest" is always the newest.
+concurrency:
+  group: desktop
+  cancel-in-progress: false
+
+env:
+  # The files every release has. app/static/landing.html links to each of
+  # them, and tests/test_landing.py checks that the two lists agree.
+  FILES: meertex-mac-arm64.dmg meertex-mac-x64.dmg meertex-windows-setup.exe meertex-linux-x86_64.AppImage meertex-linux-amd64.deb meertex-linux-x86_64.rpm
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # The .rpm only here and not in package.json, so `make dist` works
+          # on a machine without rpmbuild.
+          - os: ubuntu-24.04
+            args: --linux AppImage deb rpm --x64
+          # An Apple silicon runner. It builds the Intel app as well.
+          - os: macos-15
+            args: --mac dmg --arm64 --x64 -c.mac.identity=- -c.mac.hardenedRuntime=false
+          - os: windows-2025
+            args: --win nsis --x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+      - name: Install rpmbuild
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Install
+        run: npm ci
+      - name: Stamp the version
+        run: |
+          base="$(tr -d '[:space:]' < ../VERSION)"
+          npm pkg set version="${base}"
+          echo "BUILD_VERSION=${base}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+      - name: Build
+        run: npx electron-builder ${{ matrix.args }} --publish never -c.buildVersion="${BUILD_VERSION}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            electron/dist/meertex-mac-*.dmg
+            electron/dist/meertex-windows-setup.exe
+            electron/dist/meertex-linux-*.AppImage
+            electron/dist/meertex-linux-*.deb
+            electron/dist/meertex-linux-*.rpm
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: dist/
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+          files=()
+          for f in $FILES; do
+            test -f "dist/$f" || { echo "missing dist/$f" >&2; ls -l dist >&2; exit 1; }
+            files+=("dist/$f")
+          done
+          gh release create "desktop-${version}" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "meertex desktop ${version}" \
+            --notes "The desktop app, built from ${GITHUB_SHA::7}. It opens https://meertex.com.
+
+          - macOS: meertex-mac-arm64.dmg (Apple silicon) or meertex-mac-x64.dmg (Intel). The app is not notarized. On first start, allow it under System Settings, Privacy & Security, \"Open Anyway\".
+          - Windows: meertex-windows-setup.exe. SmartScreen warns once. Choose \"More info\", \"Run anyway\".
+          - Linux: meertex-linux-amd64.deb (Debian, Ubuntu), meertex-linux-x86_64.rpm (Fedora), or meertex-linux-x86_64.AppImage to run without installing."

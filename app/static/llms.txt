@@ -111,14 +111,14 @@ A meertex server is four containers.
 - **compile** is TeX Live 2025 behind a small HTTP service. It runs as an unprivileged user with a read-only root file system and no capabilities. TeX runs without shell escape and in kpathsea's paranoid mode, so a document reads and writes only inside its own job folder.
 - **languagetool** is LanguageTool 6.8, the spelling and grammar checker. Only `web` talks to it, with paragraphs it has not checked before, and `web` refuses to send text to a checker on a public address unless told otherwise.
 
-The CLI is a Python package on PyPI (`pipx install meertex`), published again on every change, so `pipx upgrade meertex` brings the newest version. Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
+The CLI is a Python package on PyPI (`pip install meertex`), published again on every change, so `pip install --upgrade meertex` brings the newest version. Its sync client keeps a shadow of every file, merges local and remote edits, and writes files atomically.
 
 ## Get started
 
 Sign in at https://meertex.com/login with an email address. The browser editor needs nothing else. For a local folder, install the CLI (Python 3.11 or newer).
 
 ```bash
-pipx install meertex                       # or: uv tool install meertex
+pip install meertex                        # or: uv tool install meertex
 meertex login --server meertex.com         # mails a sign-in code
 meertex checkout 2027-icse-green-llm       # or: meertex new ... --checkout
 meertex service install                    # runs meertex sync in the background (Linux, macOS)

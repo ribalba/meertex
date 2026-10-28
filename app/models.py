@@ -409,6 +409,31 @@ class Review(Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+REQUEST_STATES = ("open", "done")
+
+
+class ReviewRequest(Base):
+    """An author asking a member to review the paper on a fixed state (§13,
+    Requests). One open request per person and project. It is done when that
+    person submits a review. Withdrawing deletes it."""
+
+    __tablename__ = "review_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # The state to review, and the version it is, if it is one.
+    commit: Mapped[str] = mapped_column(String(64), nullable=False)
+    version_id: Mapped[str | None] = mapped_column(ForeignKey("versions.id", ondelete="SET NULL"))
+    note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # One of REQUEST_STATES. review_id is the review that answered it.
+    state: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    review_id: Mapped[str | None] = mapped_column(ForeignKey("reviews.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    done_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class Thread(Base):
     """A conversation about a span of one file, anchored to a snapshot (the
     base) and mapped to the live text by diffing (§13, Anchoring)."""

@@ -303,6 +303,7 @@ img.avatar { object-fit: cover; background: var(--bg-subtle); }
 }
 .btn-octicon:hover { color: var(--accent); background: var(--bg-muted); }
 .btn-octicon.danger:hover { color: var(--danger); }
+.btn-octicon.done-toggle:hover, .btn-octicon.done-toggle.is-done { color: var(--success); }
 .btn-octicon:disabled { color: var(--fg-subtle); cursor: not-allowed; background: none; }
 .btn-link {
   display: inline; padding: 0; color: var(--accent); background: none; border: 0; cursor: pointer;
@@ -1616,6 +1617,9 @@ kbd {
 .rv-review-counts { display: flex; flex: none; flex-direction: column; align-items: flex-end; gap: 2px; color: var(--fg-muted); }
 .rv-review-counts:hover { text-decoration: none; }
 .rv-review-counts span { display: inline-flex; align-items: center; gap: 4px; }
+.rv-request-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+/* The person to ask for a review. .choice span would grey the initials. */
+.rv-person-choice .avatar { margin-top: 1px; color: #fff; font-size: 10px; }
 
 .rv-head { padding-bottom: 16px; }
 .rv-head-top { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 16px; }
@@ -1846,6 +1850,7 @@ textarea.rv-textarea { min-height: 72px; }
 @media (max-width: 767px) {
   .rv-review-row { flex-wrap: wrap; }
   .rv-review-counts { flex-direction: row; flex-wrap: wrap; flex-basis: 100%; gap: 12px; padding-left: 28px; }
+  .rv-request-actions:not(:empty) { flex-basis: 100%; padding-left: 28px; }
   .rv-review-summary { white-space: normal; }
   .rv-head-actions { margin-left: 0; }
   .rv-title { font-size: 20px; }
@@ -2038,6 +2043,8 @@ textarea.rv-textarea { min-height: 72px; }
   max-height: 280px; padding: 12px; overflow: auto; white-space: pre-wrap; word-break: break-word;
   background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius);
 }
+.rf-source-head { margin-bottom: 6px; }
+.rf-source .rf-bibtex { max-height: none; }
 
 /* The reference check's problems in the editor's PDF pane (editor-pdf.js). */
 .pdf-problem .rf-problem-tag { flex: none; padding: 0 6px; font-size: 11px; line-height: 16px; }

@@ -293,6 +293,30 @@ def record_families(record: dict) -> list[str]:
     return [k for k in keys if k]
 
 
+def swapped_people(entry: Entry, record: dict) -> list[int]:
+    """The indexes of the record's people whose given and family names are
+    the wrong way round, as the entry's authors show. Some publishers deposit
+    names like that, so the record's names must not be taken then."""
+    names, _ = latex.split_names(entry.get("author") or entry.get("editor") or "")
+    parsed = [latex.parse_name(n) for n in names]
+    out = []
+    for i, p in enumerate(record.get("people") or []):
+        family, given = latex.words(str(p.get("family") or "")), latex.words(str(p.get("given") or ""))
+        if family and given and any(latex.words(n.family) == given and _same_given(latex.words(n.first), family)
+                                    for n in parsed):
+            out.append(i)
+    return out
+
+
+def _same_given(mine: list[str], theirs: list[str]) -> bool:
+    """Whether two given names agree, initials (G.-D.) with the full name too."""
+    if not mine:
+        return False
+    if all(len(w) == 1 for w in mine):
+        return [w[0] for w in theirs] == mine
+    return mine == theirs
+
+
 def clean_title(title: str) -> str:
     return re.sub(r"^\s*(?:retracted|withdrawn)(?:\s+article)?\s*[:.\-]\s*", "", title or "", flags=re.IGNORECASE)
 
@@ -367,7 +391,12 @@ def compare(entry: Entry, record: dict, *, from_doi: bool) -> tuple[list[dict], 
     same_title = sim >= 0.97
     prefix = bool(bt and rt) and latex.is_prefix_title(bt, rt)
     mine, others = families(entry)
-    theirs = record_families(record)
+    swapped = swapped_people(entry, record)
+    # Swapped names are compared the right way round, and named in a warning.
+    people = [{"family": p.get("given") or "", "given": p.get("family") or ""} if i in swapped else p
+              for i, p in enumerate(record.get("people") or [])]
+    keys = [latex.family_key(str(p.get("family") or "")) for p in people]
+    theirs = [k for k in keys if k]
     common = set(mine) & set(theirs)
 
     if from_doi and bt and rt and sim < 0.6 and not prefix and (not mine or not theirs or not common):
@@ -381,14 +410,19 @@ def compare(entry: Entry, record: dict, *, from_doi: bool) -> tuple[list[dict], 
                            record_value=build.title(rt), source=source, url=_doi_url(record)))
 
     if mine and theirs:
-        record_value = build.people(record.get("people") or [])
+        # The record's names are only offered to take when they are the right way round.
+        record_value = None if swapped else build.people(record.get("people") or [])
         if not common:
             out.append(finding("authors", ERROR, f"None of the authors is in the record, which has {_short_people(record, 5)}.",
                                field="author", value=entry.get("author"), record_value=record_value, source=source))
         else:
             words = []
-            missing = [] if others else [n for n, k in zip(record.get("authors") or [], record_families(record), strict=False)
-                                         if k not in set(mine)]
+            if swapped:
+                shown = _list([f"{people[i]['given']} {people[i]['family']}".strip() for i in swapped])
+                words.append(f"The record has the given and family names of {shown} the wrong way round. "
+                             "Keep the entry's names, and mark the entry as checked once they are right.")
+            names = [f"{p.get('given') or ''} {p.get('family') or ''}".strip() for p in people]
+            missing = [] if others else [n for n, k in zip(names, keys, strict=False) if k and k not in set(mine)]
             extra = [k for k in mine if k not in set(theirs)]
             if missing:
                 words.append(f"The record also has {_list(missing)}.")
@@ -411,10 +445,9 @@ def compare(entry: Entry, record: dict, *, from_doi: bool) -> tuple[list[dict], 
                            record_value=str(record.get("year") or years[0]), source=source))
 
     venue_field = next((n for n in ("journal", "journaltitle", "booktitle") if entry.get(n)), None)
-    record_venue = record.get("venue") or ""
-    if venue_field and record_venue and not record.get("arxiv") and not venue_matches(entry.get(venue_field) or "", record_venue):
-        out.append(finding("venue", WARNING, f"The record's venue is “{record_venue}”.", field=venue_field,
-                           value=entry.get(venue_field), record_value=build.escape(record_venue), source=source))
+    venues = [v for v in record.get("venues") or [record.get("venue") or ""] if v]
+    if venue_field and venues and not record.get("arxiv"):
+        out += _venue(entry, venue_field, venues, source)
 
     for name, key in (("volume", "volume"), ("number", "number"), ("pages", "pages")):
         mine_value, theirs_value = entry.get(name) or "", str(record.get(key) or "")
@@ -447,6 +480,29 @@ def compare(entry: Entry, record: dict, *, from_doi: bool) -> tuple[list[dict], 
                 out.append(finding("missing", INFO, f"The record has the {name}, {record[key]}.", field=name,
                                    record_value=shown, source=source))
     return out, False
+
+
+def _venue(entry: Entry, name: str, venues: list[str], source: str) -> list[dict]:
+    """The venue finding. A record with several venues is a book in a series,
+    and which of them belongs in ``name`` is the author's call, so it offers
+    none to take."""
+    mine = entry.get(name) or ""
+    series = entry.get("series") or ""
+    if len(venues) == 1:
+        # The series the entry names in ``series`` is no other venue.
+        if venue_matches(mine, venues[0]) or (series and latex.similarity(series, venues[0]) >= 0.9):
+            return []
+        return [finding("venue", WARNING, f"The record's venue is “{venues[0]}”.", field=name, value=mine,
+                        record_value=build.escape(venues[0]), source=source)]
+    named = _list([f"“{v}”" for v in venues])
+    if not any(venue_matches(mine, v) for v in venues):
+        message = f"The record names more than one venue, {named}, and {name} matches none of them. Set it by hand."
+    elif series and latex.similarity(mine, series) >= 0.9:
+        message = (f"{name} names the series, as series does. The record names {named}. "
+                   f"Put the title of the book into {name} by hand.")
+    else:
+        return []
+    return [finding("venue", WARNING, message, field=name, value=mine, source=source)]
 
 
 def _list(names: list[str]) -> str:
@@ -527,6 +583,8 @@ def _by_doi(entry: Entry, ids: Ids, src: Sources, out: Lookup) -> None:
                                         source="arxiv"))
             return
         record = paper.record
+    if not (record.get("arxiv") or doi.startswith("10.48550/")):
+        record = _crossref_venues(record, doi, src)
     findings, mismatch = compare(entry, record, from_doi=bool(ids.doi) or bool(ids.arxiv))
     out.findings += findings
     if mismatch:
@@ -554,6 +612,16 @@ def _doi_not_found(entry: Entry, doi: str, src: Sources) -> dict:
     elif owner.ok:
         message += f" No publisher at Crossref has the prefix {prefix}."
     return finding("doi_not_found", ERROR, message, field="doi", value=entry.get("doi"), source="doi.org")
+
+
+def _crossref_venues(record: dict, doi: str, src: Sources) -> dict:
+    """The record with Crossref's container titles. doi.org gives only the
+    first, which for a book in a series is the series."""
+    work = src.crossref_work(doi)
+    venues = (work.record or {}).get("venues") or [] if work.ok else []
+    if len(venues) > len(record.get("venues") or []):
+        return {**record, "venues": venues}
+    return record
 
 
 def _crossref_extras(entry: Entry, doi: str, src: Sources, out: Lookup) -> None:
@@ -628,7 +696,7 @@ def _hit(entry: Entry, record: dict) -> bool:
         return False
     mine, _ = families(entry)
     theirs = record_families(record)
-    return not mine or not theirs or bool(set(mine) & set(theirs))
+    return not mine or not theirs or bool(set(mine) & set(theirs)) or bool(swapped_people(entry, record))
 
 
 def _search(entry: Entry, src: Sources, out: Lookup, *, quiet: bool = False, suggest_reason: str = "") -> None:

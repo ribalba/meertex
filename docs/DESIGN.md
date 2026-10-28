@@ -54,6 +54,11 @@ meerpad's scheme, carried over unchanged. You enter your email and get a
 link and a six-character code, and either one signs you in. There are no
 passwords. A brand-new email gets an account on its first sign-in.
 
+The desktop app (`electron/`) asks with `client: "desktop"`. Its mail then
+carries a `meertex://login?token=` link instead of the web one. The app loads
+the ordinary callback with that token inside its window, so the session lands
+there and not in the system browser. The code works in the app as well.
+
 A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, created_at`.
 `naming_pattern` is described in §4, `writing_days` and the reminders in §5,
 `mention_mails` in §13 (Mentions).
@@ -487,6 +492,17 @@ A question goes out as
 The outcome can also be set directly with `PATCH /api/projects/{ref} {outcome}`,
 for a paper whose dates were never entered.
 
+A question can be answered before its date passes. The Overview has a check
+mark on every date whose question takes `yes`, next to edit and delete. It
+answers `yes` and is hidden on a plan. On a hand-in it opens the version
+dialog, which before the deadline always keeps the current state. A date
+answered `yes` is no longer the next date and gets no reminders. Unticking
+it calls `DELETE /api/projects/{ref}/dates/{id}/answer`, which clears the
+answer of any date. The outcome that answer set goes back if it was not
+changed since. A notification's outcome goes back to null, `revision` after
+a revision's `yes` and null after a `no` on `submission` or `abstract`.
+Versions the answer made stay.
+
 ## 7. Versions
 
 A version is a fixed, named state of the project's files. Its files never
@@ -848,7 +864,8 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 
 ### Auth (meerpad's)
 
-- `POST /api/auth/login {email, client?, next?}`
+- `POST /api/auth/login {email, client?, next?}`. `client` is `web` (the
+  default), `cli` or `desktop` (§2, Accounts).
 - `POST /api/auth/verify-code {email, code}`
 - `GET /api/auth/callback?token=`
 - `GET/PATCH /api/auth/me`. `PATCH` takes `name`, `timezone`, `naming_pattern`, `writing_days`,
@@ -920,6 +937,8 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 - `DELETE /api/projects/{ref}/dates/{id}`
 - `POST /api/projects/{ref}/dates/{id}/answer {answer, due_at?, date?, tz?, version?: {at?, note?}}`
   returns the project.
+- `DELETE /api/projects/{ref}/dates/{id}/answer` takes the answer back (§6)
+  and returns the project.
 
 ### Members
 
@@ -1071,10 +1090,14 @@ thread   {id, review_id, state, pending, created_by: person, created_at, updated
           accepted: {by: person, at} | null,
           comments: [comment]}
 comment  {id, author: person, kind, body, suggestion, mentions: [person], created_at, edited_at}
+request  {id, reviewer: person, requested_by: person, state, note, commit,
+          version: {id, tag, label} | null, review_id, created_at, done_at}
 ```
 
 - `review.state` is `pending` or `submitted`. `verdict` is null while
   pending, then `approve`, `comment` or `changes_requested`.
+- `request.state` is `open`, or `done` once the person asked submitted a
+  review. `review_id` is then that review (see Requests).
 - `thread.state` is `open`, `resolved` or `accepted`. `pending` is true for a
   thread of a review that is not submitted yet. Only its reviewer sees it.
 - `comment.kind` is `comment`, or one of the events `resolved`, `accepted`,
@@ -1134,6 +1157,8 @@ to a snapshot instead, and mapped to the live text by diffing.
 | Resolve, apply a suggestion | editor, owner |
 | Accept | the thread's creator, or the owner |
 | Edit or delete a comment | its author |
+| Request a review, withdraw a request | editor, owner |
+| Start a requested review | the person asked |
 
 - A user has at most one pending review per project. Starting a second one
   returns the pending one.
@@ -1170,7 +1195,39 @@ to a snapshot instead, and mapped to the live text by diffing.
   pending review. Thread mails link to
   `<BASE_URL>/p/<name>/reviews/<review id>#thread-<thread id>`, or to
   `<BASE_URL>/p/<name>/reviews#thread-<thread id>` for a single comment.
-  A mention changes who hears of it (see Mentions).
+  A mention changes who hears of it (see Mentions). A review request mails
+  the person asked (see Requests).
+
+### Requests
+
+The authors ask a coauthor for a review, like GitHub's requested reviewers.
+The person gets a mail with a link that starts the review on the state asked
+for.
+
+- **Asking.** An editor or the owner names a member (by user id or email) and
+  a state (`ref`: `HEAD` by default, a version's tag, a commit or `live`,
+  resolved to a commit at once as for a review), with an optional note.
+  Yourself is 422, a viewer is 422, somebody who is not a member is 404.
+- **One open request per person and project.** Asking again replaces the
+  open one (its state, note, asker and time) and mails again. The person's
+  membership row serialises two requests at the same moment.
+- **The mail** says who asks, for which version ("the version "Submission"
+  of ...") or for the text as it reads now, the note, and links to
+  `<BASE_URL>/p/<name>/reviews/requests/<request id>`. It goes out whatever
+  `mention_mails` says, because it is addressed to that person.
+- **The link.** The web app starts the review from the request
+  (`/review-requests/{id}/start`) and opens its Files view. A pending review
+  of your own comes back instead, on whatever state it is (200), because there
+  is one per person. A request that was answered opens the review that
+  answered it, a withdrawn one the Reviews tab. Anybody else who follows the
+  link lands on the Reviews tab. Starting does not answer the request.
+- **Answered.** Submitting any review of the project answers every open
+  request to its reviewer: `state` becomes `done`, with `review_id` and
+  `done_at`. A done request cannot be started or withdrawn (422).
+- **Withdrawing** deletes an open request without a mail. A review started
+  from it stays.
+- The list leaves out requests to people who left the paper or are viewers
+  now, because they cannot answer them.
 
 ### Mentions
 
@@ -1251,6 +1308,16 @@ mentioned gets a mail, unless they turned that off. The code is in
 - `POST /api/projects/{ref}/threads/{id}/resolve {note?}`, `/accept {note?}`,
   `/reopen {note?}`, `/apply {comment_id?}` (the newest suggestion when
   omitted). Each returns the thread.
+- `GET /api/projects/{ref}/review-requests` lists the open requests, newest
+  first. Every member sees them.
+- `POST /api/projects/{ref}/review-requests {reviewer, ref?, note?}` asks for a
+  review and returns the request. 201, or 200 when it replaced an open one.
+- `GET /api/projects/{ref}/review-requests/{id}` returns one request, open or
+  done. Request ids may be prefixes too.
+- `POST /api/projects/{ref}/review-requests/{id}/start` starts the review on
+  the request's state and returns it. 201, or 200 with your pending review.
+  403 for anybody but the person asked.
+- `DELETE /api/projects/{ref}/review-requests/{id}` withdraws an open request.
 
 ### CLI
 
@@ -1273,7 +1340,12 @@ commands are in `cli/meertex/cmd_reviews.py`.
 ### In the web app
 
 - The **Reviews** tab lists reviews and open conversations, and starts a
-  review (on the current state, `HEAD` or a version).
+  review (on the current state, `HEAD` or a version). Editors and the owner
+  "Request a review" there. They pick a member who can review, the state and
+  a note. The open requests are listed above the reviews, with "Withdraw" for
+  the authors and "Start your review" for the person asked (unless they have a
+  pending review to continue). `/p/<name>/reviews/requests/<id>`, the mail's
+  link, starts the review and opens its Files view with the note in a flash.
 - A **review page** has three views. *Conversation*: every thread with its
   snippet, comments, suggestions, resolution diff and the buttons for the
   next step. *Files*: the source at the review's commit with line numbers and
@@ -1558,7 +1630,9 @@ A finding is `{code, level, field, message, value, record_value, source, url}`.
 
 - `level` is `error`, `warning` or `info`. Info never changes a status.
 - `field` is the field it is about, or null. `value` is the entry's value
-  and `record_value` the record's, which "Take this value" writes.
+  and `record_value` the record's, which "Take this value" writes. It is
+  null where the record cannot be taken as it is (names the wrong way round,
+  a book in a series), so the author changes the field by hand.
 - `source` names where it comes from: `bibtex` (the file itself), `search`
   (the title search over the indexes), `doi.org`, `crossref`, `semantic
   scholar`, `dblp`, `arxiv`, `openlibrary`, `web`, `wayback` or `claude`. `url` links to the record or to an archived copy, or is null.
@@ -1594,12 +1668,15 @@ findings per fingerprint.
    `doi_not_found` (error). Its message names the owner of the DOI's prefix
    (Crossref's `/prefixes`) and says so when the entry names another
    publisher. A Crossref DOI is also read from Crossref's works API, for
-   retractions, corrections and the published version of a preprint. An
-   ISBN is looked up at Open Library.
+   retractions, corrections and the published version of a preprint, and
+   for every container title (doi.org gives only the first, which for a
+   book in a series is the series). A record's title includes its subtitle,
+   which CSL and Crossref keep apart. An ISBN is looked up at Open Library.
 3. **No identifier.** The title is searched in Crossref (with the first
    author and the year), Semantic Scholar, DBLP and arXiv, and a book also
    in Open Library. A hit is a record with nearly the same title that shares
-   a family name with the entry's authors (or has no authors). A hit with a
+   a family name with the entry's authors (or has no authors, or has one of
+   them with given and family name the wrong way round). A hit with a
    DOI adds `suggest_doi` (info). No hit while at least two sources answered
    is `not_found`, an error for `article`, `inproceedings`, `incollection`
    and `conference` and a warning for every other type. Its message says
@@ -1614,9 +1691,9 @@ findings per fingerprint.
 | `doi_not_found` | error | doi.org does not know the DOI. |
 | `doi_mismatch` | error | The DOI's record is another work. The title is far off and no author matches. |
 | `title` | warning | The title differs from the record's (a missing subtitle, other words). |
-| `authors` | error or warning | No author matches the record (error). Authors are missing, extra or in another order (warning). `and others` matches any rest. |
+| `authors` | error or warning | No author matches the record (error). Authors are missing, extra or in another order (warning). `and others` matches any rest. The record has an author's given and family name the wrong way round, as some publishers deposit them (warning, without `record_value`). Such an author counts as matching, and the entry is marked as checked once its names are right. |
 | `year` | warning | The year is none of the record's years (issued, in print, online). |
-| `venue` | warning | `journal` or `booktitle` has no word in common with the record's venue, not even its acronym. |
+| `venue` | warning | `journal` or `booktitle` has no word in common with the record's venue, not even its acronym. A venue the entry names in `series` counts as matching. A record with several container titles (a book in a series) warns, without `record_value`, when the field matches none of them or names the same series as `series`. |
 | `differs` | warning | `volume`, `number` or `pages` differ from the record. |
 | `missing` | info | The record has a `doi`, `pages`, `volume`, `number` or `publisher` that the entry lacks. |
 | `suggest_doi` | info | The entry has no DOI, and the record that matched has one. |
@@ -1723,7 +1800,7 @@ references {run: run | null, claims_enabled, network_enabled, files: [path],
             counts: {<status>: n}, problems, missing: [{key, path, line}],
             broken: [{path, line, key, message}], entries: [entry]}
 entry      {key, type, path, line, end_line, fingerprint, fields: {name: value},
-            status, mark: {date, by, hash, valid} | null, record | null,
+            bibtex, status, mark: {date, by, hash, valid} | null, record | null,
             checked_at, findings: [finding], claims_at, cites: [{path, line}]}
 record     {source, doi, url, type, title, authors: [string], year, venue,
             volume, number, pages, publisher}
@@ -1734,8 +1811,9 @@ run        {id, status, claims, refresh, total, done, error, started_at,
 - `GET /api/projects/{ref}/references` returns the report. Entries are in
   file order. `problems` is what the tab counts, the errors and the
   warnings. These are the entries that are `error`, `changed` or `warning`,
-  the broken ones and the missing keys. `missing` are `\cite` keys no
-  entry has. `broken` are the entries that cannot be parsed (`key` is null
+  the broken ones and the missing keys. `bibtex` is the entry's text as
+  the file has it, from its `@` to its closing brace. `missing` are `\cite`
+  keys no entry has. `broken` are the entries that cannot be parsed (`key` is null
   when not even the key could be read). `checked_at` is when a run last looked the entry up as it
   reads now, null when none has. `claims_at` is when its claims were
   checked, null when they were not. Viewers too.
@@ -1800,8 +1878,10 @@ The commands are in `cli/meertex/cmd_refs.py`.
 - One row per entry with its status, key, title, first authors, year and
   the number of findings. A row opens to its findings, each with "Take this
   value" where there is a record value, the entry's fields next to the
-  record's, the claims with their sentences, a link to the entry's line in
-  the editor, and "Mark as checked" or "Remove the mark".
+  record's, the whole entry as the `.bib` file has it (so also `url`,
+  `note` and the fields the comparison leaves out), the claims with their
+  sentences, a link to the entry's line in the editor, and "Mark as
+  checked" or "Remove the mark".
 - The missing keys are listed with links to their `\cite`.
 - The editor shows the reference errors and warnings in its problems list
   and on their lines. It reads them when it opens and after every compile.

@@ -1,4 +1,5 @@
-"""Reviews, threads and comments as the API sends them (docs/DESIGN.md §13, Objects).
+"""Reviews, review requests, threads and comments as the API sends them
+(docs/DESIGN.md §13, Objects).
 
 The web app, the CLI and agents read these shapes, so each one is built here
 and nowhere else, like app/serialize.py does for the rest of §11. A thread's
@@ -11,7 +12,7 @@ from collections.abc import Iterable
 from sqlalchemy.orm import Session as DBSession
 
 from .anchors import Span
-from .models import Comment, Project, Review, Thread, User, Version
+from .models import Comment, Project, Review, ReviewRequest, Thread, User, Version
 from .serialize import iso, person
 
 
@@ -113,6 +114,25 @@ def thread_dict(
     return out
 
 
+def _version(version: Version | None) -> dict | None:
+    return {"id": version.id, "tag": version.tag, "label": version.label} if version else None
+
+
+def request_dict(rq: ReviewRequest, people: People, version: Version | None) -> dict:
+    return {
+        "id": rq.id,
+        "reviewer": people.get(rq.reviewer_id),
+        "requested_by": people.get(rq.requested_by),
+        "state": rq.state,
+        "note": rq.note,
+        "commit": rq.commit,
+        "version": _version(version),
+        "review_id": rq.review_id,
+        "created_at": iso(rq.created_at),
+        "done_at": iso(rq.done_at),
+    }
+
+
 def review_dict(r: Review, people: People, version: Version | None, counts: dict[str, int]) -> dict:
     return {
         "id": r.id,
@@ -122,7 +142,7 @@ def review_dict(r: Review, people: People, version: Version | None, counts: dict
         "summary": r.summary,
         "mentions": mentioned(r.mentions, people),
         "commit": r.commit,
-        "version": {"id": version.id, "tag": version.tag, "label": version.label} if version else None,
+        "version": _version(version),
         "created_at": iso(r.created_at),
         "submitted_at": iso(r.submitted_at),
         "counts": {state: counts.get(state, 0) for state in ("open", "resolved", "accepted")},

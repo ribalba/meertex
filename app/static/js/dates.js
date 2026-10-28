@@ -28,6 +28,10 @@ export function dateLabel(date) {
   return date.label || defaultLabel(date.kind) || "Date";
 }
 
+// The kinds whose question takes "yes" (DESIGN §6). Their dates have a check
+// mark to tick once done, before the day as well as after it.
+export const DONE_KINDS = new Set(["abstract", "submission", "supplementary", "rebuttal_end", "revision", "camera_ready", "other"]);
+
 export const DATE_ICONS = {
   abstract: "file-text",
   submission: "upload",

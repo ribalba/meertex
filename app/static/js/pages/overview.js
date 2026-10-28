@@ -7,8 +7,8 @@ import { api, enc, projectUrl } from "../api.js";
 import { h, clear, plural } from "../dom.js";
 import { icon } from "../icons.js";
 import { renderMarkdown } from "../markdown.js";
-import { questionControls } from "../questions.js";
-import { DATE_ICONS, dateLabel, dateRow } from "../dates.js";
+import { markDone, questionControls } from "../questions.js";
+import { DATE_ICONS, DONE_KINDS, dateLabel, dateRow } from "../dates.js";
 import { countdown, formatDue, formatInMyZone, formatShort, timeAgo } from "../time.js";
 import { avatar, busy, commandLine, confirmDialog, counter, flash, flashBox, flashError, personName, setTitle } from "../ui.js";
 import { editorHref } from "./editor.js";
@@ -164,6 +164,8 @@ function dateItem(d, isNext, ctx) {
     side);
 
   if (ctx.canEdit) {
+    // A plan has no paper yet to hand in, so nothing on it can be done.
+    if (DONE_KINDS.has(d.kind) && !ctx.project.planned) side.append(doneToggle(d, ctx));
     const edit = h("button", { type: "button", class: "btn-octicon", "aria-label": `Edit ${dateLabel(d)}`, title: "Edit" }, icon("pencil"));
     const del = h("button", { type: "button", class: "btn-octicon danger", "aria-label": `Delete ${dateLabel(d)}`, title: "Delete" }, icon("trash"));
     side.append(edit, del);
@@ -208,6 +210,33 @@ function dateItem(d, isNext, ctx) {
     });
   }
   return li;
+}
+
+// Ticked once the date is done, before the day as well as after it. Unticking
+// takes the answer back. A version it made stays.
+function doneToggle(d, ctx) {
+  const done = d.answer === "yes";
+  const btn = h("button", {
+    type: "button",
+    class: `btn-octicon done-toggle${done ? " is-done" : ""}`,
+    "aria-label": `${dateLabel(d)} done`,
+    "aria-pressed": String(done),
+    title: done ? "Done. Click to mark it as not done." : "Mark as done",
+  }, icon("check"));
+  btn.addEventListener("click", async () => {
+    if (!done) {
+      await markDone(ctx.project, d, { button: btn, onDone: () => ctx.reload() });
+      return;
+    }
+    try {
+      await busy(btn, () => api.del(projectUrl(ctx.ref, `/dates/${enc(d.id)}/answer`)));
+      flash(`Marked ${dateLabel(d)} as not done.`, "success");
+      ctx.reload();
+    } catch (err) {
+      flashError(err);
+    }
+  });
+  return btn;
 }
 
 // --- Notes ------------------------------------------------------------------

@@ -1,0 +1,150 @@
+# Dependency updates for the whole repository, opened as pull requests
+# (meerpad's file, with meertex's parts).
+#
+# This file turns on *version* updates. A weekly pass notices that a pin has
+# fallen behind and offers the bump. Security updates are a separate switch, in
+# Settings -> Code security, and they open a pull request the day an advisory
+# lands rather than waiting for Monday. Turn both on, because this file cannot.
+#
+# Minor and patch updates are grouped into one pull request per part, because
+# twenty separate ones a week is how a project learns to ignore them. Majors
+# arrive alone, because they are the ones to read rather than merge (a
+# Starlette major is exactly the kind requirements.txt pins directly for a
+# reason).
+#
+# What a merge sets off. Coolify deploys every push to main, so a server or
+# image bump goes live. A CLI bump publishes a new version to PyPI (cli.yml),
+# and an Electron bump a new desktop download (desktop.yml).
+
+version: 2
+
+updates:
+  # --- Python ---------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"                      # requirements.txt: the server
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # The CLI pins httpx, pycrdt and diff-match-patch like the server does. Both
+  # entries run on the same Monday, so the two pull requests arrive together.
+  - package-ecosystem: "pip"
+    directory: "/cli"                   # pyproject.toml: the meertex CLI
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python", "cli"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      cli-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # --- JavaScript -----------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/electron"              # the desktop app
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "electron"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      electron-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # The browser editor's bundle. A pull request here changes package.json and
+  # the lock only. The server serves the committed
+  # app/static/vendor/editor/editor.js, so run `make editor` on the branch and
+  # commit the new bundle before merging, or nothing changes for the browser.
+  - package-ecosystem: "npm"
+    directory: "/tools/editor"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "javascript", "editor"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      editor-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # The terminal in the landing page's tour video (tools/video).
+  - package-ecosystem: "npm"
+    directory: "/tools/video"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    labels: ["dependencies", "javascript"]
+    commit-message:
+      prefix: "deps"
+
+  # --- Images ---------------------------------------------------------------
+  # The FROM lines: python:3.14-slim for the server, and TeX Live for the
+  # compile service, pinned by digest so a rebuild compiles the same way.
+  - package-ecosystem: "docker"
+    directories: ["/", "/compile"]
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      base-images-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # The images the compose files run: LanguageTool and Postgres. A Postgres
+  # major needs a pg_upgrade of the volume, not a merged pull request, so it is
+  # left out. Its minor releases arrive with every pull of the floating tag.
+  # meertex-server and meertex-compile are built here and are on no registry.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps"
+    ignore:
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "meertex-server"
+      - dependency-name: "meertex-compile"
+    groups:
+      compose-images-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # --- GitHub Actions -------------------------------------------------------
+  # actions/checkout, setup-node and the rest in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

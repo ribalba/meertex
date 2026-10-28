@@ -67,7 +67,7 @@ TTL_RECORD = timedelta(days=7)
 TTL_PAGE = timedelta(days=1)
 TTL_CLAIM = timedelta(days=30)
 TTL_FAILURE = timedelta(hours=1)
-CACHE_VERSION = "1"
+CACHE_VERSION = "2"
 
 _VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
 
@@ -395,7 +395,9 @@ class Answer:
 def _record(source: str, **values: object) -> dict:
     """A record in the one shape every source gives. ``people`` are
     ``{family, given}``, ``authors`` the same names as text, ``years`` every
-    year the work carries (issued, in print, online), ``year`` the first."""
+    year the work carries (issued, in print, online), ``year`` the first.
+    ``venues`` are every title of the container (a book series and the book
+    in it), ``venue`` the first."""
     record = {
         "source": source,
         "doi": "",
@@ -407,6 +409,7 @@ def _record(source: str, **values: object) -> dict:
         "year": None,
         "years": [],
         "venue": "",
+        "venues": [],
         "volume": "",
         "number": "",
         "pages": "",
@@ -419,6 +422,8 @@ def _record(source: str, **values: object) -> dict:
     record["authors"] = [_display(p) for p in record["people"]]
     if record["years"] and record["year"] is None:
         record["year"] = record["years"][0]
+    if not record["venues"] and record["venue"]:
+        record["venues"] = [record["venue"]]
     # Records keep the publisher's spelling, which a new entry writes.
     record["doi"] = normalize_doi(str(record["doi"] or ""), lower=False) or ""
     return record
@@ -482,9 +487,20 @@ def strip_markup(text: str) -> str:
     return re.sub(r"\s+([.,;:!?)])", r"\1", text)
 
 
+def _with_subtitle(title: str, subtitle: str) -> str:
+    """The title and the subtitle as one, the way entries write them. CSL and
+    Crossref keep the subtitle apart."""
+    if not title or not subtitle or subtitle.casefold() in title.casefold():
+        return title
+    return title + (" " if title[-1] in "?!.:" else ": ") + subtitle
+
+
 def _from_csl(data: dict, source: str) -> dict:
     """A record from CSL JSON (doi.org) or Crossref's works JSON."""
-    venue = _first(data.get("container-title"))
+    containers = data.get("container-title")
+    venues = [strip_markup(str(v)) for v in (containers if isinstance(containers, list) else [containers]) if v]
+    venues = [v for v in venues if v]
+    venue = venues[0] if venues else ""
     event = data.get("event")
     if not venue:
         venue = _first(event.get("name") if isinstance(event, dict) else event) or _first(data.get("event-title"))
@@ -501,10 +517,11 @@ def _from_csl(data: dict, source: str) -> dict:
         doi=doi,
         url=_first(data.get("URL")),
         type=_first(data.get("type")),
-        title=strip_markup(_first(data.get("title"))),
+        title=_with_subtitle(strip_markup(_first(data.get("title"))), strip_markup(_first(data.get("subtitle")))),
         people=_people_csl(data.get("author")),
         years=_years_csl(data),
         venue=strip_markup(venue),
+        venues=venues,
         volume=_first(data.get("volume")),
         number=_first(data.get("issue")),
         pages=pages,
@@ -823,7 +840,7 @@ class Sources:
         def ask() -> Answer:
             url = (
                 "https://api.crossref.org/works?rows=5&query.bibliographic=" + quote(query)
-                + "&select=DOI,title,author,issued,published-print,published-online,container-title,"
+                + "&select=DOI,title,subtitle,author,issued,published-print,published-online,container-title,"
                 "volume,issue,page,publisher,type,URL"
             )
             f = self._get(url)

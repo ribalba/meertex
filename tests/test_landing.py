@@ -1,12 +1,14 @@
 """The public landing page, llms.txt and the way back from the sign-in page."""
 
 import re
+from pathlib import Path
 
 from helpers import needs_db, running_app, sign_in
 
 pytestmark = needs_db
 
 PITCH = "A paper is more than its .tex files."
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_signed_out_root_is_the_landing_page():
@@ -23,7 +25,8 @@ def test_signed_out_root_is_the_landing_page():
 
 def test_landing_page_files_exist():
     """Every stylesheet, image, screenshot and video file the page names is
-    served, and nothing comes from another site except links."""
+    served, and nothing comes from another site except links and meertex's
+    own Umami analytics."""
     with running_app() as client:
         html = client.get("/").text
         paths = set(re.findall(r'(?:src|href|poster)="(/static/[^"]+)"', html))
@@ -34,8 +37,9 @@ def test_landing_page_files_exist():
         for path in sorted(paths):
             assert client.get(path).status_code == 200, path
         for tag in re.findall(r"<(?:script|link|img|source|video|iframe)\b[^>]*>", html):
-            if 'rel="canonical"' not in tag:
-                assert not re.search(r'(?:src|href|srcset|poster)="(?:https?:)?//', tag), tag
+            if 'rel="canonical"' in tag or 'src="https://umami.meertex.com/' in tag:
+                continue
+            assert not re.search(r'(?:src|href|srcset|poster)="(?:https?:)?//', tag), tag
 
 
 def test_tour_video_streams():
@@ -69,3 +73,15 @@ def test_sign_in_page_links_to_the_landing_page():
         r = client.get("/login")
         assert r.status_code == 200
         assert '<a href="/">What is meertex?</a>' in r.text
+
+
+def test_download_links_match_the_release_files():
+    """The download section links the newest release under fixed names. The
+    desktop workflow uploads exactly the files named in its FILES line."""
+    workflow = (ROOT / ".github" / "workflows" / "desktop.yml").read_text(encoding="utf-8")
+    files = set(re.search(r"^  FILES: (.+)$", workflow, re.MULTILINE).group(1).split())
+    with running_app() as client:
+        html = client.get("/").text
+    linked = set(re.findall(r'href="https://github\.com/ribalba/meertex/releases/latest/download/([^"]+)"', html))
+    assert linked == files
+    assert 'href="#download"' in html and 'id="download"' in html

@@ -11,6 +11,11 @@ const NEXT = (() => {
   return n.startsWith("/") && !n.startsWith("//") && !n.includes("\\") ? n.slice(0, 500) : "/";
 })();
 
+// Inside the desktop app its preload script exposes window.meertexDesktop. The
+// emailed link is then a meertex:// deep link, so the session lands in the app
+// and not in the system browser (electron/README.md). The code works anywhere.
+const CLIENT = window.meertexDesktop ? "desktop" : "web";
+
 const $ = (id) => document.getElementById(id);
 const stepEmail = $("step-email");
 const stepCode = $("step-code");
@@ -47,7 +52,7 @@ async function post(url, body) {
 }
 
 async function requestCode(address) {
-  await post("/api/auth/login", { email: address, next: NEXT });
+  await post("/api/auth/login", { email: address, next: NEXT, client: CLIENT });
   $("sent-to").textContent = address;
   stepEmail.hidden = true;
   stepCode.hidden = false;
