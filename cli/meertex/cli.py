@@ -1007,7 +1007,8 @@ def cmd_mv(args) -> int:
 
 
 # The sync client stamps its own lines with the time. The journal has the
-# time of every line already, with the day.
+# time of every line already, with the day. (On macOS the service reads the
+# day from the client's own stamp, so the stamp is gone from the message.)
 LOG_STAMP = re.compile(r"^\d\d:\d\d:\d\d ")
 
 
@@ -1026,7 +1027,8 @@ def _service_state(s: dict) -> str:
 
 
 def _log_line(e: dict) -> str:
-    at = output.parse_time(e["at"]).astimezone().strftime("%b %d %H:%M:%S")
+    # A line above the first stamp of an agent's log file has no time.
+    at = output.parse_time(e["at"]).astimezone().strftime("%b %d %H:%M:%S") if e["at"] else " " * 15
     message = LOG_STAMP.sub("", output.ANSI.sub("", e["message"]), count=1)
     code = output.RED if e["priority"] <= 3 else output.AMBER if e["priority"] == 4 else None
     return f"{paint(at, output.DIM)}  {paint(message, code)}"
@@ -1044,7 +1046,7 @@ def service_status(args) -> int:
         print_json(s)
         return 0 if s["running"] else 1
 
-    head = f"{paint(service.UNIT_NAME, output.BOLD)}  {_service_state(s)}"
+    head = f"{paint(service.name(), output.BOLD)}  {_service_state(s)}"
     if s["since"] and s["installed"]:
         since = output.parse_time(s["since"]).astimezone().strftime("%Y-%m-%d %H:%M")
         head += f" since {since} ({output.ago(s['since'])})"
@@ -1054,6 +1056,8 @@ def service_status(args) -> int:
         rows.append(["unit", s["unit"] + (", enabled at login" if s["enabled"] else ", not enabled at login")])
         if s["command"]:
             rows.append(["runs", s["command"]])
+    if s["log_file"]:
+        rows.append(["log", s["log_file"]])
     if s["pid"]:
         rows.append(["pid", str(s["pid"])])
     if s["restarts"]:
@@ -1065,7 +1069,7 @@ def service_status(args) -> int:
     if not s["installed"]:
         print(paint("Install it with meertex service install.", output.DIM))
     elif not s["running"]:
-        print(paint("Start it with systemctl --user start meertex.service.", output.DIM))
+        print(paint(f"Start it with {service.start_command()}.", output.DIM))
 
     if args.follow:
         print()
@@ -1095,14 +1099,13 @@ def cmd_service(args) -> int:
         else:
             res = service.uninstall(stop=not args.no_start)
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise UsageError(f"systemctl failed ({exc}).") from exc
+        raise UsageError(f"{'launchctl' if service.MAC else 'systemctl'} failed ({exc}).") from exc
     if args.json:
         print_json(res)
     elif args.action == "install":
         print(f"Wrote {res['unit']}")
-        print("Started meertex.service" if res["started"] else
-              "Not started. Start it with systemctl --user daemon-reload && "
-              "systemctl --user enable --now meertex.service")
+        print(f"Started {service.name()}" if res["started"] else
+              f"Not started. Start it with {service.load_command()}")
     else:
         print(f"Removed {res['unit']}" if res["removed"] else f"There was no {res['unit']}")
     return 0
@@ -1259,11 +1262,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("folder")
 
-    p = cmd("service", cmd_service, "Install, remove or check the systemd user unit that runs meertex sync")
+    p = cmd("service", cmd_service, "Install, remove or check the background service that runs meertex sync "
+                                    "(a systemd user unit, a launchd agent on macOS)")
     ssub = p.add_subparsers(dest="action", metavar="install|uninstall|status", required=True)
-    for action, help in (("install", "write the unit and start it"), ("uninstall", "stop the unit and remove it")):
+    for action, help in (("install", "write the service and start it"),
+                         ("uninstall", "stop the service and remove it")):
         s = ssub.add_parser(action, parents=[common], help=help)
-        s.add_argument("--no-start", action="store_true", help="only write or remove the file, no systemctl")
+        s.add_argument("--no-start", action="store_true",
+                       help="only write or remove the file, no systemctl or launchctl")
     s = ssub.add_parser("status", parents=[common], help="whether it runs, and its last log lines. Exits 1 when it does not run")
     s.add_argument("-n", "--lines", type=int, default=20, help="how many log lines, default 20")
     s.add_argument("-f", "--follow", action="store_true",

@@ -356,3 +356,24 @@ def archive(project_id: str, commit: str, target: Path) -> None:
     """Write the files of ``commit`` to ``target`` as a zip file."""
     _check(commit)
     run(project_id, "archive", "--format=zip", f"--output={target}", commit)
+
+
+# --- Serving clones ------------------------------------------------------------
+
+# What a Git-Protocol header may hold ("version=2", several joined by ":").
+_PROTOCOL_RE = re.compile(r"^[A-Za-z0-9=:._-]{1,200}$")
+
+
+def upload_pack(project_id: str, protocol: str | None, *, advertise: bool = False) -> tuple[list[str], dict[str, str]]:
+    """``(argv, env)`` of the ``git upload-pack`` that serves a clone of the
+    project over HTTP, in git's stateless RPC mode. ``protocol`` is the
+    client's Git-Protocol header, ``advertise`` lists the refs instead of
+    sending objects. Only upload-pack ever serves a repository, so nothing
+    from outside writes to it."""
+    argv = ["git", "-c", "core.hooksPath=/dev/null", "upload-pack", "--stateless-rpc"]
+    if advertise:
+        argv.append("--advertise-refs")
+    env = _env(project_id)
+    if protocol and _PROTOCOL_RE.match(protocol):
+        env["GIT_PROTOCOL"] = protocol
+    return [*argv, str(repo_dir(project_id))], env

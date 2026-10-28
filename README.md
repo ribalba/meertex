@@ -11,7 +11,9 @@ outdated copy.
 
 - **Live sync of a local folder.** `meertex sync` runs in the background and
   merges your edits with everyone else's, character by character (a CRDT, Yjs
-  format). A git history is kept on the server as snapshots. For a big rewrite,
+  format). A git history is kept on the server as snapshots, and
+  `git clone https://meertex.com/p/<name>.git` copies it for a backup
+  (read-only, the API token is the password). For a big rewrite,
   `meertex hold` keeps your changes local while coauthors' edits still arrive,
   and `meertex release` sends them in one go.
 - **Papers, not just files.** Conference, track, links, page limit, template,
@@ -67,7 +69,7 @@ email address and write in the browser. For a local folder, install the CLI
 pipx install meertex                 # or: uv tool install meertex
 meertex login --server meertex.com
 meertex new --title "My paper" --conference ICSE --year 2027 --date submission=2027-01-15@AoE --checkout
-meertex sync                         # or: meertex service install (Linux, systemd)
+meertex sync                         # or: meertex service install (Linux and macOS)
 ```
 
 The CLI is on [PyPI](https://pypi.org/project/meertex/). Every push to `main`

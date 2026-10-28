@@ -1086,6 +1086,8 @@ code.cmd {
 }
 .cmd-list { display: flex; flex-direction: column; gap: 8px; }
 .cmd-list .cmd-caption { color: var(--fg-muted); font-size: 12px; margin-bottom: 2px; }
+/* As wide as GitHub's Code menu, so a checkout command fits on one line. */
+.checkout-menu .dropdown-menu { width: 400px; max-width: calc(100vw - 32px); max-height: 80vh; }
 
 /* --- Files --------------------------------------------------------------- */
 
@@ -1547,7 +1549,7 @@ kbd {
   .app-header-inner { position: relative; }
   .app-header-inner:has(.header-crumbs a) .brand-word { display: none; }
   .checkout-menu { position: static; }
-  .checkout-menu .dropdown-menu { left: 16px; right: 16px; max-width: none; }
+  .checkout-menu .dropdown-menu { left: 16px; right: 16px; width: auto; max-width: none; }
   .project-row { position: relative; flex-direction: column; gap: 8px; }
   .project-main { padding-right: 32px; }
   .project-menu { position: absolute; top: 20px; right: 8px; margin: 0; }

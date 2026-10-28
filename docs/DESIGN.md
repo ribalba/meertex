@@ -590,6 +590,40 @@ only meertex writes.
   with `--` before paths.
 - `GET /api/projects/{ref}/history` lists the commits.
 
+### Cloning
+
+Every member can clone a paper's repository for a backup or an export, with
+`git clone https://meertex.com/p/<name>.git` (`app/routers/git.py`). The
+clone has every snapshot on `main` and every version as a tag.
+
+- It is git's smart HTTP protocol, versions 0 and 2. Only
+  `git upload-pack --stateless-rpc` serves it, so nothing from outside writes
+  to the repository.
+- git asks for a user name and a password. The password is the account's API
+  token (§11, Auth), the user name is not looked at. `Authorization: Bearer
+  <token>` works too. Any role from viewer up may clone.
+- Without a token the answer is 401 with `WWW-Authenticate: Basic`, whether
+  the paper exists or not. A paper you are not a member of is 404, like one
+  that does not exist. Errors are text/plain, which git prints as
+  `remote: ...` lines.
+- The address takes the paper's name or id, with or without `.git`. A name
+  that matches more than one paper is 409. `GET /p/<name>.git` in a browser
+  goes on to `/p/<name>`.
+- Before it lists the refs, a clone or fetch commits the edits that are not
+  in a snapshot yet, so it gets the files as they are now. A paper whose room
+  is not loaded has no such edits (unloading commits them) and is not loaded
+  for it.
+- **No pushes.** `info/refs?service=git-receive-pack` answers with git's
+  `ERR` line before asking for a password, so `git push` stops with
+  "meertex does not take pushes" and says to use the browser or
+  `meertex sync`. The live document is the paper's source and git its
+  record. A pushed commit would have to be merged into text that coauthors
+  change at the same time, which is the sync client's job (§10), with a
+  shadow per file.
+- A request body may be gzipped (git does so above 1 KB) and may unpack to
+  at most 16 MB, or it is 413. The pack goes out as upload-pack writes it,
+  without the app's gzip, and stops when the client goes away.
+
 ## 10. Sync client and protocol
 
 ### Protocol
@@ -938,6 +972,16 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 
 - `GET /api/projects/{ref}/sync` (WebSocket, §10).
 
+### Git
+
+Outside `/api`, because git puts them after the clone address (§9, Cloning).
+They take the API token as a Basic password or a Bearer token, never the
+session cookie.
+
+- `GET /p/{ref}.git/info/refs?service=git-upload-pack` lists the refs.
+- `POST /p/{ref}.git/git-upload-pack` sends the objects as a pack.
+- `GET /p/{ref}.git/info/refs?service=git-receive-pack` refuses a push.
+
 ## 12. CLI
 
 `meertex` is a Python package in `cli/`, published to PyPI as `meertex`
@@ -967,8 +1011,8 @@ Projects are addressed by name or id.
 | `meertex versions <project>` / `meertex version <project> <kind> [--label L] [--note N] [--pdf FILE] [--at A]` | Lists versions, makes one. |
 | `meertex diff <project> <from> [<to>] [--word]` | Diff between refs. `to` defaults to `live`. |
 | `meertex folders` / `meertex folder add\|mv\|rm ...` / `meertex mv <project> <folder>` | The folder tree. |
-| `meertex service install\|uninstall` | A systemd user unit that runs `meertex sync`. |
-| `meertex service status [-n LINES] [-f]` | Whether the unit is installed, enabled and running (since when, pid, restarts, last exit), from `systemctl --user show`, and its last log lines (default 20) from `journalctl --user`. `-f` keeps printing new lines. Exits 1 when it does not run. |
+| `meertex service install\|uninstall` | The background service that runs `meertex sync` and starts with the user's session. On Linux a systemd user unit (`~/.config/systemd/user/meertex.service`). On macOS a launchd agent (`~/Library/LaunchAgents/com.meertex.sync.plist`), which writes its log to `~/Library/Logs/meertex/sync.log`. Both restart it 10 s after a crash, never after a clean stop. |
+| `meertex service status [-n LINES] [-f]` | Whether the service is installed, enabled at login and running (since when, pid, restarts, last exit), and its last log lines (default 20). On Linux from `systemctl --user show` and `journalctl --user`. On macOS from `launchctl print gui/<uid>/com.meertex.sync` and the agent's log file (`log_file` in the JSON, null on Linux). The sync client writes a full ISO 8601 time with the offset in front of each line when its output is a regular file, which is where those lines' times come from. `-f` keeps printing new lines. Exits 1 when it does not run. |
 | `meertex refs <project> [check\|add\|mark\|unmark\|set ...]` | The reference check (§16, CLI). |
 
 ## 13. Reviews

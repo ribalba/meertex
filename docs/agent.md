@@ -102,6 +102,20 @@ The checkout is `~/papers/<name>`. Edit files there as in any folder.
   release. `meertex status` shows held checkouts and how many files wait.
   `meertex sync --once` on a held checkout only pulls, and says so.
 
+## Backing up with git
+
+`git clone $B/p/<name>.git` gives an ordinary git repository with every
+snapshot on `main` and every version as a tag. git asks for a password, which
+is the API token. The clone is read-only. A push fails with "meertex does not
+take pushes", so never edit the paper in a git clone. Edits go through the
+checkout and `meertex sync`.
+
+```bash
+T=$(cat ~/.meertex/token)
+git -c http.extraHeader="Authorization: Bearer $T" clone "$B/p/<name>.git" ~/backup/<name>
+git -C ~/backup/<name> -c http.extraHeader="Authorization: Bearer $T" pull --ff-only
+```
+
 ## Changing things (when asked)
 
 ```bash

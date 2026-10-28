@@ -4,9 +4,13 @@ one sends, what it prints, and the local files it writes."""
 import asyncio
 import io
 import json
+import os
+import plistlib
+import re
 import stat
 import subprocess
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -14,6 +18,7 @@ import pytest
 from meertex import cli, config, service
 from meertex import ydoc as y
 from meertex.api import Api
+from meertex.sync import Log
 
 SERVER = "http://meertex.test"
 
@@ -428,6 +433,187 @@ def test_service_status_follows_the_log(capsys, monkeypatch):
     code, out, _ = run(capsys, "service", "status", "--follow", "--json", "-n", "2")
     assert code == 0 and [json.loads(line)["pid"] for line in out.splitlines()] == [4242, 4242]
     assert "--follow" in started[0].argv and "--lines=2" in started[0].argv and started[0].stopped
+
+
+# What launchctl print says about a loaded agent. The nested blocks have
+# key = value lines of their own, which are not the agent's.
+AGENT_RUNNING = """gui/501/com.meertex.sync = {
+\tactive count = 1
+\tpath = /Users/didi/Library/LaunchAgents/com.meertex.sync.plist
+\ttype = LaunchAgent
+\tstate = running
+
+\tprogram = /opt/bin/meertex
+\targuments = {
+\t\t/opt/bin/meertex
+\t\tsync
+\t}
+
+\tevent channels = {
+\t\tstate = waiting
+\t\tpid = 1
+\t}
+
+\tdomain = gui/501 [100005]
+\truns = 3
+\tpid = 4242
+\tlast exit code = 1
+\tproperties = keepalive | runatload
+}
+"""
+
+
+def fake_launchd(monkeypatch, tmp_path, printed: str | None = None, disabled: str = "") -> list[list[str]]:
+    """macOS as the service sees it, with a HOME of its own. ``printed`` is
+    what launchctl print says about the agent, None while it is not loaded.
+    bootout unloads it and bootstrap loads it. Returns the commands that ran."""
+    monkeypatch.setattr(service, "MAC", True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    agent = {"printed": printed}
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+
+        def done(code: int, out: str = "", err: str = "") -> subprocess.CompletedProcess:
+            return subprocess.CompletedProcess(argv, code, out, err)
+
+        if argv[:2] == ["launchctl", "print"]:
+            return done(0, agent["printed"]) if agent["printed"] else done(113, err="Could not find service")
+        if argv[:2] == ["launchctl", "print-disabled"]:
+            return done(0, "disabled services = {\n" + disabled + "}\n")
+        if argv[:2] == ["launchctl", "bootout"]:
+            agent["printed"] = None
+        elif argv[:2] == ["launchctl", "bootstrap"]:
+            agent["printed"] = AGENT_RUNNING
+        elif argv[0] == "ps":
+            return done(0, "   01:02:03\n")
+        elif argv[0] == "tail":
+            return done(0, "".join(Path(argv[-1]).read_text().splitlines(keepends=True)[-int(argv[2]):]))
+        elif argv[0] != "launchctl":
+            raise AssertionError(f"Unexpected command {argv}")
+        return done(0)
+
+    monkeypatch.setattr(service.subprocess, "run", fake_run)
+    return calls
+
+
+def test_launchd_install_writes_the_agent_only(capsys, monkeypatch, tmp_path):
+    calls = fake_launchd(monkeypatch, tmp_path)
+    monkeypatch.setenv("MEERTEX_TOKEN", "secret-token")
+    code, out, _ = run(capsys, "service", "install", "--no-start", "--json")
+    assert code == 0 and calls == []
+    plist = Path(json.loads(out)["unit"])
+    assert plist == tmp_path / "home" / "Library" / "LaunchAgents" / "com.meertex.sync.plist"
+    assert b"secret-token" not in plist.read_bytes()
+    agent = plistlib.loads(plist.read_bytes())
+    assert agent["Label"] == "com.meertex.sync" and agent["ProgramArguments"][-1] == "sync"
+    assert agent["EnvironmentVariables"]["MEERTEX_HOME"] == str(config.home().resolve())
+    assert agent["RunAtLoad"] and agent["KeepAlive"] == {"SuccessfulExit": False}
+    log = tmp_path / "home" / "Library" / "Logs" / "meertex" / "sync.log"
+    assert agent["StandardOutPath"] == agent["StandardErrorPath"] == str(log) and log.parent.is_dir()
+
+    code, out, _ = run(capsys, "service", "install", "--no-start")
+    assert f"Not started. Start it with launchctl bootstrap gui/{os.getuid()} {plist}" in out
+    code, out, _ = run(capsys, "service", "uninstall", "--no-start")
+    assert code == 0 and not plist.exists() and calls == []
+
+
+def test_launchd_install_replaces_a_loaded_agent(capsys, monkeypatch, tmp_path):
+    calls = fake_launchd(monkeypatch, tmp_path, printed=AGENT_RUNNING)
+    code, out, _ = run(capsys, "service", "install")
+    assert code == 0 and "Started com.meertex.sync" in out
+    domain = f"gui/{os.getuid()}"
+    target = f"{domain}/com.meertex.sync"
+    changes = [argv[1:] for argv in calls if argv[1] != "print"]
+    assert changes == [["bootout", target], ["enable", target], ["bootstrap", domain, str(service.plist_path())]]
+
+    code, out, _ = run(capsys, "service", "uninstall")
+    assert code == 0 and calls[-1] == ["launchctl", "bootout", target] and not service.plist_path().exists()
+
+
+def test_launchd_status_shows_the_agent_and_its_log(capsys, monkeypatch, tmp_path):
+    calls = fake_launchd(monkeypatch, tmp_path, printed=AGENT_RUNNING,
+                         disabled='\t"com.apple.Siri.agent" => disabled\n\t"com.meertex.sync" => enabled\n')
+    run(capsys, "service", "install", "--no-start")
+    log = service.log_path()
+    log.write_text("2026-10-27T23:14:14+01:00 paper  ↑ main.tex\n"
+                   "Traceback (most recent call last):\n"
+                   "2026-10-27T23:14:15+01:00 meertex  stopped (lost the server)\n")
+    code, out, _ = run(capsys, "service", "status", "--json", "-n", "5")
+    s = json.loads(out)
+    assert code == 0 and s["running"] and s["enabled"] and s["pid"] == 4242 and s["restarts"] == 2
+    assert s["unit"] == "/Users/didi/Library/LaunchAgents/com.meertex.sync.plist"
+    assert s["result"] == "exit-code" and s["exit_status"] == 1
+    assert s["command"].endswith(" sync") and s["log_file"] == str(log)
+    ran = datetime.now(UTC) - datetime.fromisoformat(s["since"])
+    assert abs(ran - timedelta(hours=1, minutes=2, seconds=3)) < timedelta(seconds=5)
+    # The traceback has no stamp of its own and gets the time of the line before.
+    assert [(e["at"], e["message"]) for e in s["logs"]] == [
+        ("2026-10-27T22:14:14+00:00", "paper  ↑ main.tex"),
+        ("2026-10-27T22:14:14+00:00", "Traceback (most recent call last):"),
+        ("2026-10-27T22:14:15+00:00", "meertex  stopped (lost the server)"),
+    ]
+    assert ["tail", "-n", "5", str(log)] in calls
+
+    code, out, _ = run(capsys, "service", "status")
+    assert code == 0 and "com.meertex.sync  running since" in out and ", enabled at login" in out
+    assert str(log) in out and "exit-code, status 1" in out and "  paper  ↑ main.tex" in out
+
+
+def test_launchd_status_of_an_agent_waiting_to_restart(capsys, monkeypatch, tmp_path):
+    printed = AGENT_RUNNING.replace("state = running", "state = spawn scheduled").replace("\tpid = 4242\n", "")
+    fake_launchd(monkeypatch, tmp_path, printed=printed, disabled='\t"com.meertex.sync" => disabled\n')
+    run(capsys, "service", "install", "--no-start")
+    code, out, _ = run(capsys, "service", "status", "-n", "0")
+    assert code == 1 and "stopped, restarting soon" in out and "not enabled at login" in out
+    assert "Start it with meertex service install." in out
+
+
+def test_launchd_status_when_not_installed(capsys, monkeypatch, tmp_path):
+    fake_launchd(monkeypatch, tmp_path)
+    code, out, _ = run(capsys, "service", "status", "--json")
+    s = json.loads(out)
+    assert code == 1 and not s["installed"] and not s["enabled"] and s["state"] == "inactive"
+    assert s["logs"] == [] and s["logs_error"] == f"There is no {service.log_path()} yet."
+    code, out, _ = run(capsys, "service", "status")
+    assert code == 1 and "not installed" in out and "meertex service install" in out
+
+
+def test_launchd_status_follows_the_log_file(capsys, monkeypatch, tmp_path):
+    fake_launchd(monkeypatch, tmp_path)
+    started = []
+
+    class Tail:
+        def __init__(self, argv, **kwargs):
+            started.append(argv)
+            self.stdout = iter(["2026-10-27T22:14:14+00:00 paper  ↑ main.tex\n"])
+
+        def terminate(self):
+            pass
+
+        def wait(self):
+            pass
+
+    monkeypatch.setattr(service.subprocess, "Popen", Tail)
+    code, out, _ = run(capsys, "service", "status", "--follow", "--json", "-n", "2")
+    assert code == 0 and json.loads(out)["message"] == "paper  ↑ main.tex"
+    assert started == [["tail", "-n", "2", "-F", str(service.log_path())]]
+
+
+def test_a_log_file_gets_the_day_for_the_service(tmp_path):
+    path = tmp_path / "sync.log"
+    with path.open("w") as f:
+        Log(stream=f).event("paper", "started", "syncing ~/papers/paper")
+    line = path.read_text()
+    assert re.match(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d paper  syncing", line)
+    [entry] = service.file_entries(line.splitlines())
+    assert entry["message"] == "paper  syncing ~/papers/paper"
+    assert abs(datetime.now(UTC) - datetime.fromisoformat(entry["at"])) < timedelta(seconds=5)
+    # A terminal (or the journal) keeps the short stamp.
+    out = io.StringIO()
+    Log(stream=out).event("paper", "started", "syncing")
+    assert re.match(r"\d\d:\d\d:\d\d paper  syncing", out.getvalue())
 
 
 def test_status_lists_checkouts(capsys, tmp_path):

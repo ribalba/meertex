@@ -17,7 +17,7 @@ from fastapi.responses import (
     Response,
 )
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.gzip import GZipMiddleware
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .config import get_settings
@@ -30,6 +30,7 @@ from .routers import (
     dates,
     files,
     folders,
+    git,
     grammar,
     history,
     imports,
@@ -71,8 +72,10 @@ app = FastAPI(title="meertex", version=VERSION, lifespan=lifespan)
 # the client address are the real ones.
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 # The editor's bundle is 430 KB and 140 KB compressed. Traefik passes
-# responses through as they are, so the app compresses them itself.
-app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+# responses through as they are, so the app compresses them itself. A git
+# pack is compressed already, and gzip would hold back its progress lines.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6,
+                   exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/x-git-upload-pack-result"))
 
 app.include_router(auth.router)
 app.include_router(folders.router)
@@ -93,6 +96,8 @@ app.include_router(reminders.router)
 app.include_router(references.router)
 app.include_router(grammar.router)
 app.include_router(avatars.router)
+# git clone of a paper (/p/<name>.git/...), ahead of the app's /p/ pages.
+app.include_router(git.router)
 
 
 @app.get("/healthz")

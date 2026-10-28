@@ -150,7 +150,8 @@ export function dropdown({ summary, summaryClass = "btn", label = null, items, a
     fill();
     // Close other open menus, one menu at a time like GitHub.
     document.querySelectorAll("details.dropdown[open]").forEach((d) => { if (d !== details) d.open = false; });
-    menu.querySelector(".dropdown-item, input")?.focus();
+    // Without scrolling, so a long menu opens at its top.
+    menu.querySelector(".dropdown-item, input")?.focus({ preventScroll: true });
   });
   menu.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { details.open = false; details.querySelector("summary").focus(); }

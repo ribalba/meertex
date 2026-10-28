@@ -18,7 +18,7 @@ https://meertex.com is the hosted meertex. Anyone can sign in there with an emai
 ## Features
 
 - **Live sync of a local folder.** `meertex sync` keeps every checkout (by default `~/papers/<name>`) in step with the server and merges edits from everyone character by character. The document is a CRDT in the Yjs format (pycrdt on the server and in the CLI, yjs in the browser). Files deleted by someone else move to `.meertex/trash/`. Build outputs (`*.aux`, `*.log`, the main PDF and similar) and `.git`, `.claude` and `.venv` are never synced. `.meertexignore` adds more rules.
-- **Git history.** The server commits snapshots of each paper to a git repository, a minute after the last edit or ten minutes after the first edit that is not in a commit yet. Any two states can be compared.
+- **Git history.** The server commits snapshots of each paper to a git repository, a minute after the last edit or ten minutes after the first edit that is not in a commit yet. Any two states can be compared. Every member can clone it for a backup with `git clone https://meertex.com/p/<name>.git`, with the API token as the password. The clone is read-only, so edits go through the browser or `meertex sync`.
 - **Browser editor.** CodeMirror on the same live document, with other people's cursors and names, a file tree with uploads, and LaTeX autocomplete for commands, environments after `\begin{`, `\ref` labels from every `\label{}` in the project, `\cite` keys from every `.bib` file, and file paths in `\input`, `\include` and `\includegraphics`. Viewers and reviewers get a read-only editor.
 - **Compiling.** A separate TeX Live container compiles with latexmk and pdflatex, xelatex or lualatex. The editor compiles two seconds after the last edit, on Ctrl or Cmd and Enter, and on a button. Errors, warnings and bad boxes appear as a list that opens the file at its line. SyncTeX works in both directions.
 - **Papers with their venue.** Conference, full name, year, track, links to the call for papers and the submission site, location, publisher, page limit, template, review model, notes and labels.
@@ -121,11 +121,11 @@ Sign in at https://meertex.com/login with an email address. The browser editor n
 pipx install meertex                       # or: uv tool install meertex
 meertex login --server meertex.com         # mails a sign-in code
 meertex checkout 2027-icse-green-llm       # or: meertex new ... --checkout
-meertex service install                    # a systemd user unit that runs meertex sync
+meertex service install                    # runs meertex sync in the background (Linux, macOS)
 meertex service status                     # whether it runs, and its last log lines
 ```
 
-The background sync service is a systemd user unit. On systems without systemd (macOS, Windows), run `meertex sync` in a terminal.
+The background sync service is a systemd user unit on Linux and a launchd agent (`~/Library/LaunchAgents/com.meertex.sync.plist`) on macOS. On Windows, run `meertex sync` in a terminal.
 
 ## Run your own server
 

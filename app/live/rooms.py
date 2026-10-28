@@ -335,6 +335,12 @@ def get(project_id: str) -> Room:
         return room
 
 
+def loaded(project_id: str) -> Room | None:
+    """The project's room if it is loaded, without loading it."""
+    with _rooms_guard:
+        return _rooms.get(project_id)
+
+
 def join(project_id: str, conn: Connection) -> Room:
     """Add a sync connection to the project's room and return the room. From
     here on the connection gets every change, and the room stays loaded."""

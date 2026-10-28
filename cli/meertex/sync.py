@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import signal
+import stat
 import sys
 import time
 import uuid
@@ -241,6 +242,13 @@ class WebSocketChannel:
 # --- Log ---------------------------------------------------------------------------
 
 
+def _is_file(stream) -> bool:
+    try:
+        return stat.S_ISREG(os.fstat(stream.fileno()).st_mode)
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 class Log:
     """What the client did, as lines for a person or JSON lines."""
 
@@ -248,6 +256,9 @@ class Log:
         self.as_json = as_json
         self.stream = stream or sys.stdout
         self.quiet = quiet
+        # A log file (the launchd agent's on macOS, or a redirect) needs the day
+        # and the time zone as well. A terminal does not, and the journal keeps its own.
+        self.dated = _is_file(self.stream)
 
     def _emit(self, name: str, event: str, text: str, **fields) -> None:
         if self.quiet:
@@ -255,7 +266,9 @@ class Log:
         if self.as_json:
             line = json.dumps({"at": now_iso(), "checkout": name, "event": event, **fields}, ensure_ascii=False)
         else:
-            stamp = output.paint(datetime.now().strftime("%H:%M:%S"), output.DIM, self.stream)
+            now = datetime.now().astimezone()
+            stamp = output.paint(now.isoformat(timespec="seconds") if self.dated else now.strftime("%H:%M:%S"),
+                                 output.DIM, self.stream)
             line = f"{stamp} {name}  {text}"
         print(line, file=self.stream, flush=True)
 

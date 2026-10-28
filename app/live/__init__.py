@@ -172,6 +172,15 @@ def snapshot(project_id: str, editors: list[str] | None = None, *, at: datetime 
         return git.head(project_id)
 
 
+def snapshot_pending(project_id: str) -> None:
+    """Commit the edits not yet in a snapshot, so a clone gets the files as
+    they are now. Only a loaded room can hold such edits, because unloading
+    commits them, so a project nobody has open is neither loaded nor touched."""
+    room = rooms.loaded(project_id)
+    if room is not None and room.dirty_since is not None:
+        snapshot(project_id)
+
+
 def commit_at(project_id: str, when: datetime) -> str | None:
     """The last commit at or before ``when`` (naive UTC), or None."""
     return git.commit_at(project_id, when)

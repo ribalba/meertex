@@ -148,6 +148,11 @@ function setHeader(p) {
         commandLine(`meertex checkout ${p.name}`, "Copy the files to ~/papers and register the folder"),
         commandLine("meertex sync", "Keep every checkout in step with the server")) },
       "divider",
+      { header: "Clone the history with git" },
+      { node: h("div", { class: "dropdown-body cmd-list" },
+        commandLine(`git clone ${location.origin}/p/${enc(p.name)}.git`, "Every snapshot and version tag, for backups. Read-only."),
+        h("div", { class: "cmd-caption" }, "When git asks for a password, give it your ", h("a", { href: "/settings#token", text: "API token" }), ".")) },
+      "divider",
       { text: "Download ZIP", icon: "download", href: projectUrl(p.id, "/zip?ref=live"), download: `${p.name}.zip` },
     ],
   })]);

@@ -23,7 +23,7 @@ meertex login --server meertex.com      # mails you a sign-in code
 meertex projects                        # your papers with their next deadline
 meertex checkout 2027-icse-green-llm    # the paper in ~/papers/2027-icse-green-llm
 meertex sync                            # keeps every checkout in step while it runs
-meertex service install                 # Linux: runs meertex sync in the background
+meertex service install                 # Linux and macOS: runs meertex sync in the background
 meertex service status                  # does it run, and its last log lines (-f follows)
 ```
 
