@@ -73,8 +73,9 @@ meertex sync                         # or: meertex service install (Linux and ma
 ```
 
 The CLI is on [PyPI](https://pypi.org/project/meertex/). Every push to `main`
-that changes it publishes a new version, so `pipx upgrade meertex` brings the
-newest one.
+that changes it publishes a new version. `meertex update` brings the newest
+one, however it was installed, and restarts the sync service. Once a day the
+CLI also looks for a newer version by itself and asks whether to update.
 
 ## Run your own server
 

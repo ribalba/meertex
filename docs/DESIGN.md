@@ -1015,6 +1015,39 @@ Projects are addressed by name or id.
 | `meertex service install\|uninstall` | The background service that runs `meertex sync` and starts with the user's session. On Linux a systemd user unit (`~/.config/systemd/user/meertex.service`). On macOS a launchd agent (`~/Library/LaunchAgents/com.meertex.sync.plist`), which writes its log to `~/Library/Logs/meertex/sync.log`. Both restart it 10 s after a crash, never after a clean stop. |
 | `meertex service status [-n LINES] [-f]` | Whether the service is installed, enabled at login and running (since when, pid, restarts, last exit), and its last log lines (default 20). On Linux from `systemctl --user show` and `journalctl --user`. On macOS from `launchctl print gui/<uid>/com.meertex.sync` and the agent's log file (`log_file` in the JSON, null on Linux). The sync client writes a full ISO 8601 time with the offset in front of each line when its output is a regular file, which is where those lines' times come from. `-f` keeps printing new lines. Exits 1 when it does not run. |
 | `meertex refs <project> [check\|add\|mark\|unmark\|set ...]` | The reference check (§16, CLI). |
+| `meertex update [--check]` | Updates meertex from PyPI the way it was installed and restarts the sync service when it runs (see Updating). `--check` only says whether a newer version is out. Exits 1 when an update fails. |
+
+### Updating
+
+The newest version is `info.version` of `https://pypi.org/pypi/meertex/json`.
+Versions compare as numbers (`0.1.0.10` is above `0.1.0.9`), and one that is
+not plain numbers never counts as newer.
+
+`meertex update` finds out how meertex was installed and runs the matching
+command. In a pipx venv (it has a `pipx_metadata.json`) that is `pipx upgrade
+meertex`. In a uv tool environment (`uv-receipt.toml`) it is `uv tool upgrade
+meertex`. In another venv it is `python -m pip install --upgrade meertex`, and
+in the user's site-packages the same with `--user`. A system-wide install, or
+one from a folder or a URL (the dist-info has a `direct_url.json`, as after
+`pipx install ./cli` or `pip install -e`), is not touched. meertex then says
+how to update it instead. After the command it asks a new Python for the
+version on disk, because the running one still has the old code loaded. When
+the version changed and the sync service runs, it restarts the service
+(`systemctl --user restart meertex.service`, on macOS `launchctl kickstart -k`),
+so the background sync runs the new code too. A `meertex sync` in a terminal
+keeps the old version until it is started again.
+
+After any other command, at most once a day, the CLI looks at PyPI itself
+(3 s timeout) and asks `meertex X is out, you have Y. Update now? [Y/n]`.
+Enter or `y` runs the update as above, anything else asks again the next day.
+When meertex cannot update itself it prints the hint instead of the question.
+The look only happens when stdin, stdout and stderr are all a terminal and the
+command ran without `--json`, so scripts and agents never see it. It is also
+skipped after `meertex sync` without `--once`, after Ctrl-C, for installs
+from a folder, with `MEERTEX_NO_UPDATE_CHECK` set, and with `update_check =
+false` in `~/.meertex/config.toml`. The time of the last look and the newest
+version are in `~/.meertex/update.json`. A failed look counts as a look, so
+an offline machine pays the timeout once a day at most.
 
 ## 13. Reviews
 

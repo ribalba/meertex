@@ -25,6 +25,7 @@ from . import (
     cmd_refs,
     cmd_reminders,
     cmd_reviews,
+    cmd_update,
     config,
     output,
     service,
@@ -1281,6 +1282,7 @@ def build_parser() -> argparse.ArgumentParser:
     cmd_planning.add_commands(cmd, common)
     cmd_refs.add_commands(cmd, common)
     cmd_reminders.add_commands(cmd, common)
+    cmd_update.add_commands(cmd, common)
     return parser
 
 
@@ -1307,5 +1309,6 @@ def main(argv: list[str] | None = None) -> None:
         code = 2
     except KeyboardInterrupt:
         code = 130
+    cmd_update.offer(args, code)
     raise SystemExit(code)
 

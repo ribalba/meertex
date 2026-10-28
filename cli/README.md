@@ -13,8 +13,11 @@ It needs Python 3.11 or newer.
 
 ```bash
 pipx install meertex          # or: uv tool install meertex
-pipx upgrade meertex          # every change on main is a new release
+meertex update                # every change on main is a new release
 ```
+
+Once a day meertex looks for a newer version by itself and asks whether to
+update. Set `MEERTEX_NO_UPDATE_CHECK=1` to turn that off.
 
 ## Sign in and write
 

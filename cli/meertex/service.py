@@ -143,6 +143,24 @@ def uninstall(stop: bool = True) -> dict:
     return {"unit": str(path), "removed": existed, "stopped": stop}
 
 
+def restart_command() -> str:
+    """How the user restarts the running service by hand."""
+    return f"launchctl kickstart -k {domain()}/{LABEL}" if MAC else f"systemctl --user restart {UNIT_NAME}"
+
+
+def restart() -> bool:
+    """Restart the service when it runs, so it runs the meertex that is
+    installed now (after ``meertex update``). Returns whether it ran. Raises
+    Unavailable, OSError or CalledProcessError when the restart fails."""
+    if not status(0)["running"]:
+        return False
+    if MAC:
+        _launchctl("kickstart", "-k", f"{domain()}/{LABEL}")
+    else:
+        _systemctl("restart", UNIT_NAME)
+    return True
+
+
 def _cannot_run(argv: list[str], exc: OSError) -> Unavailable:
     return Unavailable(f"{argv[0]} could not run ({exc}). The service needs {'launchd' if MAC else 'systemd'}.")
 

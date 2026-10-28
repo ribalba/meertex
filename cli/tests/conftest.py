@@ -2,6 +2,7 @@
 and XDG_CONFIG_HOME, so nothing ever touches the real ~/.meertex, ~/papers or
 ~/.config/systemd. Every test sees Linux unless it asks for macOS (and a HOME
 of its own), so a run on a Mac never touches ~/Library/LaunchAgents either.
+No test asks PyPI for a newer meertex unless it turns the daily look back on.
 The server's tests/conftest.py does not apply here."""
 
 import os
@@ -23,6 +24,7 @@ def isolated_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("MEERTEX_PAPERS", str(base / "papers"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(base / "xdg"))
     monkeypatch.setattr(service, "MAC", False)
+    monkeypatch.setenv("MEERTEX_NO_UPDATE_CHECK", "1")
     for name in ("MEERTEX_SERVER", "MEERTEX_TOKEN", "NO_COLOR"):
         monkeypatch.delenv(name, raising=False)
     yield base
