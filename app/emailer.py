@@ -121,6 +121,15 @@ THREAD_EVENTS = {
     "accepted": "{actor} accepted a thread on {title}",
     "reopened": "{actor} reopened a thread on {title}",
 }
+# The same, for the people the comment or the note @-mentions (§13, Mentions).
+MENTION_EVENTS = {
+    "comment": "{actor} mentioned you in a comment on {title}",
+    "reply": "{actor} mentioned you in a reply on {title}",
+    "edited": "{actor} mentioned you in a comment on {title}",
+    "resolved": "{actor} resolved a thread on {title} and mentioned you",
+    "accepted": "{actor} accepted a thread on {title} and mentioned you",
+    "reopened": "{actor} reopened a thread on {title} and mentioned you",
+}
 QUOTE_LINES = 8
 QUOTE_CHARS = 600
 
@@ -134,11 +143,19 @@ def _quoted(text: str) -> str:
     return "\n".join(f"> {line}".rstrip() for line in lines)
 
 
+def _why_mentioned(actor: str) -> str:
+    base = settings.base_url.rstrip("/")
+    return f"You get this mail because {actor} mentioned you. Turn these mails off at {base}/settings#mentions."
+
+
 def send_review_submitted(
-    to: str, reviewer: str, project_title: str, verdict: str, summary: str, comments: int, link: str
+    to: str, reviewer: str, project_title: str, verdict: str, summary: str, comments: int, link: str,
+    mentions_you: bool = False,
 ) -> None:
-    """A review was submitted. Goes to the owner and the editors."""
-    parts = [f'{reviewer} reviewed "{project_title}" and {VERDICTS.get(verdict, verdict)}.']
+    """A review was submitted. Goes to the owner and the editors, and says so
+    when the review mentions the one it goes to."""
+    headline = f'{reviewer} reviewed "{project_title}" and {VERDICTS.get(verdict, verdict)}.'
+    parts = [f"{headline} It mentions you." if mentions_you else headline]
     if summary.strip():
         parts.append(summary.strip())
     if comments:
@@ -163,3 +180,33 @@ def send_thread_event(
     parts.append("Open the thread to answer.")
     parts.append(link)
     send_email(to, headline.format(actor=actor, title=project_title), "\n\n".join(parts))
+
+
+def send_review_mention(
+    to: str, reviewer: str, project_title: str, verdict: str, summary: str, link: str
+) -> None:
+    """A submitted review mentions somebody who does not get the review mail
+    (a reviewer or a viewer), in its summary or in one of its comments."""
+    parts = [f'{reviewer} reviewed "{project_title}", {VERDICTS.get(verdict, verdict)} and mentioned you.']
+    if summary.strip():
+        parts.append(summary.strip())
+    parts.append("Open the review to read it.")
+    parts.append(link)
+    parts.append(_why_mentioned(reviewer))
+    send_email(to, f"{reviewer} mentioned you in a review of {project_title}", "\n\n".join(parts))
+
+
+def send_mention(
+    to: str, actor: str, project_title: str, event: str, where: str, quote: str, text: str, link: str
+) -> None:
+    """``send_thread_event`` for somebody the comment or the note mentions.
+    It takes the place of that mail, so nobody gets both."""
+    headline = MENTION_EVENTS.get(event, "{actor} mentioned you on {title}")
+    parts = [headline.format(actor=actor, title=f'"{project_title}"') + "."]
+    parts.append(f"{where}\n{_quoted(quote)}" if quote else where)
+    if text.strip():
+        parts.append(text.strip())
+    parts.append("Open the thread to answer.")
+    parts.append(link)
+    parts.append(_why_mentioned(actor))
+    send_email(to, f"{actor} mentioned you on {project_title}", "\n\n".join(parts))

@@ -17,8 +17,8 @@ from reviewing import (
 
 pytestmark = needs_db
 
-REVIEW_KEYS = {"id", "reviewer", "state", "verdict", "summary", "commit", "version", "created_at", "submitted_at",
-               "counts"}
+REVIEW_KEYS = {"id", "reviewer", "state", "verdict", "summary", "mentions", "commit", "version", "created_at",
+               "submitted_at", "counts"}
 REVIEWER = "rita@example.com"
 EDITOR = "eddi@example.com"
 VIEWER = "vera@example.com"

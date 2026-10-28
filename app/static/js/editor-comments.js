@@ -323,6 +323,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     const form = commentForm({
       prefill: c.quote,
       buttons,
+      projectId: project.id,
       onCancel: () => {
         compose = null;
         paintCompose();

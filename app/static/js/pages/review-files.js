@@ -449,7 +449,7 @@ export async function renderFiles(ctx) {
       note = h("p", { class: "text-small color-muted mb-2" }, "Your pending review is on another state, so this can only be a single comment here. ",
         h("a", { href: `${ctx.base}/reviews/${enc(myPending.id)}/files`, text: "Open your review" }), ".");
     }
-    const form = commentForm({ prefill: quote, buttons, onCancel: closeCompose, placeholder: "Leave a comment", label: "Comment" });
+    const form = commentForm({ prefill: quote, buttons, onCancel: closeCompose, placeholder: "Leave a comment", label: "Comment", projectId: ctx.project.id });
     c.quote = quote;
     c.el = h("div", { class: "box rv-compose" },
       h("div", { class: "rv-compose-head" },

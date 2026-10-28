@@ -14,6 +14,7 @@ import { api, enc, encPath, projectUrl, request } from "./api.js";
 import { h, clear, nextId, plural } from "./dom.js";
 import { icon } from "./icons.js";
 import { renderMarkdown } from "./markdown.js";
+import { attachMentions } from "./mentions.js";
 import { session } from "./session.js";
 import { timeAgo } from "./time.js";
 import { avatar, busy, confirmDialog, counter, dropdown, flash, flashError, openDialog, personName } from "./ui.js";
@@ -365,12 +366,14 @@ function quoteTable(quote, firstLine) {
 // opens an editable copy of the text, and the buttons. Each button is
 // {text, primary, onClick(values, button)}. values is {body, suggestion},
 // suggestion being null without one. Ctrl/Cmd+Enter presses the first button.
+// With projectId, typing @ completes the paper's members (mentions.js).
 export function commentForm({
   body = "", suggestion = null, prefill = "", allowSuggestion = true, placeholder = "Leave a comment",
-  buttons, onCancel = null, cancelText = "Cancel", label = "Comment",
+  buttons, onCancel = null, cancelText = "Cancel", label = "Comment", projectId = null,
 }) {
   const ta = h("textarea", { class: "form-control input-block rv-textarea", rows: "4", placeholder, "aria-label": label });
   ta.value = body;
+  attachMentions(ta, projectId);
   const sugg = h("textarea", { class: "form-control input-block input-mono rv-suggest-text", rows: "3", "aria-label": "Suggested text", spellcheck: "false" });
   let suggesting = suggestion !== null;
   sugg.value = suggesting ? suggestion : prefill;
@@ -439,10 +442,11 @@ export function commentForm({
 }
 
 // A dialog with an optional note. Resolves with the note, or null when cancelled.
-export function noteDialog({ title, text, confirmText, placeholder = "", danger = false }) {
+export function noteDialog({ title, text, confirmText, placeholder = "", danger = false, projectId = null }) {
   return new Promise((resolve) => {
     let result = null;
     const ta = h("textarea", { class: "form-control input-block", rows: "4", placeholder, id: nextId("note") });
+    attachMentions(ta, projectId);
     const ok = h("button", { type: "button", class: `btn ${danger ? "btn-danger" : "btn-primary"}`, text: confirmText });
     const d = openDialog({
       title,
@@ -609,7 +613,7 @@ export function threadCard(thread, env, opts = {}) {
     const bodyHost = h("div", { class: "rv-comment-body" });
     const paintBody = () => {
       clear(bodyHost);
-      if (c.body) bodyHost.append(h("div", { class: "markdown", html: renderMarkdown(c.body) }));
+      if (c.body) bodyHost.append(h("div", { class: "markdown", html: renderMarkdown(c.body, { mentions: c.mentions }) }));
       if (c.suggestion !== null && c.suggestion !== undefined) bodyHost.append(suggestionBlock(c));
     };
     paintBody();
@@ -645,7 +649,7 @@ export function threadCard(thread, env, opts = {}) {
       h("span", { class: "rv-event-badge" }, icon(iconName, { size: 14 })),
       h("div", { class: "rv-event-main" },
         h("div", {}, h("strong", { text: personName(c.author) }), ` ${says} `, h("span", { class: "color-muted" }, timeAgo(c.created_at))),
-        note ? h("div", { class: "rv-event-note markdown", html: renderMarkdown(note) }) : null));
+        note ? h("div", { class: "rv-event-note markdown", html: renderMarkdown(note, { mentions: c.mentions }) }) : null));
   }
 
   function suggestionBlock(c) {
@@ -671,6 +675,7 @@ export function threadCard(thread, env, opts = {}) {
       prefill: current.outdated ? current.quote : current.text,
       allowSuggestion: !current.outdated || c.suggestion !== null,
       label: "Edit the comment",
+      projectId: env.project.id,
       buttons: [{
         text: "Save", primary: true,
         onClick: async (v) => {
@@ -738,6 +743,7 @@ export function threadCard(thread, env, opts = {}) {
         allowSuggestion: !t.outdated,
         placeholder: "Reply",
         label: "Reply",
+        projectId: env.project.id,
         buttons: [{
           text: "Reply", primary: true,
           onClick: async (v) => {
@@ -767,6 +773,7 @@ export function threadCard(thread, env, opts = {}) {
           text: "meertex keeps how the text changed since the comment, so the reviewer sees it next to the request and can accept it or reopen the conversation.",
           confirmText: "Resolve conversation",
           placeholder: "What did you change?",
+          projectId: env.project.id,
         });
         if (note === null) return;
         await busy(b, () => act(api.post(url(`/threads/${enc(t.id)}/resolve`), { note })));
@@ -786,6 +793,7 @@ export function threadCard(thread, env, opts = {}) {
           text: "Say what is still missing, so the authors know what to do.",
           confirmText: "Reopen",
           placeholder: "What is still missing?",
+          projectId: env.project.id,
         });
         if (note === null) return;
         await busy(b, () => act(api.post(url(`/threads/${enc(t.id)}/reopen`), { note })));

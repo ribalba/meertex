@@ -1740,6 +1740,34 @@ textarea.rv-textarea { min-height: 72px; }
 }
 .rv-suggest textarea.form-control { min-height: 60px; border: 0; border-radius: 0; box-shadow: none; }
 .rv-form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* @-mentions (mentions.js): the list at the @, like GitHub's suggester, and a
+   mention in a rendered comment. */
+.mention-pop {
+  position: fixed;
+  inset: auto;
+  width: max-content;
+  min-width: 200px;
+  max-width: min(360px, calc(100vw - 16px));
+  max-height: 280px;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+  color: var(--fg);
+  background: var(--bg);
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-overlay);
+}
+.mention-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; font-size: 14px; cursor: pointer; white-space: nowrap;
+}
+.mention-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.mention-email { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--fg-muted); }
+.mention-item[aria-selected="true"] { color: var(--fg-on-emphasis); background: var(--accent-emph); }
+.mention-item[aria-selected="true"] .mention-email { color: inherit; }
+.mention { font-weight: 600; white-space: nowrap; }
 .rv-compose { margin: 4px 0; }
 .rv-compose-head {
   display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px;

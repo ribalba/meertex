@@ -14,7 +14,7 @@ THREAD_KEYS = {
     "end", "start16", "end16", "line_start", "line_end", "text", "quote", "changed", "outdated", "base",
     "resolution", "accepted", "comments",
 }
-COMMENT_KEYS = {"id", "author", "kind", "body", "suggestion", "created_at", "edited_at"}
+COMMENT_KEYS = {"id", "author", "kind", "body", "suggestion", "mentions", "created_at", "edited_at"}
 
 
 # --- Without a database: the mapping, lines and the word diff --------------------------

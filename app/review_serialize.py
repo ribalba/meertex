@@ -32,8 +32,14 @@ def thread_people(threads: Iterable[Thread], comments: Iterable[Comment]) -> set
     ids: set[str | None] = set()
     for t in threads:
         ids |= {t.created_by, t.resolved_by, t.accepted_by}
-    ids |= {c.author_id for c in comments}
+    for c in comments:
+        ids |= {c.author_id, *(c.mentions or [])}
     return ids
+
+
+def mentioned(ids: list[str] | None, people: People) -> list[dict]:
+    """The people a comment or a summary mentions, without those gone since."""
+    return [p for p in (people.get(i) for i in ids or []) if p]
 
 
 def comment_dict(c: Comment, people: People) -> dict:
@@ -43,6 +49,7 @@ def comment_dict(c: Comment, people: People) -> dict:
         "kind": c.kind,
         "body": c.body,
         "suggestion": c.suggestion,
+        "mentions": mentioned(c.mentions, people),
         "created_at": iso(c.created_at),
         "edited_at": iso(c.edited_at),
     }
@@ -113,6 +120,7 @@ def review_dict(r: Review, people: People, version: Version | None, counts: dict
         "state": r.state,
         "verdict": r.verdict,
         "summary": r.summary,
+        "mentions": mentioned(r.mentions, people),
         "commit": r.commit,
         "version": {"id": version.id, "tag": version.tag, "label": version.label} if version else None,
         "created_at": iso(r.created_at),

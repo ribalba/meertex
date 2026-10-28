@@ -17,11 +17,14 @@ locked is safe.
 
 Mails go out after the database commit, as background tasks, so a slow mail
 server never holds a request and a write that failed never mails anybody.
+Whoever a comment, a note or a summary @-mentions (app/mentions.py) is found
+when it is written and stored with it.
 """
 
 import re
 import uuid
 from collections import defaultdict
+from collections.abc import Iterable
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
@@ -30,7 +33,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Query as OrmQuery
 from sqlalchemy.orm import Session as DBSession
 
-from .. import emailer, live
+from .. import emailer, live, mentions
 from ..access import resolve_project
 from ..anchors import (
     Anchorer,
@@ -248,7 +251,7 @@ def _reviews_out(db: DBSession, reviews: list[Review]) -> list[dict]:
     counts = _counts(db, [r.id for r in reviews])
     version_ids = {r.version_id for r in reviews if r.version_id}
     versions = {v.id: v for v in db.query(Version).filter(Version.id.in_(version_ids)).all()} if version_ids else {}
-    people = People(db, (r.reviewer_id for r in reviews))
+    people = People(db, (i for r in reviews for i in (r.reviewer_id, *(r.mentions or []))))
     return [review_dict(r, people, versions.get(r.version_id or ""), counts[r.id]) for r in reviews]
 
 
@@ -330,21 +333,33 @@ def _mail_thread(
     actor: User,
     event: str,
     text: str,
+    mentioned: Iterable[str] = (),
 ) -> None:
     """Tell everybody who wrote in the thread, except ``actor``. A new single
     comment goes to the owner and the editors instead, who would otherwise
-    never hear of it."""
+    never hear of it, and an edit only to the people it newly mentions. The
+    people in ``mentioned`` get a mail that says they were mentioned, in place
+    of the other one, unless they turned those mails off."""
     if out["pending"]:
         return
     if event == "comment":
         recipients = _members(db, project, roles=("owner", "editor"))
+    elif event == "edited":
+        recipients = []
     else:
         writers = {c["author"]["id"] for c in out["comments"] if c["author"]} | {thread.created_by}
         recipients = _members(db, project, writers)
+    wanted = set(mentioned) - {actor.id}
+    tagged = [u for u in _members(db, project, wanted) if u.mention_mails] if wanted else []
     link = _thread_link(project, thread)
     title = project.title or project.name
+    for person in tagged:
+        background.add_task(
+            emailer.send_mention, person.email, _name(actor), title, event, _where(out), thread.quote, text, link
+        )
+    told = {u.id for u in tagged}
     for person in recipients:
-        if person.id != actor.id:
+        if person.id != actor.id and person.id not in told:
             background.add_task(
                 emailer.send_thread_event, person.email, _name(actor), title, event, _where(out), thread.quote, text, link
             )
@@ -418,17 +433,34 @@ def submit_review(
     review.state = "submitted"
     review.verdict = body.verdict
     review.summary = (body.summary or "").strip()
+    review.mentions = mentions.mentioned_ids(db, project, review.summary)
     review.submitted_at = utcnow()
     db.commit()
 
     out = _reviews_out(db, [review])[0]
     link = f"{project_url(project.name)}/reviews/{review.id}"
     threads = sum(out["counts"].values())
-    for person in _members(db, project, roles=("owner", "editor")):
-        if person.id != user.id:
+    title = project.title or project.name
+    # Comments of a pending review mailed nobody, so their mentions are told now.
+    written = (
+        db.query(Comment.mentions)
+        .join(Thread, Thread.id == Comment.thread_id)
+        .filter(Thread.review_id == review.id, Comment.kind == "comment")
+        .all()
+    )
+    mentioned = (set(review.mentions) | {i for (ids,) in written for i in ids or []}) - {user.id}
+    authors = [u for u in _members(db, project, roles=("owner", "editor")) if u.id != user.id]
+    for person in authors:
+        background.add_task(
+            emailer.send_review_submitted, person.email, _name(user), title,
+            review.verdict, review.summary, threads, link, person.id in mentioned,
+        )
+    # The others it mentions get a mail of their own.
+    others = mentioned - {u.id for u in authors}
+    for person in _members(db, project, others) if others else []:
+        if person.mention_mails:
             background.add_task(
-                emailer.send_review_submitted, person.email, _name(user), project.title or project.name,
-                review.verdict, review.summary, threads, link,
+                emailer.send_review_mention, person.email, _name(user), title, review.verdict, review.summary, link
             )
     return out
 
@@ -586,11 +618,12 @@ def create_thread(ref: str, body: ThreadIn, background: BackgroundTasks, db: DB,
     )
     db.add(thread)
     db.flush()
+    tagged = mentions.mentioned_ids(db, project, text)
     db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="comment", body=text,
-                   suggestion=body.suggestion, created_at=now))
+                   suggestion=body.suggestion, mentions=tagged, created_at=now))
     db.commit()
     out = _thread_out(db, thread)
-    _mail_thread(background, db, project, thread, out, user, "comment", text)
+    _mail_thread(background, db, project, thread, out, user, "comment", text, tagged)
     return out
 
 
@@ -609,18 +642,22 @@ def reply(
     thread = _find_thread(db, user, project, thread_id)
     text = _content(body.body, body.suggestion)
     now = utcnow()
+    tagged = mentions.mentioned_ids(db, project, text)
     db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="comment", body=text,
-                   suggestion=body.suggestion, created_at=now))
+                   suggestion=body.suggestion, mentions=tagged, created_at=now))
     thread.updated_at = now
     db.commit()
     out = _thread_out(db, thread)
-    _mail_thread(background, db, project, thread, out, user, "reply", text)
+    _mail_thread(background, db, project, thread, out, user, "reply", text, tagged)
     return out
 
 
 @router.patch("/projects/{ref}/comments/{comment_id}")
-def edit_comment(ref: str, comment_id: str, body: CommentPatch, db: DB, user: SessionOrTokenUser) -> dict:
-    """Change your comment's body or suggestion. Returns the thread."""
+def edit_comment(
+    ref: str, comment_id: str, body: CommentPatch, background: BackgroundTasks, db: DB, user: SessionOrTokenUser
+) -> dict:
+    """Change your comment's body or suggestion. Returns the thread. Only the
+    people the edit adds a mention of are mailed."""
     project, _ = resolve_project(db, user, ref, "reviewer")
     comment, thread = _find_comment(db, user, project, comment_id)
     if comment.author_id != user.id:
@@ -629,12 +666,18 @@ def edit_comment(ref: str, comment_id: str, body: CommentPatch, db: DB, user: Se
         raise unprocessable(f"This is the {comment.kind} event, not a comment. Events cannot be edited.")
     data = body.model_dump(exclude_unset=True)
     text = _content(data.get("body", comment.body), data.get("suggestion", comment.suggestion))
+    before = set(comment.mentions or [])
     comment.body = text
+    comment.mentions = mentions.mentioned_ids(db, project, text)
     if "suggestion" in data:
         comment.suggestion = data["suggestion"]
     comment.edited_at = thread.updated_at = utcnow()
     db.commit()
-    return _thread_out(db, thread)
+    out = _thread_out(db, thread)
+    added = [i for i in comment.mentions if i not in before]
+    if added:
+        _mail_thread(background, db, project, thread, out, user, "edited", text, added)
+    return out
 
 
 @router.delete("/projects/{ref}/comments/{comment_id}")
@@ -662,7 +705,9 @@ def delete_comment(ref: str, comment_id: str, db: DB, user: SessionOrTokenUser) 
 # --- Thread state ----------------------------------------------------------------------
 
 
-def _resolve(db: DBSession, thread: Thread, user: User, commit: str, note: str, diff: str, kind: str) -> None:
+def _resolve(
+    db: DBSession, thread: Thread, user: User, commit: str, note: str, diff: str, kind: str, tagged: list[str]
+) -> None:
     now = utcnow()
     thread.state = "resolved"
     thread.resolved_by = user.id
@@ -673,7 +718,8 @@ def _resolve(db: DBSession, thread: Thread, user: User, commit: str, note: str, 
     thread.accepted_by = None
     thread.accepted_at = None
     thread.updated_at = now
-    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind=kind, body=note, created_at=now))
+    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind=kind, body=note, mentions=tagged,
+                   created_at=now))
 
 
 def _changing(db: DBSession, user: User, ref: str, thread_id: str, role: str) -> tuple[Project, Membership, Thread]:
@@ -686,12 +732,20 @@ def _changing(db: DBSession, user: User, ref: str, thread_id: str, role: str) ->
 
 
 def _event(
-    background: BackgroundTasks, db: DBSession, project: Project, thread: Thread, user: User, event: str, note: str
+    background: BackgroundTasks,
+    db: DBSession,
+    project: Project,
+    thread: Thread,
+    user: User,
+    event: str,
+    note: str,
+    tagged: list[str],
 ) -> dict:
-    """Commit, answer with the thread and mail everybody who wrote in it."""
+    """Commit, answer with the thread and mail everybody who wrote in it or
+    whom the note mentions."""
     db.commit()
     out = _thread_out(db, thread)
-    _mail_thread(background, db, project, thread, out, user, event, note)
+    _mail_thread(background, db, project, thread, out, user, event, note, tagged)
     return out
 
 
@@ -706,9 +760,10 @@ def resolve_thread(
     commit = call_live(live.snapshot, project.id)
     span = Anchorer().locate(thread)
     note = ((body.note if body else None) or "").strip()
+    tagged = mentions.mentioned_ids(db, project, note)
     diff = word_diff(thread.quote, span.text, thread.base_line_start, span.line_start)
-    _resolve(db, thread, user, commit, note, diff, "resolved")
-    return _event(background, db, project, thread, user, "resolved", note)
+    _resolve(db, thread, user, commit, note, diff, "resolved", tagged)
+    return _event(background, db, project, thread, user, "resolved", note, tagged)
 
 
 @router.post("/projects/{ref}/threads/{thread_id}/apply")
@@ -747,8 +802,8 @@ def apply_suggestion(
         ydoc.write_text(doc, span.file_id, current.text[: span.start] + suggestion + current.text[span.end :])
     commit = call_live(live.snapshot, project.id)
     diff = word_diff(thread.quote, suggestion, thread.base_line_start, span.line_start)
-    _resolve(db, thread, user, commit, APPLIED_NOTE, diff, "applied")
-    return _event(background, db, project, thread, user, "applied", APPLIED_NOTE)
+    _resolve(db, thread, user, commit, APPLIED_NOTE, diff, "applied", [])
+    return _event(background, db, project, thread, user, "applied", APPLIED_NOTE, [])
 
 
 @router.post("/projects/{ref}/threads/{thread_id}/accept")
@@ -770,12 +825,14 @@ def accept_thread(
             raise unprocessable("This thread has no suggestion, so there is nothing to accept before it is resolved")
     now = utcnow()
     note = ((body.note if body else None) or "").strip()
+    tagged = mentions.mentioned_ids(db, project, note)
     thread.state = "accepted"
     thread.accepted_by = user.id
     thread.accepted_at = now
     thread.updated_at = now
-    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="accepted", body=note, created_at=now))
-    return _event(background, db, project, thread, user, "accepted", note)
+    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="accepted", body=note, mentions=tagged,
+                   created_at=now))
+    return _event(background, db, project, thread, user, "accepted", note, tagged)
 
 
 @router.post("/projects/{ref}/threads/{thread_id}/reopen")
@@ -787,11 +844,13 @@ def reopen_thread(
         raise unprocessable("The thread is open already")
     now = utcnow()
     note = ((body.note if body else None) or "").strip()
+    tagged = mentions.mentioned_ids(db, project, note)
     thread.state = "open"
     thread.resolved_by = thread.resolved_at = thread.resolution_commit = None
     thread.resolution_note = thread.resolution_diff = ""
     thread.accepted_by = thread.accepted_at = None
     thread.updated_at = now
-    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="reopened", body=note, created_at=now))
-    return _event(background, db, project, thread, user, "reopened", note)
+    db.add(Comment(id=new_id(), thread_id=thread.id, author_id=user.id, kind="reopened", body=note, mentions=tagged,
+                   created_at=now))
+    return _event(background, db, project, thread, user, "reopened", note, tagged)
 

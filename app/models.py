@@ -73,6 +73,8 @@ class User(Base):
     reminder_hour: Mapped[int] = mapped_column(Integer, default=8, server_default="8", nullable=False)
     # When the last reminder mail was put together, whether it said anything or not.
     reminded_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # A mail when somebody @-mentions this user in a comment (DESIGN §13, Mentions).
+    mention_mails: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     # Spelling and grammar (DESIGN §17): on or off, the language, the personal
     # dictionary and the rules switched off. Its shape and validation are in
     # app/grammar/checker.py. {} reads as the defaults.
@@ -401,6 +403,8 @@ class Review(Base):
     state: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     verdict: Mapped[str | None] = mapped_column(String(30))
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # The ids of the members the summary @-mentions (§13, Mentions).
+    mentions: Mapped[list] = mapped_column(JSONType, default=list, server_default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -454,6 +458,9 @@ class Comment(Base):
     body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # Replacement text for the thread's span, or null.
     suggestion: Mapped[str | None] = mapped_column(Text)
+    # The ids of the members the body @-mentions (§13, Mentions), found when
+    # it is written, so an edit mails only the people it adds.
+    mentions: Mapped[list] = mapped_column(JSONType, default=list, server_default="[]", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     edited_at: Mapped[datetime | None] = mapped_column(DateTime)
 

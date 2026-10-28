@@ -52,8 +52,11 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "reminded_at": "TIMESTAMP WITHOUT TIME ZONE",
         "grammar": "JSONB NOT NULL DEFAULT '{}'",
         "avatar": "VARCHAR(80)",
+        "mention_mails": "BOOLEAN NOT NULL DEFAULT true",
     },
     "memberships": {"reminders_muted": "BOOLEAN NOT NULL DEFAULT false"},
+    "reviews": {"mentions": "JSONB NOT NULL DEFAULT '[]'"},
+    "comments": {"mentions": "JSONB NOT NULL DEFAULT '[]'"},
 }
 
 

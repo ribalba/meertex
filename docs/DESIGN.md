@@ -54,8 +54,9 @@ meerpad's scheme, carried over unchanged. You enter your email and get a
 link and a six-character code, and either one signs you in. There are no
 passwords. A brand-new email gets an account on its first sign-in.
 
-A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, avatar_url, created_at`.
-`naming_pattern` is described in §4, `writing_days` and the reminders in §5.
+A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, created_at`.
+`naming_pattern` is described in §4, `writing_days` and the reminders in §5,
+`mention_mails` in §13 (Mentions).
 A new account, whether it signed in itself or was invited, has no
 `timezone` yet and reads as UTC. The first time the web app loads for it,
 it sends the browser's zone. After that only the settings change it.
@@ -1026,7 +1027,7 @@ request, the answer and the change side by side, and accepts or reopens.
 ### Objects
 
 ```text
-review   {id, reviewer: person, state, verdict, summary, commit,
+review   {id, reviewer: person, state, verdict, summary, mentions: [person], commit,
           version: {id, tag, label} | null, created_at, submitted_at,
           counts: {open, resolved, accepted}}
 thread   {id, review_id, state, pending, created_by: person, created_at, updated_at,
@@ -1036,7 +1037,7 @@ thread   {id, review_id, state, pending, created_by: person, created_at, updated
           resolution: {by: person, at, commit, note, diff} | null,
           accepted: {by: person, at} | null,
           comments: [comment]}
-comment  {id, author: person, kind, body, suggestion, created_at, edited_at}
+comment  {id, author: person, kind, body, suggestion, mentions: [person], created_at, edited_at}
 ```
 
 - `review.state` is `pending` or `submitted`. `verdict` is null while
@@ -1048,6 +1049,8 @@ comment  {id, author: person, kind, body, suggestion, created_at, edited_at}
   `body` is the note given with it, possibly empty.
 - `comment.suggestion` is replacement text for the thread's span, or null.
   An empty string is a suggestion too, to delete the span.
+- `mentions` are the members the comment's body (or the event's note) or the
+  review's summary @-mentions, in the order they first come (see Mentions).
 - `resolution` is null while the thread is open, and `accepted` is null
   unless it is accepted. Reopening clears both. A thread with a suggestion
   can be accepted without having been resolved, then `resolution` stays null.
@@ -1134,6 +1137,48 @@ to a snapshot instead, and mapped to the live text by diffing.
   pending review. Thread mails link to
   `<BASE_URL>/p/<name>/reviews/<review id>#thread-<thread id>`, or to
   `<BASE_URL>/p/<name>/reviews#thread-<thread id>` for a single comment.
+  A mention changes who hears of it (see Mentions).
+
+### Mentions
+
+A comment, a reply, the note of a resolve, an accept or a reopen, and a
+review's summary can mention the paper's members, as on GitHub. The person
+mentioned gets a mail, unless they turned that off. The code is in
+`app/mentions.py`.
+
+- **What counts.** `@` and a member's name or email, compared ignoring case.
+  The `@` must not follow a letter, a digit or `_`, so an email address in
+  the text mentions nobody. What follows the name must not be a letter, a
+  digit or `_` either. Where several names fit at one `@`, the longest wins
+  (`@Anna Lena` over `@Anna`). A name that two members share mentions both.
+  Code (`` `...` `` and fenced blocks) mentions nobody. People who are not
+  members are plain text.
+- **Stored.** The mentioned members' ids are found when the text is written
+  and stored with the comment (`comments.mentions`) or the review
+  (`reviews.mentions`, at submitting). The API returns them as people in
+  `mentions`. A member who leaves stays in it.
+- **Mails.** Whoever a new comment, reply or note mentions gets a mail that
+  says so ("Rita mentioned you on Green LLMs"), in place of the usual thread
+  mail, so nobody gets two. The usual rules for everybody else stay as they
+  are. An edit mails only the people it adds a mention of. A pending review
+  mails nobody. When it is submitted, the owner and the editors get the
+  review mail as before, which adds "It mentions you." for those it
+  mentions in its summary or its comments. The other members it mentions get
+  a mail of their own about the review. Nobody is mailed about mentioning
+  themselves.
+- **Turning it off.** `mention_mails` on the user (default on), set with
+  `PATCH /api/auth/me` and under Settings, Mentions. Off, a mention still
+  shows and is stored, but mails nothing. The person then gets the mails
+  they would get without it. Every mention mail says why it came and links
+  to `<BASE_URL>/settings#mentions`.
+- **In the web app.** Typing `@` in a comment box, a note or the review's
+  summary lists the members but yourself (`GET /api/projects/{ref}/members`),
+  narrowed by what follows the `@`: the start of the name, of the email or
+  of a later word of the name. Up and Down move, Enter or Tab takes one,
+  Escape closes the list and nothing else. A person is completed to
+  `@Name`, or to `@email` where another member has the same name. Rendered
+  comments set the mentions in bold (`app/static/js/markdown.js`, by the
+  same rule). The CLI and agents type `@Name` or `@email` in the text.
 
 ### Routes
 
@@ -1209,7 +1254,8 @@ commands are in `cli/meertex/cmd_reviews.py`.
   reader sees it, by its start and its end where math or a citation reads
   differently. *Changes since this review*: the word diff
   to `live` and the latexdiff PDF. A pending review has a "Finish your review"
-  dialog with the verdict and a summary.
+  dialog with the verdict and a summary. Every comment box completes
+  @-mentions (see Mentions).
 - The **editor** shows open threads as highlighted spans in the text (from
   `start16`/`end16`, moved along with every edit and read again from the
   server a few seconds after edits settle) and in a Comments panel, where

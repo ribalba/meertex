@@ -35,6 +35,10 @@ while the user's checkouts in `~/papers/<name>` stay in step through
   reply, resolve, apply a suggestion, accept, reopen, comment or submit a
   review unless the user asks for it. Each of these is in the user's name,
   shows at once and mails the people in the thread.
+- **An @-mention mails that person.** `@Name` or `@email` of a member in a
+  comment, a reply, a note or a summary sends them a mail. Write one only
+  when the user asks to bring someone in, and never quote an `@Name` from
+  elsewhere into a comment by accident.
 - **Never print the API token.**
 
 ## Connecting
@@ -234,6 +238,12 @@ every suggestion as a small diff (`-` the current text, `+` the replacement).
 
 Resolving and applying need the editor or owner role. Commenting, replying
 and reopening work for reviewers too. Too low a role is 403.
+
+To bring a coauthor into a thread, mention them with `@` and their name or
+email, as in `meertex reply <project> <id> "@Anna Lena can you check the
+numbers?"`. Only the paper's members count, and the longest name that fits
+wins. They get a mail unless they turned mention mails off. The thread's
+`mentions` (with `--json`) lists who was mentioned.
 
 ### Reviewing a paper (when asked)
 

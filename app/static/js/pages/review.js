@@ -13,6 +13,7 @@ import { h, clear, plural } from "../dom.js";
 import { icon } from "../icons.js";
 import { navigate, onLeave } from "../router.js";
 import { renderMarkdown } from "../markdown.js";
+import { attachMentions } from "../mentions.js";
 import { renderDiff } from "../diff.js";
 import { session } from "../session.js";
 import { timeAgo, formatInMyZone } from "../time.js";
@@ -122,6 +123,7 @@ function reviewHeader(ctx, review, { finishing }) {
 function finishDialog(ctx, review) {
   const summary = h("textarea", { class: "form-control input-block", rows: "5", placeholder: "Leave a comment", "aria-label": "Summary" });
   summary.value = review.summary || "";
+  attachMentions(summary, ctx.project.id);
   const name = "rv-verdict";
   const choice = (value, title, text) => h("label", { class: "choice" },
     h("input", { type: "radio", name, value, checked: value === "comment" }),
@@ -224,7 +226,7 @@ function renderConversation(ctx) {
         h("span", { text: ` ${v.says}` }),
         h("span", { class: "color-muted", title: formatInMyZone(review.submitted_at) }, timeAgo(review.submitted_at))),
       h("div", { class: "rv-summary-body" }, review.summary
-        ? h("div", { class: "markdown", html: renderMarkdown(review.summary) })
+        ? h("div", { class: "markdown", html: renderMarkdown(review.summary, { mentions: review.mentions }) })
         : h("p", { class: "color-muted mb-0", text: "No summary." }))));
   }
 

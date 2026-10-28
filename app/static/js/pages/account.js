@@ -1,8 +1,8 @@
 // /settings is your account. It holds the profile picture, name and time
 // zone, the naming pattern
 // with a live example, your usual writing time, spelling and grammar in the
-// editor, the reminder mails, the API token, and how to set up the command
-// line.
+// editor, the reminder mails, the mails about mentions, the API token, and how
+// to set up the command line.
 
 import { api } from "../api.js";
 import { h, clear, debounce } from "../dom.js";
@@ -31,6 +31,7 @@ export async function render(ctx) {
     h("a", { href: "#writing" }, icon("calendar"), "Writing time"),
     h("a", { href: "#grammar" }, icon("check"), "Spelling and grammar"),
     h("a", { href: "#reminders" }, icon("bell"), "Reminders"),
+    h("a", { href: "#mentions" }, icon("mail"), "Mentions"),
     h("a", { href: "#token" }, icon("key"), "API token"),
     h("a", { href: "#cli" }, icon("terminal"), "Command line"));
 
@@ -51,6 +52,7 @@ export async function render(ctx) {
     writingSection(me),
     grammarSection(),
     remindersSection(me),
+    mentionsSection(me),
     tokenSection(me),
     cliSection(),
   );
@@ -482,6 +484,30 @@ function remindersSection(me) {
     }
   });
   return form;
+}
+
+// The mail when somebody @-mentions you in a comment (DESIGN §13, Mentions).
+// The box saves when it changes.
+function mentionsSection(me) {
+  const on = h("input", { type: "checkbox", id: "mention-mails" });
+  on.checked = me.mention_mails !== false;
+  on.addEventListener("change", async () => {
+    on.disabled = true;
+    try {
+      const updated = await api.patch("/api/auth/me", { mention_mails: on.checked });
+      Object.assign(session.me, updated);
+      flash(on.checked ? "You get a mail when somebody mentions you." : "Mentions no longer send you mails.", "success");
+    } catch (err) {
+      on.checked = !on.checked;
+      flashError(err);
+    } finally {
+      on.disabled = false;
+    }
+  });
+  return h("section", { class: "settings-section", id: "mentions" },
+    h("div", { class: "subhead" }, h("h2", { text: "Mentions" })),
+    h("p", { class: "color-muted", text: "Type @ in a comment and pick a coauthor to mention them. They get a mail with the comment and a link to it. With this off, mentions of you send no mail. The mails about reviews and about the conversations you write in still come." }),
+    h("div", { class: "form-checkbox" }, on, h("label", { for: on.id, text: "Email me when somebody mentions me" })));
 }
 
 function tokenSection(me) {

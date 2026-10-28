@@ -112,6 +112,8 @@ def update_me(payload: ProfileUpdate, db: DB, user: SessionOrTokenUser) -> UserO
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if data.get("reminder_hour") is not None:
         user.reminder_hour = data["reminder_hour"]
+    if data.get("mention_mails") is not None:
+        user.mention_mails = data["mention_mails"]
     db.commit()
     db.refresh(user)
     return user

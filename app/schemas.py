@@ -39,6 +39,8 @@ class UserOut(BaseModel):
     reminders: bool = True
     reminder_days: list[int] = [14, 3, 1, 0]
     reminder_hour: int = 8
+    # A mail when somebody @-mentions you (§13, Mentions).
+    mention_mails: bool = True
     # The profile picture (§2, Accounts), or None for the initials.
     avatar_url: str | None = None
     created_at: datetime | None = None
@@ -60,3 +62,4 @@ class ProfileUpdate(BaseModel):
     # Checked in the route, which says what is wrong with a value.
     reminder_days: list[int] | None = None
     reminder_hour: int | None = Field(default=None, ge=0, le=23)
+    mention_mails: bool | None = None
