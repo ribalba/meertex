@@ -32,7 +32,7 @@ This is meertex, a LaTeX workspace for papers and the people who write them.
 All your papers are in one place, each with its next deadline.
 
 [local]
-You write on your own computer, in your own editor or together with Claude.
+You write on your own computer, in your own editor or together with an LLM.
 Every save reaches your coauthors within a second.
 
 [browser]
@@ -53,7 +53,7 @@ Compare any two versions, down to a PDF with every change marked.
 
 [review]
 Reviews work like pull requests on GitHub.
-Reviewers comment on the text or right on the PDF.
+Reviewers select text in the PDF and comment on it right in the source.
 When a comment is resolved, they see how the text was changed.
 
 [timeline]
@@ -61,7 +61,7 @@ The timeline shows all your papers and where their writing time overlaps.
 
 [agents]
 Everything is there for agents too, through a command line tool and an API.
-Ask Claude what is due this month, or let it work through the open review comments.
+Ask an LLM what is due this month, or let it work through the open review comments.
 
 [ending]
 meertex. Write LaTeX locally. Your coauthors see it live.

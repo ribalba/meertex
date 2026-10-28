@@ -325,6 +325,33 @@ code {
 
 /* --- How it works ---------------------------------------------------------- */
 
+.section-head h2 .accent { color: var(--brand-dark); }
+.map {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.map-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: var(--shadow-card);
+}
+.map-from { display: flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: 13px; font-weight: 500; }
+.map-from .icon { width: 14px; height: 14px; }
+.map-item h3 { color: var(--brand-dark); font-size: 18px; font-weight: 600; }
+.map-item p { color: var(--fg-muted); font-size: 15px; }
+.sub-head { max-width: 720px; margin: 72px auto 32px; text-align: center; }
+.sub-head h3 { font-size: clamp(22px, 2.6vw, 28px); font-weight: 700; letter-spacing: -0.01em; }
+.sub-head p { margin-top: 12px; color: var(--fg-muted); font-size: 17px; }
+
 .flow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
@@ -517,16 +544,16 @@ code {
 .cli-copy p { color: var(--fg-muted); font-size: 15px; }
 .cli-row .code { margin: 0; font-size: 12.5px; }
 
-/* --- Claude ---------------------------------------------------------------------- */
+/* --- LLM agents ------------------------------------------------------------------ */
 
-.claude {
+.agents {
   padding: 56px;
   border: 1px solid #54aeff4d;
   border-radius: 20px;
   background: linear-gradient(180deg, #f1f8ff 0%, #ffffff 62%);
   box-shadow: 0 16px 40px -24px #0969da40;
 }
-.claude .section-head { margin-bottom: 40px; }
+.agents .section-head { margin-bottom: 40px; }
 
 .skill {
   display: flex;
@@ -630,7 +657,7 @@ code {
 /* --- Narrow screens -------------------------------------------------------------- */
 
 @media (max-width: 1099px) {
-  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid, .map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* Nine cards and a wide one in two columns leave the last card alone. It
      takes the whole row. */
   .grid > .card:last-child { grid-column: 1 / -1; }
@@ -641,7 +668,7 @@ code {
   .flow { grid-template-columns: minmax(0, 1fr); }
   .flow-arrow { flex-direction: row; padding: 2px 0; }
   .flow-arrow svg { transform: rotate(90deg); }
-  .claude { padding: 40px 28px; }
+  .agents { padding: 40px 28px; }
   .skill-steps { grid-template-columns: minmax(0, 1fr); }
 }
 
@@ -656,10 +683,12 @@ code {
   .section { padding: 64px 0; }
   .section-head { margin-bottom: 32px; }
   .section-head p { font-size: 16px; }
-  .grid, .steps, .shot-grid { grid-template-columns: minmax(0, 1fr); }
+  .grid, .map, .steps, .shot-grid { grid-template-columns: minmax(0, 1fr); }
+  .sub-head { margin-top: 48px; }
+  .sub-head p { font-size: 16px; }
   .shot-grid > .shot:last-child:nth-child(odd) { justify-self: stretch; width: auto; }
   .shot-featured { margin-bottom: 32px; }
-  .claude { padding: 32px 16px; border-radius: 16px; }
+  .agents { padding: 32px 16px; border-radius: 16px; }
   .skill { padding: 20px 16px; }
   .cli-row { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 20px 16px; }
   .card { padding: 20px; }

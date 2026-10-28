@@ -725,20 +725,6 @@ dialog.dialog::backdrop { background: #1f232866; }
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
-/* The paper's name is in the app header. Here are its title, labels and topics. */
-.repo-title {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  line-height: 24px;
-  min-width: 0;
-}
-.repo-title .Label { font-size: 12px; }
-.repo-subtitle { color: var(--fg-muted); font-size: 16px; }
-.repo-head .topic-list { margin-top: 8px; }
-.repo-head nav { margin-top: 12px; }
-.repo-head .container > :first-child { margin-top: 0; }
 
 /* --- Page layouts -------------------------------------------------------- */
 

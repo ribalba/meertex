@@ -93,9 +93,9 @@ with 1.3 seconds between them, and never shorter than its hold.
 | refs | The reference check. | "Check references" on the ESEM paper finds a wrong year and a paper that does not exist (`demo/refs.bib`), and the row of the invented one opens. |
 | venue | Venue, deadlines and time zones, the question after a deadline, the fixed version. | The ICSE paper's overview, "Yes" on the rebuttal question and its dialog, then the new version on the Versions tab. |
 | compare | The PDF diff. | The journal paper's latexdiff PDF, scrolling. |
-| review | Reviews like pull requests, comments on the PDF, how a comment was resolved. | Priya double-clicks the PDF, and the comment box opens at that line of the source. Then the conversation with how the caption changed, and she accepts it. |
+| review | Reviews like pull requests, select text in the PDF and comment on it in the source, how a comment was resolved. | Priya selects a few words in the PDF. They are marked in the source, and the Comment button under them opens the comment box there with the words quoted. Then the conversation with how the caption changed, and she accepts it. |
 | timeline | All papers and their writing time. | The timeline. |
-| agents | The command line tool and the API, Claude. | `meertex projects` and `meertex threads` in a terminal. |
+| agents | The command line tool and the API, an LLM that uses them. | `meertex projects` and `meertex threads` in a terminal. |
 | ending | The line of the landing page, that meertex is part of the Meerverse, and meertex.com. | The end card over the paper list. "Part of the Meerverse" and the address join it with the sentence that says so, as on meerora's end card. |
 
 `demo/refs.bib` has five real works with their real data and two wrong on

@@ -170,14 +170,22 @@ def home_prepare(st):
     st.window.park()
 
 
+def countdown_of(page, name: str):
+    """The countdown in a paper's row of the list. Its words depend on the time
+    of day, because the deadlines are dates in AoE ("in 3 days" before 13:00 in
+    Berlin, "in 2 days" after)."""
+    row = page.locator(".project-row", has=page.get_by_role("link", name=name, exact=True))
+    return row.locator(".next-date-when").first
+
+
 def home_act(st, cue):
     page = st.page
     cue.at(cue.say[0] + 1.6)
     st.window.point(page.get_by_role("link", name=PAPER).first, 1.2)
     cue.at(cue.say[1] + 0.2)
-    st.window.point(page.get_by_text("in 2 days").first, 1.0)
+    st.window.point(countdown_of(page, PAPER), 1.0)
     cue.at(cue.say[1] + 2.4)
-    st.window.point(page.get_by_text("in 12 days").first, 0.9)
+    st.window.point(countdown_of(page, "2027-e-energy-wasm-energy"), 0.9)
 
 
 def home_camera(cue):
@@ -435,41 +443,63 @@ def pdfdiff_camera(cue):
     return Camera([(0, 1.1, (768, 470)), (cue.length, 1.18, (768, 480))])
 
 
-# 7. review: Priya comments on the PDF, then accepts how a comment was handled.
+# 7. review: Priya selects words in the PDF and comments on them in the source,
+# then accepts how a comment was handled.
 
-# A long sentence, so the middle of its lines in the PDF is its own text.
-REVIEW_LINE = "Requests are batched, models share devices"
+# Words on one line of the PDF, from line 7 of the introduction.
+REVIEW_PICK = "the power sensor reports one number"
 REVIEW_COMMENT = "Which sensor is this? Please name it and its sampling rate."
+
+
+def pdf_words(page, words: str) -> dict:
+    """Where words are in the PDF's text layer: the middle of the left edge of
+    their first letter (x0, y0) and of the right edge of their last (x1, y1)."""
+    at = page.evaluate(
+        """(words) => {
+            const layer = document.querySelector('.pdfview');
+            const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT, {
+                acceptNode: (n) => n.parentElement.closest('.textLayer') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
+            });
+            // Every letter but the spaces with its node, because the layer splits
+            // the text into spans where it likes.
+            const chars = [];
+            let text = '';
+            for (let node; (node = walker.nextNode());) {
+                for (let i = 0; i < node.data.length; i++) {
+                    if (/\\s/.test(node.data[i])) continue;
+                    chars.push([node, i]);
+                    text += node.data[i];
+                }
+            }
+            const want = words.replace(/\\s+/g, '');
+            const from = text.indexOf(want);
+            if (from < 0) return null;
+            const range = document.createRange();
+            range.setStart(...chars[from]);
+            const [node, i] = chars[from + want.length - 1];
+            range.setEnd(node, i + 1);
+            const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+            const first = rects[0], last = rects[rects.length - 1];
+            return { x0: first.left, y0: first.top + first.height / 2, x1: last.right, y1: last.top + last.height / 2 };
+        }""",
+        words,
+    )
+    if not at:
+        raise RuntimeError(f"the PDF's text layer has no {words!r}")
+    return at
 
 
 def review_files_prepare(st):
     page = st.page
-    compiles = []
-    page.on("response", lambda r: compiles.append(r) if re.search(r"/(compile|compiles/[^/]+)$", r.url) else None)
     page.goto(st.run.url("green_llm", f"/reviews/{st.run.review['id']}/files?path={INTRO}"))
     expect(page.locator(".rv-thread").first).to_be_visible(timeout=20000)
     expect(page.locator(".pdfview-page").first).to_be_visible(timeout=180000)
+    expect(page.locator(".pdfview .textLayer span").first).to_be_attached(timeout=20000)
     settle(page, 1000)
-    compile_id = None
-    for r in compiles:
-        try:
-            body = r.json()
-        except Exception:
-            continue
-        if isinstance(body, dict) and body.get("pdf_url") and body.get("id"):
-            compile_id = body["id"]
-    if not compile_id:
-        raise RuntimeError("the review's PDF has no compile id")
-    lines = (shots.DEMO / "green-llm" / INTRO).read_text().splitlines()
-    line = next(i for i, text in enumerate(lines, 1) if REVIEW_LINE in text)
-    with st.run.api("priya") as c:
-        boxes = c.post(f"/api/projects/{st.run.papers['green_llm']['id']}/compiles/{compile_id}/synctex/view",
-                       json={"path": INTRO, "line": line, "column": 0}).json()["boxes"]
-    first = [b for b in boxes if b["page"] == boxes[0]["page"]]
-    x0, y0 = min(b["x"] for b in first), min(b["y"] for b in first)
-    x1, y1 = max(b["x"] + b["width"] for b in first), max(b["y"] + b["height"] for b in first)
-    st.marks["review_spot"] = (boxes[0]["page"], x0 + (x1 - x0) * 0.45, y0 + (y1 - y0) * 0.5)
-    page.evaluate("window.scrollTo(0, 0)")
+    pdf_words(page, REVIEW_PICK)
+    # Finding the words in the source scrolls the window to its end as well, so
+    # the shot starts there and the page does not jump.
+    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
     settle(page, 400)
     st.window.mouse = (520, 560)
     st.window.park()
@@ -477,19 +507,23 @@ def review_files_prepare(st):
 
 def review_files_act(st, cue):
     page = st.page
-    number, px, py = st.marks["review_spot"]
     cue.at(cue.say[0] + 0.5)
     st.window.point(page.locator(".rv-thread").first, 1.2, dy=0.3)
-    cue.at(cue.say[1] - 0.6)
-    pdf_page = page.locator(f".pdfview-page[data-page='{number}']").first
-    rect = pdf_page.bounding_box()
-    # SyncTeX gives PDF points from the page's top left. acmart is US letter.
-    points = 612 if rect["height"] / rect["width"] < 1.35 else 595.28
-    scale = rect["width"] / points
-    x, y = rect["x"] + px * scale, rect["y"] + py * scale
-    st.window.glide(x, y, 1.0)
-    time.sleep(0.25)
-    page.mouse.dblclick(x, y)
+    cue.at(cue.say[1] - 0.8)
+    # A drag over the words, as a reader selects them. They are marked in the
+    # source, and the Comment button under them opens the box there.
+    at = pdf_words(page, REVIEW_PICK)
+    st.window.glide(at["x0"] + 1, at["y0"], 0.9)
+    time.sleep(0.15)
+    page.mouse.down()
+    st.window.glide(at["x1"] - 1, at["y1"], 1.1)
+    time.sleep(0.1)
+    page.mouse.up()
+    button = page.locator(".rv-pdf-float")
+    expect(button).to_be_visible(timeout=10000)
+    expect(page.locator(".rv-pick").first).to_be_visible()
+    time.sleep(0.7)
+    st.window.click(button, 0.6)
     compose = page.locator(".rv-compose")
     expect(compose).to_be_visible(timeout=10000)
     time.sleep(0.5)
@@ -500,7 +534,7 @@ def review_files_act(st, cue):
 
 
 def review_files_camera(cue):
-    return Camera([(0, 1.0, (768, 432)), (cue.say[1] - 0.6, 1.0, (768, 432)), (cue.say[1] + 0.8, 1.12, (768, 470))])
+    return Camera([(0, 1.0, (768, 432)), (cue.say[1] + 1.4, 1.0, (768, 432)), (cue.say[1] + 3.0, 1.1, (700, 450))])
 
 
 def review_prepare(st):
@@ -632,7 +666,7 @@ SCENES = [
         Shot("pdfdiff", says=1, hold=6.0, prepare=pdfdiff_prepare, act=pdfdiff_act, camera=pdfdiff_camera),
     ]),
     Scene("review", shots=[
-        Shot("review-files", who="priya", says=2, hold=12.5, prepare=review_files_prepare, act=review_files_act,
+        Shot("review-files", who="priya", says=2, hold=14.0, prepare=review_files_prepare, act=review_files_act,
              camera=review_files_camera, subs=SUBS_TOP),
         Shot("review", who="priya", says=1, hold=6.0, prepare=review_prepare, act=review_act, camera=review_camera),
     ]),

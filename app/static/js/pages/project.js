@@ -6,7 +6,7 @@ import { api, enc, projectUrl } from "../api.js";
 import { h, clear } from "../dom.js";
 import { icon } from "../icons.js";
 import { render as rerender, decodePath } from "../router.js";
-import { commandLine, counter, dropdown, flashBox, loading, outcomeLabel, personName, setCrumbs, setHeaderActions, setTitle, topicList } from "../ui.js";
+import { commandLine, counter, dropdown, flashBox, loading, personName, setCrumbs, setHeaderActions, setTitle } from "../ui.js";
 
 import * as overview from "./overview.js";
 import * as files from "./files.js";
@@ -166,21 +166,10 @@ function repoHead(p, active, ctx) {
     }, icon(t.icon), t.text, count);
   });
 
-  // The name is in the app header already, so the paper's title leads here.
-  const labels = [
-    p.planned ? h("span", { class: "Label label-planned", title: "A venue without a paper yet", text: "Planned" }) : null,
-    outcomeLabel(p.outcome),
-    p.archived ? h("span", { class: "Label label-attention", text: "Archived" }) : null,
-    p.role && p.role !== "owner" ? h("span", { class: "Label", text: p.role[0].toUpperCase() + p.role.slice(1) }) : null,
-  ].filter(Boolean);
-
+  // The name is in the app header already, so only the tabs show here.
   setTitle(p.name);
   return h("div", { class: "repo-head" },
     h("div", { class: "container" },
-      p.title || labels.length ? h("div", { class: "repo-title" },
-        p.title ? h("span", { class: "repo-subtitle", text: p.title }) : null,
-        labels) : null,
-      topicList(p.labels, (l) => `/?label=${enc(l)}`),
       h("nav", { class: "underline-nav", "aria-label": "Paper" }, tabs),
     ),
   );

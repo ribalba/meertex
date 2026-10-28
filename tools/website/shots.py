@@ -640,11 +640,13 @@ def review_files(run: Run, page: Page, browser):
     expect(page.locator(".rv-thread").first).to_be_visible(timeout=20000)
     expect(page.locator(".pdfview-page").first).to_be_visible(timeout=120000)
     settle(page, 800)
-    # The PDF column is sticky. Scroll down to the file, so the open thread on
-    # the introduction's first sentence and its replies fill the view.
+    # The view fills the window like the editor, and the source scrolls on its
+    # own. Scroll it so the commented line stays on top and the open thread and
+    # its replies fill the column.
     page.evaluate("""() => {
+        const scroller = document.querySelector('.rv-code-scroll');
         const thread = document.querySelector('.rv-thread');
-        window.scrollTo(0, thread.getBoundingClientRect().top + window.scrollY - window.innerHeight * 0.3);
+        scroller.scrollTop += thread.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 94;
     }""")
     settle(page, 1200)
 

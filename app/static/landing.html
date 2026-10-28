@@ -67,7 +67,7 @@
       "Venue, deadlines in the venue's time zone and countdowns for every paper",
       "Fixed versions with compiled PDFs and latexdiff PDFs between them",
       "GitHub-style reviews with suggestions and email notifications",
-      "A CLI and a token API for scripts and agents such as Claude Code"
+      "A CLI and a token API for scripts and LLM agents"
     ]
   }
   </script>
@@ -117,7 +117,7 @@
         <a href="#screenshots">Screenshots</a>
         <a href="#start">Get started</a>
         <a href="#cli">CLI</a>
-        <a href="#claude">Claude</a>
+        <a href="#agents">LLM agents</a>
       </nav>
       <div class="header-actions">
         <a class="btn btn-github" href="https://github.com/ribalba/meertex" rel="noopener">
@@ -141,8 +141,8 @@
             exist, and reviewers see how each of their comments was addressed.
           </p>
           <p class="hero-lead">
-            You write on your own computer, in VS Code, vim or together with an LLM agent
-            such as Claude Code. <strong>Every save reaches your coauthors within a second.</strong>
+            You write on your own computer, in VS Code, vim or together with an LLM agent.
+            <strong>Every save reaches your coauthors within a second.</strong>
             They edit the same document in the browser, with live cursors and a PDF that
             compiles as they type. A command line tool and an API make all of it ready for
             your LLM workflow.
@@ -217,19 +217,74 @@
       <div class="wrap">
         <div class="section-head">
           <p class="section-kicker">How it works</p>
-          <h2 id="how-title">One document, wherever you write it</h2>
+          <h2 id="how-title">What GitHub is for code, <span class="accent">meertex is for papers</span></h2>
           <p>
-            Each paper is one live document. Your folder, every open browser tab and every
-            coauthor see the same text and stay up to date. When two people type at the
-            same time, both edits are kept.
+            GitHub keeps a project's code in one place, with its history, its releases and
+            the reviews around it. meertex does the same for a paper and adds what only
+            papers have: a venue, deadlines and a bibliography that has to hold up. There
+            is nothing to commit or push. Every save reaches all your computers and every
+            coauthor within a second.
+          </p>
+        </div>
+
+        <!-- Each tile names the GitHub idea first and then what meertex makes of it. -->
+        <ul class="map">
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Repository <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Paper</h3>
+            <p>Its files and coauthors together with its venue, every deadline and the outcome.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Push and pull <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Live sync</h3>
+            <p>A normal folder on each of your computers that follows every edit, from you and from everyone else.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Commit history <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>History</h3>
+            <p>The server commits the paper to git while you write, so every earlier state is still there.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Pull request review <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Reviews</h3>
+            <p>Comments on the text or right on the PDF, suggestions applied with one click and an email to everyone involved.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Releases and tags <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Versions</h3>
+            <p>Submission, rebuttal, revision and camera-ready, kept for good with their PDFs. Any two compare as a PDF with every change marked.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> CI checks <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Checks</h3>
+            <p>A PDF two seconds after the last edit, spelling and grammar as you type, and every citation looked up at Crossref, DBLP and arXiv.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Milestones <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Deadlines</h3>
+            <p>Every date in the venue's time zone, with countdowns, reminder emails and a question once it has passed.</p>
+          </li>
+          <li class="map-item">
+            <span class="map-from"><svg class="icon" role="img" aria-label="GitHub"><use href="#i-github"/></svg> Forks <svg class="icon"><use href="#i-arrow-right"/></svg></span>
+            <h3>Resubmissions</h3>
+            <p>A rejected paper goes to the next venue as a fork that keeps its files and links back.</p>
+          </li>
+        </ul>
+
+        <div class="sub-head">
+          <h3>Like git, without commit and push</h3>
+          <p>
+            Each paper is one live document. Your laptop, your desktop, every open browser
+            tab and every coauthor see the same text. When two people type at the same
+            time, both edits are kept.
           </p>
         </div>
         <div class="flow">
           <div class="flow-step">
-            <span class="flow-label"><svg class="icon"><use href="#i-laptop"/></svg> Your computer</span>
+            <span class="flow-label"><svg class="icon"><use href="#i-laptop"/></svg> Your computers</span>
             <h3>A normal folder</h3>
             <span class="flow-path">~/papers/2027-icse-green-llm</span>
-            <p>Edit it with any editor you like, or let an LLM agent write with you. meertex sends every save to the server.</p>
+            <p>Check it out on as many computers as you like. Edit it with any editor, or let an LLM agent write with you. meertex sends every save to the server.</p>
           </div>
           <div class="flow-arrow" aria-hidden="true">
             <svg class="icon" viewBox="0 0 40 24"><path d="M4 8h31M30 3.5l5 4.5-5 4.5M36 16H5M10 11.5 5 16l5 4.5"/></svg>
@@ -362,7 +417,7 @@
               finds retracted papers and preprints that have been published since.
             </p>
             <p>
-              On request, Claude reads each cited abstract and says whether it backs the
+              On request, an LLM reads each cited abstract and says whether it backs the
               sentence that cites it. When you checked an entry yourself, mark it. The mark
               lives in the entry and breaks as soon as anyone changes it.
             </p>
@@ -710,14 +765,14 @@
       </div>
     </section>
 
-    <section class="section section-alt" id="claude" aria-labelledby="claude-title">
+    <section class="section section-alt" id="agents" aria-labelledby="agents-title">
       <div class="wrap">
-        <div class="claude">
+        <div class="agents">
           <div class="section-head">
             <p class="section-kicker">For agents</p>
-            <h2 id="claude-title">Let Claude start your papers</h2>
+            <h2 id="agents-title">Let an LLM start your papers</h2>
             <p>
-              Install the meertex skill for Claude Code. It uses the
+              Install the meertex skill for your LLM agent. It uses the
               <a href="#cli">command line tool</a>, so install that first.
             </p>
           </div>
@@ -726,8 +781,8 @@
             <div class="skill-head">
               <h3>From a call for papers to a new paper</h3>
               <p>
-                Paste a conference URL and the <strong>meertex-new-paper</strong> skill for
-                Claude Code does the rest.
+                Paste a conference URL into your LLM agent, and the
+                <strong>meertex-new-paper</strong> skill does the rest.
               </p>
             </div>
             <ol class="skill-steps">
@@ -735,15 +790,16 @@
               <li><span class="step-num">2</span><span>It takes the venue's fields and every deadline with its time zone, and leaves out what the page does not say.</span></li>
               <li><span class="step-num">3</span><span>It creates the paper with the publisher's template and puts the folder in <code>~/papers/&lt;name&gt;</code>.</span></li>
             </ol>
-            <pre class="code"><span class="p">$ </span>mkdir -p ~/.claude/skills/meertex-new-paper
-<span class="p">$ </span>curl -o ~/.claude/skills/meertex-new-paper/SKILL.md \
+            <pre class="code"><span class="p">$ </span>mkdir -p $SKILLS/meertex-new-paper
+<span class="p">$ </span>curl -o $SKILLS/meertex-new-paper/SKILL.md \
     https://raw.githubusercontent.com/ribalba/meertex/main/skills/meertex-new-paper/SKILL.md</pre>
             <div class="skill-foot">
               <a class="btn btn-primary" href="https://github.com/ribalba/meertex/blob/main/skills/meertex-new-paper/SKILL.md" rel="noopener">
                 <svg class="icon"><use href="#i-github"/></svg> View SKILL.md on GitHub
               </a>
               <p class="skill-note">
-                In a clone of the repository, <code>make install-skill</code> links it instead.
+                <code>$SKILLS</code> is the folder your agent loads its skills from. In a clone
+                of the repository, <code>make install-skill</code> links it instead.
               </p>
             </div>
           </div>
