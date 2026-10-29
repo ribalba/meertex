@@ -37,8 +37,24 @@ def _users_timezone_nullable(conn: Connection) -> bool:
     return True
 
 
+def _login_tokens_expires_nullable(conn: Connection) -> bool:
+    """An invite's sign-in link never expires, so its token has no
+    ``expires_at``. The sign-in links keep theirs."""
+    nullable = conn.execute(
+        text(
+            "SELECT is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = 'login_tokens' AND column_name = 'expires_at'"
+        )
+    ).scalar()
+    if nullable != "NO":
+        return False
+    conn.execute(text("ALTER TABLE login_tokens ALTER COLUMN expires_at DROP NOT NULL"))
+    return True
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
+    ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
 ]
 
 

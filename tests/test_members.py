@@ -54,6 +54,38 @@ def test_invite_creates_the_account_and_mails_a_link(monkeypatch):
         assert client.post(f"/api/projects/{p['id']}/members", json={"email": "didi@example.com", "role": "viewer"}).status_code == 409
 
 
+def test_the_invite_link_does_not_expire(monkeypatch):
+    """An invite may sit unread for days. Its link still signs in a year later,
+    while a sign-in link the person asked for is gone after 30 minutes."""
+    from datetime import timedelta
+
+    from fastapi.testclient import TestClient
+
+    from app import security
+    from app.main import app
+    from app.routers import auth
+
+    sent = _invites(monkeypatch)
+    asked = []
+    monkeypatch.setattr(auth, "send_login_link", lambda to, link, code: asked.append(link))
+    with running_app() as client:
+        sign_in(client)
+        p = client.post("/api/projects", json={"name": "green", "title": "Green LLMs"}).json()
+        r = client.post(f"/api/projects/{p['id']}/members", json={"email": "arne@example.com", "role": "reviewer"})
+        assert r.status_code == 201, r.text
+        assert client.post("/api/auth/login", json={"email": "arne@example.com"}).status_code == 200
+        invite, login = (link.removeprefix("http://testserver") for link in (sent[0]["link"], asked[0]))
+
+        later = security.utcnow() + timedelta(days=365)
+        monkeypatch.setattr(security, "utcnow", lambda: later)
+        with TestClient(app) as arne:
+            assert arne.get(login, follow_redirects=False).status_code == 400
+            r = arne.get(invite, follow_redirects=False)
+            assert r.status_code == 302
+            assert r.headers["location"] == f"/p/{p['id']}"
+            assert arne.get("/api/auth/me").json()["email"] == "arne@example.com"
+
+
 def test_who_may_add_whom(monkeypatch):
     _invites(monkeypatch)
     with running_app() as client:

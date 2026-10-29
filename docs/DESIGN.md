@@ -102,7 +102,9 @@ A project has members. Each member has one role.
 Inviting is by email (`POST /api/projects/{ref}/members {email, role}`). An
 email without an account gets one right away, so the membership exists
 before the person ever signs in. The invite is mailed with a sign-in link
-that lands on the project.
+that lands on the project. That link never expires, because an invite may
+sit unread for days. The links and codes you ask for yourself expire after
+30 minutes.
 
 A project that is not yours and where you are not a member is 404
 everywhere, never 403. Too low a role for a write is 403.

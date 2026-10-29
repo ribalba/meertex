@@ -91,13 +91,14 @@ class User(Base):
 
 class LoginToken(Base):
     """Magic link token emailed to a user, reusable until it expires (so mail
-    scanners that prefetch the link do not burn it)."""
+    scanners that prefetch the link do not burn it). An invite's token has no
+    ``expires_at`` and never expires."""
 
     __tablename__ = "login_tokens"
 
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), index=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
     # Where to land after signing in (an invited project, for instance).
     redirect_to: Mapped[str | None] = mapped_column(String(500))
 

@@ -65,13 +65,17 @@ def get_user_by_api_token(db: DBSession, token: str | None) -> User | None:
     return db.query(User).filter(User.api_token == token).one_or_none()
 
 
-def create_login_token(db: DBSession, email: str, redirect_to: str | None = None) -> str:
+def create_login_token(
+    db: DBSession, email: str, redirect_to: str | None = None, expires: bool = True
+) -> str:
+    """A sign-in link's token. ``expires=False`` is for invites, whose mail
+    may sit unread for days."""
     token = new_token()
     db.add(
         LoginToken(
             token=token,
             email=email.strip().lower(),
-            expires_at=utcnow() + timedelta(minutes=settings.login_token_ttl_minutes),
+            expires_at=utcnow() + timedelta(minutes=settings.login_token_ttl_minutes) if expires else None,
             redirect_to=redirect_to,
         )
     )
@@ -81,7 +85,7 @@ def create_login_token(db: DBSession, email: str, redirect_to: str | None = None
 
 def consume_login_token(db: DBSession, token: str) -> tuple[User, str | None]:
     lt = db.query(LoginToken).filter(LoginToken.token == token).one_or_none()
-    if lt is None or lt.expires_at < utcnow():
+    if lt is None or (lt.expires_at is not None and lt.expires_at < utcnow()):
         raise HTTPException(status_code=400, detail="Invalid or expired login link")
     user = get_or_create_user(db, lt.email)
     db.commit()

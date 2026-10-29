@@ -100,8 +100,7 @@ def send_invite(to: str, inviter: str, project_title: str, role: str, link: str)
 
         {link}
 
-        The link expires in {settings.login_token_ttl_minutes} minutes. After that,
-        sign in at {settings.base_url} with this email address.
+        You can also sign in at {settings.base_url} with this email address.
         """,
     )
 
