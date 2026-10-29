@@ -142,6 +142,12 @@ What the tests cover:
   `\citep{` with their titles from a .bib file, paths after
   `\includegraphics{` and `\input{`, `\begin{` with its body and `\end`,
   and the paper's own commands.
+- The formatting bar: Ctrl+B on a selection and again to take it away, Ctrl+I
+  and the Emphasis button with the cursor inside, Ctrl+E at the cursor and its
+  undo, Ctrl+Shift+M, a citation tied with `~`, lines to a bulleted list, to a
+  numbered one and back, a line to a section, a subsection and back, Ctrl+/
+  and the comment button, and the shortcuts dialog. A Markdown file and a
+  viewer get no bar.
 
 With a compile service (`--compile`, which needs latexmk, synctex and
 latexdiff on the `PATH`) also:

@@ -9,16 +9,18 @@ import hashlib
 import hmac
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Annotated
 
 from fastapi import Cookie, Depends, Header, HTTPException, Query, status
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
 from .config import get_settings
-from .database import DB
+from .database import DB, engine
 from .models import (
+    ActiveDay,
     LoginCode,
     LoginToken,
     RateLimit,
@@ -28,6 +30,11 @@ from .models import (
 )
 
 settings = get_settings()
+
+# The accounts this process has written to active_days today, so a signed-in
+# request costs one insert per account and day, not one every time.
+_active_day: date | None = None
+_active_users: set[str] = set()
 SESSION_COOKIE = "meertex_session"
 
 # Digits and letters, minus the pairs that get confused when a code is read off one
@@ -59,10 +66,28 @@ def get_or_create_user(db: DBSession, email: str) -> User:
     return user
 
 
+def note_active(user: User) -> None:
+    """Keep that the account used meertex today (DESIGN §18). On a connection
+    of its own, so the request's session is left as it is."""
+    global _active_day
+    today = utcnow().date()
+    if today != _active_day:
+        _active_day = today
+        _active_users.clear()
+    if user.id in _active_users:
+        return
+    with engine.begin() as conn:
+        conn.execute(pg_insert(ActiveDay).values(user_id=user.id, day=today).on_conflict_do_nothing())
+    _active_users.add(user.id)
+
+
 def get_user_by_api_token(db: DBSession, token: str | None) -> User | None:
     if not token:
         return None
-    return db.query(User).filter(User.api_token == token).one_or_none()
+    user = db.query(User).filter(User.api_token == token).one_or_none()
+    if user is not None:
+        note_active(user)
+    return user
 
 
 def create_login_token(
@@ -200,6 +225,7 @@ def enforce_verify_rate(db: DBSession, email: str) -> None:
 
 
 def create_session(db: DBSession, user: User) -> str:
+    note_active(user)
     token = new_token()
     db.add(
         Session(
@@ -218,7 +244,10 @@ def _user_from_session(db: DBSession, token: str | None) -> User | None:
     sess = db.query(Session).filter(Session.token == token).one_or_none()
     if sess is None or sess.expires_at < utcnow():
         return None
-    return db.get(User, sess.user_id)
+    user = db.get(User, sess.user_id)
+    if user is not None:
+        note_active(user)
+    return user
 
 
 SessionCookie = Annotated[str | None, Cookie()]

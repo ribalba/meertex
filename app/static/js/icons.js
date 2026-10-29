@@ -64,6 +64,15 @@ const ICONS = {
   bell: '<path d="M4 6.5a4 4 0 0 1 8 0c0 3 1.25 4.5 1.75 5H2.25C2.75 11 4 9.5 4 6.5z"/><path d="M6.5 13.75a1.6 1.6 0 0 0 3 0"/>',
   "bell-slash": '<path d="M4 6.5a4 4 0 0 1 8 0c0 3 1.25 4.5 1.75 5H2.25C2.75 11 4 9.5 4 6.5z"/><path d="M6.5 13.75a1.6 1.6 0 0 0 3 0M1.75 1.75l12.5 12.5"/>',
   quote: '<path d="M6.75 7.75v-3a1 1 0 0 0-1-1h-2.5a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1zm0 0c0 2.25-1.25 3.75-3.5 4.5M13.75 7.75v-3a1 1 0 0 0-1-1h-2.5a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1zm0 0c0 2.25-1.25 3.75-3.5 4.5"/>',
+  // The editor's formatting bar (editor-format.js).
+  bold: '<path stroke-width="2" d="M4.5 2.75h4a2.6 2.6 0 0 1 0 5.2h-4zm0 5.2h4.75a2.65 2.65 0 0 1 0 5.3H4.5z"/>',
+  italic: '<path d="M7 2.75h5.25M3.75 13.25H9M9.6 2.75 6.4 13.25"/>',
+  heading: '<path d="M3.75 2.75v10.5M12.25 2.75v10.5M3.75 8h8.5"/>',
+  "list-unordered": '<path d="M6 4h8.25M6 8h8.25M6 12h8.25"/><circle cx="2.5" cy="4" r="1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="2.5" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  "list-ordered": '<path d="M6.5 4h7.75M6.5 8h7.75M6.5 12h7.75"/><path stroke-width="1.2" d="M1.9 2.6l1-.6v3.6M1.75 7.1a1 1 0 0 1 1.9.35c0 .75-1.85 1.45-1.85 2.3h1.95M1.8 10.6h1.8l-.95 1.2a1 1 0 1 1-.95 1.5"/>',
+  sigma: '<path d="M12.25 4.25v-1.5h-8.5L8.25 8l-4.5 5.25h8.5v-1.5"/>',
+  percent: '<path d="M12.75 3.25 3.25 12.75"/><circle cx="4.5" cy="4.5" r="1.75"/><circle cx="11.5" cy="11.5" r="1.75"/>',
+  keyboard: '<rect x="1.25" y="3.75" width="13.5" height="8.5" rx="1.5"/><path stroke-width="1.75" d="M4.25 6.75h0M6.75 6.75h0M9.25 6.75h0M11.75 6.75h0M5.25 9.5h5.5"/>',
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";

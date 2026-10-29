@@ -59,9 +59,9 @@ carries a `meertex://login?token=` link instead of the web one. The app loads
 the ordinary callback with that token inside its window, so the session lands
 there and not in the system browser. The code works in the app as well.
 
-A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, created_at`.
+A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, instance_admin, created_at`.
 `naming_pattern` is described in §4, `writing_days` and the reminders in §5,
-`mention_mails` in §13 (Mentions).
+`mention_mails` in §13 (Mentions), `instance_admin` in §18.
 A new account, whether it signed in itself or was invited, has no
 `timezone` yet and reads as UTC. The first time the web app loads for it,
 it sends the browser's zone. After that only the settings change it.
@@ -715,6 +715,19 @@ sync client's, and other people's cursors show with their names (awareness).
   A click opens a heading's line, and the heading the cursor is under is
   marked. It follows everybody's edits. The box folds to its header, and the
   choice is kept per browser.
+- A formatting bar over a LaTeX file's text, for editors and the owner
+  (`app/static/js/editor-format.js`): a Heading menu (plain text, `\section`
+  to `\paragraph`), bold, emphasis, monospace, inline math, bulleted and
+  numbered lists, comment out, an Insert menu (citation, reference,
+  footnote, link, figure, table, equation) and a list of every keyboard
+  shortcut. Ctrl+B is `\textbf`, Ctrl+I `\emph` (it also takes `\textit`
+  away), Ctrl+E `\texttt`, Ctrl+Shift+M `$…$`, Ctrl+K `\href` (`\url` for a
+  selected address) and Ctrl+/ comments lines. A selection gets wrapped,
+  without one the command goes in with the cursor in its braces, and the same
+  command inside it takes it away again. A selection with a brace but not its
+  partner is refused with a note. Citations and references are tied to the
+  word before with `~`, as the papers write them, and open their list of keys
+  or labels. Each command is one edit, so one Ctrl+Z undoes it.
 - Viewers and reviewers get a read-only editor. A role change closes the
   socket with 4009 and the page says to reload.
 
@@ -2071,3 +2084,73 @@ grammar_match  {offset, length, message, short, replacements: [string], rule,
   underlines. Without a checker it is the browser's spellchecker, as before.
 - Settings has a "Spelling and grammar" section: on or off, the language,
   the preferred variants, picky, the dictionary and the rules turned off.
+
+## 18. Instance admins
+
+An instance admin is an account that `INSTANCE_ADMINS` names. It is a list
+of email addresses, separated by commas, in the server's configuration and
+nowhere else. Upper and lower case do not matter. Empty, the default, means
+nobody. Being an admin gives no access to papers. It only opens the
+instance dashboard. `GET /api/auth/me` says `instance_admin: true` for such
+an account, and the header's user menu then has an "Instance dashboard"
+entry that opens `/admin`.
+
+### Activity
+
+The server keeps on which UTC days each account used meertex
+(`active_days`, one row per account and day). Every signed-in request counts
+(the web app, the CLI, the sync, git), and so does signing in. A process
+writes each account at most once a day. The days before this table existed
+come from the rows the accounts left behind (sign-ins, compiles, versions,
+comments, reviews and the projects they made). Edits on the live text leave
+no such row, so a day with nothing but typing is missing from that history.
+
+### The route
+
+`GET /api/admin/instance?period=30d|90d|12m` (session or token). For an
+account that is not an admin it is 404, as if it did not exist. `30d` counts
+in days, `90d` in the 13 ISO weeks up to this one, `12m` in the 12 months up
+to this one, all in UTC. It returns
+
+```json
+{
+  "base_url": "https://meertex.com",
+  "generated_at": "2026-10-29T18:40:00Z",
+  "period": "30d", "unit": "day",
+  "buckets": ["2026-09-30", "…", "2026-10-29"],
+  "totals": {"accounts": 18, "signed_in": 17, "waiting": 1, "papers": 4,
+             "accepted": 1, "planned": 0, "active_7d": 11, "active_30d": 15},
+  "storage": {"database_bytes": 9400000, "files_bytes": 110000},
+  "series": {"active": [], "accounts": [], "papers": [], "snapshots": [],
+             "compiles": [], "comments": [], "reviews": [], "versions": []},
+  "growth": {"accounts": [], "papers": []},
+  "accounts": [{"id": "…", "email": "…", "name": null, "avatar_url": null,
+                "created_at": "…", "first_sign_in_at": "…", "last_active": "2026-10-29",
+                "papers": 2, "invited_by": {"email": "…", "name": "…"}}],
+  "accounts_total": 18
+}
+```
+
+- `totals` and `storage` are the instance now. `waiting` are invited
+  accounts that never signed in (§2, Accounts). `storage` is the database's
+  size and everything under `DATA_DIR`.
+- `series` has one number per bucket. `active` counts each account once per
+  bucket. `accounts` are first sign-ins, `snapshots` the commits of every
+  project's history (§9), `compiles` leaves out `unavailable`, `comments`
+  are comments and replies but not the resolve and accept notes, and
+  `reviews` are submitted reviews.
+- `growth` is how many signed-in accounts and papers there were at the end
+  of each bucket, counting the papers that still exist.
+- `accounts` are the newest 200, by first sign-in and then by creation.
+  `last_active` is the last active day. `papers` counts memberships.
+  `invited_by` is whoever added the account to a paper first, null for one
+  that signed up on its own.
+
+### In the web app
+
+`/admin` shows four tiles (accounts, active in the last 7 days, papers,
+storage), then the activity with a switch for 30 days, 90 days and 12
+months: a line chart of accounts and papers over time, and one small column
+chart per series. Every chart has a tooltip on hover and on the arrow keys,
+and a Table switch that lists its numbers. The accounts close the page in a
+table.

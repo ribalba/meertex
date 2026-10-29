@@ -113,9 +113,18 @@ class Settings(BaseSettings):
     # The pattern a new account names its projects with (§4).
     default_naming_pattern: str = "{year}-{conference|lower}-{paper|lower}"
 
+    # --- Instance admins (docs/DESIGN.md §18) -----------------------------------
+    # Email addresses, comma-separated, whose accounts open the instance
+    # dashboard at /admin. Empty means nobody.
+    instance_admins: str = ""
+
     @property
     def projects_dir(self) -> Path:
         return self.data_dir / "projects"
+
+    @property
+    def instance_admin_emails(self) -> frozenset[str]:
+        return frozenset(e.strip().lower() for e in self.instance_admins.split(",") if e.strip())
 
 
 @lru_cache

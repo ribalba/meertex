@@ -352,6 +352,15 @@ def log(project_id: str, limit: int) -> list[dict]:
     return commits
 
 
+def commit_times(project_id: str, since: datetime) -> list[datetime]:
+    """When each commit on HEAD made since ``since`` was made, naive UTC, for
+    the instance dashboard (DESIGN §18). Empty without a repository or a HEAD."""
+    if not repo_dir(project_id).is_dir():
+        return []
+    out = run(project_id, "log", "--format=%ct", f"--since={since:%Y-%m-%d %H:%M:%S} +0000", "HEAD", check=False)
+    return [datetime.fromtimestamp(int(stamp), UTC).replace(tzinfo=None) for stamp in out.split()]
+
+
 def archive(project_id: str, commit: str, target: Path) -> None:
     """Write the files of ``commit`` to ``target`` as a zip file."""
     _check(commit)

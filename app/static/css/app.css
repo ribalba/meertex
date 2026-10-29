@@ -1228,6 +1228,20 @@ code.cmd {
   background: var(--attention-bg); border-bottom: 1px solid var(--attention-border);
 }
 .editor-banner .icon { color: var(--attention); }
+/* The formatting bar over a LaTeX file's text (editor-format.js). Its icons
+   line up with the toolbar's text above. */
+.editor-format { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px 8px 2px 10px; border-bottom: 1px solid var(--border-muted); }
+.editor-format .editor-format-menu { width: auto; padding: 0 2px 0 6px; gap: 0; }
+.editor-format .editor-format-menu .icon-triangle-down { width: 14px; height: 14px; }
+.editor-format .dropdown-item code { margin-left: 16px; font-size: 11px; }
+.editor-format-sep { align-self: stretch; width: 1px; margin: 6px 6px; background: var(--border-muted); }
+.editor-format-keys { margin-left: auto; }
+.shortcuts { columns: 2 260px; column-gap: 32px; }
+.shortcuts section { break-inside: avoid; padding-bottom: 20px; }
+.shortcuts h3 { margin-bottom: 8px; font-size: 14px; }
+.shortcuts dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; margin: 0; font-size: 13px; }
+.shortcuts dt { display: flex; align-items: flex-start; gap: 3px; white-space: nowrap; }
+.shortcuts dd { margin: 0; }
 .editor-pane { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .editor-host { flex: 1 1 auto; min-height: 0; }
 .editor-host .cm-editor { height: 100%; }
@@ -1572,6 +1586,7 @@ kbd {
   .pdf-hide { display: inline-flex; order: -1; }
   .editor-files-btn, .editor-tree-close { display: inline-flex; }
   .editor-tree-head, .editor-toolbar, .editor-outline-toggle { padding-left: 12px; }
+  .editor-format { padding-left: 6px; }
   .editor-person-name { display: none; }
   .editor-status { order: 1; }
   .editor-status.is-ok .editor-status-text {

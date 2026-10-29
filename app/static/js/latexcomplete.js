@@ -476,9 +476,14 @@ function closeArgument(name) {
   };
 }
 
-// \begin{name} with its arguments, its body and \end{name}.
+// \begin{name} with its arguments, its body and \end{name}, as a snippet. The
+// formatting bar's Insert menu (editor-format.js) uses it too.
+export function environmentSnippet(name) {
+  return `\\begin{${name}}${ARGUMENTS[name] || ""}\n${BODIES[name] || "\t${}"}\n\\end{${name}}`;
+}
+
 function beginEnvironment(cm, name) {
-  const template = `${name}}${ARGUMENTS[name] || ""}\n${BODIES[name] || "\t${}"}\n\\end{${name}}`;
+  const template = environmentSnippet(name).slice("\\begin{".length);
   return (view, completion, from, to) => {
     const brace = view.state.sliceDoc(to, to + 1) === "}";
     cm.snippet(template)(view, completion, from, brace ? to + 1 : to);

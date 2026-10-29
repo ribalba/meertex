@@ -7,12 +7,13 @@
 * Everything that belongs to a project goes with it (ON DELETE CASCADE).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -91,6 +92,11 @@ class User(Base):
     def avatar_url(self) -> str | None:
         return f"/api/avatars/{self.avatar}" if self.avatar else None
 
+    @property
+    def instance_admin(self) -> bool:
+        """INSTANCE_ADMINS names this account (DESIGN §18)."""
+        return self.email in get_settings().instance_admin_emails
+
 
 class LoginToken(Base):
     """Magic link token emailed to a user, reusable until it expires (so mail
@@ -126,6 +132,17 @@ class RateLimit(Base):
     key: Mapped[str] = mapped_column(String(200), primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class ActiveDay(Base):
+    """A UTC day on which the account used meertex: the web app, the CLI, the
+    sync or git (DESIGN §18). One row per account and day, for the instance
+    dashboard's active people."""
+
+    __tablename__ = "active_days"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
 
 
 class Session(Base):

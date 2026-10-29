@@ -70,10 +70,35 @@ def _users_first_sign_in_backfill(conn: Connection) -> bool:
     return result.rowcount > 0
 
 
+def _active_days_backfill(conn: Connection) -> bool:
+    """``active_days`` came after the first accounts. The days before it are
+    the ones their rows show: sign-ins, compiles, versions, comments, reviews
+    and the projects they made. Edits on the live text leave no such row."""
+    result = conn.execute(
+        text(
+            "INSERT INTO active_days (user_id, day)"
+            " SELECT DISTINCT user_id, day FROM ("
+            "  SELECT user_id, created_at::date AS day FROM sessions"
+            "  UNION SELECT id, first_sign_in_at::date FROM users"
+            "  UNION SELECT created_by, created_at::date FROM compiles"
+            "  UNION SELECT created_by, created_at::date FROM versions"
+            "  UNION SELECT author_id, created_at::date FROM comments"
+            "  UNION SELECT reviewer_id, created_at::date FROM reviews"
+            "  UNION SELECT user_id, added_at::date FROM memberships WHERE role = 'owner'"
+            " ) AS seen"
+            " WHERE user_id IS NOT NULL AND day IS NOT NULL"
+            " AND EXISTS (SELECT 1 FROM users u WHERE u.id = seen.user_id)"
+            " ON CONFLICT DO NOTHING"
+        )
+    )
+    return result.rowcount > 0
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
     ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
     ("0003_users_first_sign_in_backfill", _users_first_sign_in_backfill),
+    ("0004_active_days_backfill", _active_days_backfill),
 ]
 
 

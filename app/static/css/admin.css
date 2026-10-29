@@ -1,0 +1,90 @@
+/* The instance dashboard at /admin (docs/DESIGN.md §18, pages/admin.js and
+   charts.js). The tiles and the cards are the app's boxes. The charts keep
+   to the dataviz rules: hairline grid, muted ink for every label, colour
+   only on the marks. */
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+.stat-tile { padding: 16px; min-width: 0; }
+.stat-label { color: var(--fg-muted); font-size: 12px; }
+.stat-value { margin-top: 4px; font-size: 32px; font-weight: 600; line-height: 1.25; }
+.stat-sub { margin-top: 4px; color: var(--fg-muted); font-size: 12px; }
+
+.stats-filters { margin: -4px 0 16px; }
+.stats-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 32px;
+  transition: opacity .15s ease;
+}
+.stats-activity.is-loading { opacity: .5; }
+
+.chart-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+/* The plot sits at the card's foot, so a caption of two lines does not push
+   one chart of a row lower than its neighbours. */
+.chart-card { display: flex; flex-direction: column; padding: 16px; min-width: 0; }
+.chart-plot { margin-top: auto; }
+.chart-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 12px; }
+.chart-title { margin: 0; font-size: 14px; font-weight: 600; }
+.chart-caption { margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
+.chart-legend { display: flex; gap: 16px; margin: -4px 0 8px; color: var(--fg-muted); font-size: 12px; }
+.chart-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.chart-key, .chart-tip-key { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
+
+.chart-plot { position: relative; flex: none; }
+.chart-svg { display: block; overflow: visible; }
+.chart-svg:focus { outline: none; }
+.chart-svg:focus-visible { outline: var(--focus); outline-offset: 4px; border-radius: 4px; }
+.chart-tick { fill: var(--fg-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-end { fill: var(--fg); font-size: 12px; }
+.chart-empty { fill: var(--fg-muted); font-size: 12px; }
+
+.chart-tip {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  min-width: 112px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-overlay);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chart-tip-head { margin-bottom: 4px; color: var(--fg-muted); }
+.chart-tip-row { display: flex; align-items: center; gap: 6px; }
+.chart-tip-row + .chart-tip-row { margin-top: 2px; }
+.chart-tip-row strong { font-size: 14px; }
+
+.stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.stats-table th, .stats-table td {
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+  border-top: 1px solid var(--border-muted);
+}
+.stats-table thead th { border-top: 0; color: var(--fg-muted); font-size: 12px; font-weight: 600; }
+.stats-table tbody th { font-weight: 400; }
+.stats-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.stats-box { overflow: hidden; margin-bottom: 32px; }
+.stats-scroll { overflow-x: auto; }
+.stats-box .stats-table th, .stats-box .stats-table td { padding: 8px 16px; vertical-align: middle; }
+.stats-box .stats-table thead th { background: var(--bg-subtle); border-bottom: 1px solid var(--border); }
+.stats-box .stats-table tbody tr:first-child td { border-top: 0; }
+.stats-person { display: flex; align-items: center; gap: 8px; max-width: 320px; }
+.stats-person .min-w-0 { min-width: 0; }
+
+@media (max-width: 1011px) {
+  .stat-row, .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 543px) {
+  .stat-row, .chart-grid { grid-template-columns: minmax(0, 1fr); }
+  .stat-value { font-size: 24px; }
+}

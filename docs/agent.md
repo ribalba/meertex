@@ -85,6 +85,12 @@ meertex diff 2027-icse-green-llm submission --word   # what changed since the su
 
 `--json` on any command gives the raw shapes of DESIGN.md §11.
 
+Questions about the instance itself ("how many users are on meertex", "how
+active was it this month") have no CLI command. If the user's account is an
+instance admin, `GET /api/admin/instance?period=30d` (or `90d`, `12m`) with
+`Authorization: Bearer $(cat ~/.meertex/token)` returns the accounts, papers,
+storage and activity (DESIGN.md §18). It is 404 for anybody else.
+
 ## Working on a paper
 
 The checkout is `~/papers/<name>`. Edit files there as in any folder.

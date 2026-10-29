@@ -11,6 +11,7 @@ import { avatar, dropdown, flashBox, flashError } from "./ui.js";
 import * as home from "./pages/home.js";
 import * as newPaper from "./pages/new.js";
 import * as account from "./pages/account.js";
+import * as admin from "./pages/admin.js";
 import * as project from "./pages/project.js";
 import * as timeline from "./pages/timeline.js";
 
@@ -38,6 +39,8 @@ function renderHeader() {
       { text: "Timeline", icon: "calendar", href: "/timeline" },
       { text: "New paper", icon: "plus", href: "/new" },
       { text: "Settings", icon: "gear", href: "/settings" },
+      // INSTANCE_ADMINS names this account (DESIGN §18).
+      ...(me.instance_admin ? ["divider", { text: "Instance dashboard", icon: "graph", href: "/admin" }] : []),
       "divider",
       { text: "Sign out", icon: "sign-out", onClick: signOut },
     ],
@@ -103,6 +106,7 @@ async function boot() {
   route(/^\/timeline$/, timeline.render);
   route(/^\/new$/, newPaper.render);
   route(/^\/settings$/, account.render);
+  route(/^\/admin$/, admin.render);
   route(/^\/p\/([^/]+)(?:\/(.*))?$/, project.render);
   start();
 }
