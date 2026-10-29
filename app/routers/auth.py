@@ -2,13 +2,16 @@
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from sqlalchemy import func
+from sqlalchemy.orm import aliased
 
-from .. import reminders
+from .. import reminders, when
 from ..config import get_settings
 from ..database import DB
-from ..emailer import send_login_link
+from ..emailer import send_login_link, send_new_user
+from ..models import LoginToken, Membership, Project, User, utcnow
 from ..naming import validate_pattern
 from ..schemas import LoginRequest, ProfileUpdate, UserOut, VerifyCodeRequest
 from ..security import (
@@ -49,6 +52,58 @@ def _set_session_cookie(response: Response, session_token: str) -> None:
     )
 
 
+def _client(agent: str) -> str:
+    """Where a sign-in happened, from its User-Agent. The CLI names itself
+    (cli/meertex/api.py), the desktop app keeps Electron's default."""
+    if agent.startswith("meertex-cli/"):
+        return "from the CLI"
+    if "Electron/" in agent:
+        return "in the desktop app"
+    return "in a browser"
+
+
+def _first_sign_in(db: DB, user: User, request: Request, background: BackgroundTasks, way: str) -> None:
+    """Keep the account's first sign-in and mail NEW_USER_MAIL_TO where the
+    person comes from (§2, Accounts). The update wins only once, so two
+    sign-ins at the same moment send one mail."""
+    if user.first_sign_in_at is not None:
+        return
+    first = (
+        db.query(User)
+        .filter(User.id == user.id, User.first_sign_in_at.is_(None))
+        .update({"first_sign_in_at": utcnow()}, synchronize_session=False)
+    )
+    db.commit()
+    if not first or not settings.new_user_mail_to:
+        return
+    # Every membership but an owner's is an invite (routers/members.py).
+    inviter = aliased(User)
+    rows = (
+        db.query(Membership, Project, inviter)
+        .join(Project, Project.id == Membership.project_id)
+        .outerjoin(inviter, inviter.id == Membership.added_by)
+        .filter(Membership.user_id == user.id, Membership.role != "owner")
+        .order_by(Membership.added_at)
+        .all()
+    )
+    invites = [
+        (
+            (f"{by.name} <{by.email}>" if by.name else by.email) if by else "Somebody",
+            project.title or project.name,
+            m.role,
+            when.day_text(m.added_at),
+        )
+        for m, project, by in rows
+    ]
+    signed_in = db.query(func.count(User.id)).filter(User.first_sign_in_at.is_not(None)).scalar()
+    waiting = db.query(func.count(User.id)).filter(User.first_sign_in_at.is_(None)).scalar()
+    agent = request.headers.get("user-agent", "")
+    background.add_task(
+        send_new_user, settings.new_user_mail_to, user.email, invites, f"{way} {_client(agent)}",
+        request.client.host if request.client else "", agent, signed_in, waiting,
+    )
+
+
 @router.post("/login")
 def request_login(payload: LoginRequest, db: DB) -> dict:
     """Email a magic sign-in link and a short sign-in code for the same account.
@@ -69,18 +124,24 @@ def request_login(payload: LoginRequest, db: DB) -> dict:
 
 
 @router.post("/verify-code")
-def verify_login_code(payload: VerifyCodeRequest, response: Response, db: DB) -> dict:
+def verify_login_code(
+    payload: VerifyCodeRequest, response: Response, request: Request, background: BackgroundTasks, db: DB
+) -> dict:
     enforce_verify_rate(db, payload.email)
     user = consume_login_code(db, payload.email, payload.code)
     _set_session_cookie(response, create_session(db, user))
+    _first_sign_in(db, user, request, background, "with the sign-in code")
     return {"ok": True, "redirect": "/"}
 
 
 @router.get("/callback")
-def login_callback(token: str, db: DB) -> Response:
+def login_callback(token: str, request: Request, background: BackgroundTasks, db: DB) -> Response:
     """Consume a magic link, establish a session cookie, and redirect into the app."""
     user, redirect_to = consume_login_token(db, token)
     session_token = create_session(db, user)
+    # Only an invite's link never expires (routers/members.py).
+    invite = db.get(LoginToken, token).expires_at is None
+    _first_sign_in(db, user, request, background, "with the invite link" if invite else "with a sign-in link")
     resp = RedirectResponse(url=_safe_next(redirect_to), status_code=302)
     _set_session_cookie(resp, session_token)
     return resp

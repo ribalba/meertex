@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
     email_from: str = "hello@meertex.com"
+    # Who hears about every new account: one mail at its first sign-in, saying
+    # who invited it or that it signed up on its own (docs/DESIGN.md §2,
+    # Accounts). Empty mails nobody.
+    new_user_mail_to: str = ""
 
     # --- The live document (docs/DESIGN.md §8-§10) ------------------------------
     # A file is text up to this size, a blob above it. Blobs are capped too.

@@ -82,6 +82,9 @@ class User(Base):
     # The profile picture's file name in DATA_DIR/avatars (app/avatars.py).
     # None shows the initials.
     avatar: Mapped[str | None] = mapped_column(String(80))
+    # The first sign-in. An invite makes the account before that, so None is an
+    # invited person who has not signed in yet (DESIGN §2, Accounts).
+    first_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property

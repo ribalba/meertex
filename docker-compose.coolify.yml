@@ -106,6 +106,8 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       EMAIL_FROM: ${EMAIL_FROM:-hello@meertex.com}
+      # One mail for every new account, at its first sign-in (docs/DESIGN.md §2).
+      NEW_USER_MAIL_TO: ${NEW_USER_MAIL_TO:-}
     volumes:
       # Every project's git history and blobs. Back it up with pg-data.
       - meertex-data:/data

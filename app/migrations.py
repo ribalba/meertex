@@ -52,9 +52,28 @@ def _login_tokens_expires_nullable(conn: Connection) -> bool:
     return True
 
 
+def _users_first_sign_in_backfill(conn: Connection) -> bool:
+    """``first_sign_in_at`` came after the first accounts. Those that show they
+    signed in get their creation time: a session, an API token, the zone the
+    web app sends on its first load, or a project of their own. An invited
+    person with none of it is still waiting, and their first sign-in mails
+    NEW_USER_MAIL_TO like anybody else's."""
+    result = conn.execute(
+        text(
+            "UPDATE users SET first_sign_in_at = created_at"
+            " WHERE first_sign_in_at IS NULL AND ("
+            "  api_token IS NOT NULL OR timezone IS NOT NULL"
+            "  OR EXISTS (SELECT 1 FROM sessions s WHERE s.user_id = users.id)"
+            "  OR EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = users.id AND m.role = 'owner'))"
+        )
+    )
+    return result.rowcount > 0
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
     ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
+    ("0003_users_first_sign_in_backfill", _users_first_sign_in_backfill),
 ]
 
 

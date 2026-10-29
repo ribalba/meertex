@@ -66,6 +66,17 @@ A new account, whether it signed in itself or was invited, has no
 `timezone` yet and reads as UTC. The first time the web app loads for it,
 it sends the browser's zone. After that only the settings change it.
 
+The server keeps each account's first sign-in (`first_sign_in_at`, not in
+the API). An invite makes the account long before that, so this is what
+tells an invited person who never signed in from one who did. With
+`NEW_USER_MAIL_TO` set, the first sign-in mails that address once. The mail
+says where the person comes from, which is who invited them to which paper
+as what, or that they signed up on their own. It also says how they signed
+in (code, sign-in link or invite link, and browser, CLI or desktop app),
+their IP address and user agent, and how many accounts have signed in so
+far. A mail scanner that opens the link first counts as that sign-in, and
+its user agent shows it.
+
 The API token is for scripts, the CLI and agents. It is sent as
 `Authorization: Bearer <token>` or, where a header is impossible, as
 `?token=`.
