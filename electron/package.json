@@ -41,7 +41,7 @@
       "icon": "build/icon.png",
       "synopsis": "Desktop wrapper for meertex.",
       "syncDesktopName": true,
-      "executableName": "meertex",
+      "executableName": "meertex-gui",
       "desktop": {
         "entry": { "StartupWMClass": "meertex" }
       }

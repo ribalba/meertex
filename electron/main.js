@@ -35,8 +35,9 @@ const SPELLCHECK_LANGS = (process.env.MEERTEX_SPELLCHECK_LANGS || "en-US,de-DE")
   .split(",").map((l) => l.trim()).filter(Boolean);
 
 // Linux shells match a window to its installed icon by name. X11 uses WM_CLASS
-// (from the app name), Wayland uses app_id (the executable, or --class in the
-// start script) against StartupWMClass in meertex.desktop. Same as meerpad.
+// (from the app name), Wayland uses app_id (from desktopName in package.json)
+// against StartupWMClass in meertex.desktop. Same as meerpad. Both stay
+// meertex, even though the command is meertex-gui.
 app.setName("meertex");
 
 let mainWindow = null;

@@ -32,10 +32,18 @@ The files have fixed names (`meertex-mac-arm64.dmg`, `meertex-windows-setup.exe`
 `meertex-linux-x86_64.AppImage`, ...), set by `artifactName` in `package.json`.
 
 On Linux `make distinstall` copies the AppImage to `~/.local/share/meertex/`,
-links it as `~/.local/bin/meertex`, writes `meertex.desktop` with the icon, and
+links it as `~/.local/bin/meertex-gui`, writes `meertex.desktop` with the icon, and
 makes it the handler for `meertex://` links (`xdg-mime`). Desktop sign-in needs
 that last step. `make distinstall MEERTEX_URL=http://localhost:8060` bakes
-another server into the desktop entry.
+another server into the desktop entry. On macOS it copies `meertex.app` to
+`~/Applications` and links the same `meertex-gui` command.
+
+The command is `meertex-gui` and not `meertex`, because `meertex` is the CLI
+(`make cli` in the repo root), and both live in `~/.local/bin`. The `.deb` and
+`.rpm` install `/usr/bin/meertex-gui` for the same reason. The app menu, the
+window and the `meertex://` links still say meertex. An older install that
+linked the app as `~/.local/bin/meertex` loses that link on the next
+`make distinstall`, and `make cli` puts the CLI back there.
 
 ## Releases
 
