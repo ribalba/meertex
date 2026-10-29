@@ -11,6 +11,7 @@ from .. import reminders, when
 from ..config import get_settings
 from ..database import DB
 from ..emailer import send_login_link, send_new_user
+from ..example import PEOPLE, build
 from ..models import LoginToken, Membership, Project, User, utcnow
 from ..naming import validate_pattern
 from ..schemas import LoginRequest, ProfileUpdate, UserOut, VerifyCodeRequest
@@ -63,9 +64,10 @@ def _client(agent: str) -> str:
 
 
 def _first_sign_in(db: DB, user: User, request: Request, background: BackgroundTasks, way: str) -> None:
-    """Keep the account's first sign-in and mail NEW_USER_MAIL_TO where the
-    person comes from (§2, Accounts). The update wins only once, so two
-    sign-ins at the same moment send one mail."""
+    """Keep the account's first sign-in, make its example paper (§19) and
+    mail NEW_USER_MAIL_TO where the person comes from (§2, Accounts). The
+    update wins only once, so two sign-ins at the same moment make one
+    example and send one mail."""
     if user.first_sign_in_at is not None:
         return
     first = (
@@ -74,7 +76,12 @@ def _first_sign_in(db: DB, user: User, request: Request, background: BackgroundT
         .update({"first_sign_in_at": utcnow()}, synchronize_session=False)
     )
     db.commit()
-    if not first or not settings.new_user_mail_to:
+    if not first:
+        return
+    if settings.example_paper:
+        # In the request, so that the paper list shows it at once.
+        build.create_for(db, user)
+    if not settings.new_user_mail_to:
         return
     # Every membership but an owner's is an invite (routers/members.py).
     inviter = aliased(User)
@@ -96,7 +103,12 @@ def _first_sign_in(db: DB, user: User, request: Request, background: BackgroundT
         for m, project, by in rows
     ]
     signed_in = db.query(func.count(User.id)).filter(User.first_sign_in_at.is_not(None)).scalar()
-    waiting = db.query(func.count(User.id)).filter(User.first_sign_in_at.is_(None)).scalar()
+    # The example's made-up coauthors never sign in, and they wait for nothing.
+    waiting = (
+        db.query(func.count(User.id))
+        .filter(User.first_sign_in_at.is_(None), User.email.not_in(PEOPLE))
+        .scalar()
+    )
     agent = request.headers.get("user-agent", "")
     background.add_task(
         send_new_user, settings.new_user_mail_to, user.email, invites, f"{way} {_client(agent)}",

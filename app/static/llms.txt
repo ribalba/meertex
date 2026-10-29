@@ -35,6 +35,7 @@ https://meertex.com is the hosted meertex. Anyone can sign in there with an emai
 - **Reminders before deadlines.** One digest mail a day per person, by default 14, 3 and 1 days before a deadline and on the day, counted in the venue's time zone, with when to start writing and the questions waiting. Each person picks the days and the hour and can mute a paper. `meertex reminders` prints what the next one says.
 - **Members and roles.** Owner, editor, reviewer and viewer, invited by email.
 - **Sign-in without passwords.** An emailed link or a six-character code.
+- **An example paper for every new account.** It has a venue with deadlines and a question waiting, a submitted version and a preprint, a review with threads in every state, a review request and a bibliography with mistakes in it on purpose, so a new person can try everything at once.
 
 ## For agents
 

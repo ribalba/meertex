@@ -42,6 +42,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "compiler": "VARCHAR(20) NOT NULL DEFAULT 'pdflatex'",
         "planned": "BOOLEAN NOT NULL DEFAULT false",
         "writing_days": "INTEGER",
+        "example": "BOOLEAN NOT NULL DEFAULT false",
     },
     "versions": {"compile_id": "VARCHAR(36)"},
     "users": {

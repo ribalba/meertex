@@ -11,6 +11,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 
 from .config import get_settings
+from .example import made_up
 
 settings = get_settings()
 
@@ -25,6 +26,9 @@ def _compose(subject: str, body: str) -> tuple[str, str]:
 
 
 def send_email(to: str, subject: str, body: str) -> None:
+    if made_up(to):
+        # The example paper's coauthors (app/example) have no mailbox.
+        return
     subject, body = _compose(subject, body)
 
     if not settings.smtp_host:

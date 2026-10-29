@@ -2,8 +2,9 @@
 
 The contract every part of meertex codes against. It covers accounts, folders,
 projects and their dates, versions, the live document and its sync protocol,
-the HTTP API, the CLI, the deployment and the reference check. If code and
-this file disagree, one of them is a bug.
+the HTTP API, the CLI, the deployment, the reference check and the example
+paper new accounts start with. If code and this file disagree, one of them is
+a bug.
 
 meertex is a hosted LaTeX workspace for papers. You edit locally (VS Code,
 Claude), a small sync client keeps the folder in step with the server within
@@ -75,7 +76,8 @@ as what, or that they signed up on their own. It also says how they signed
 in (code, sign-in link or invite link, and browser, CLI or desktop app),
 their IP address and user agent, and how many accounts have signed in so
 far. A mail scanner that opens the link first counts as that sign-in, and
-its user agent shows it.
+its user agent shows it. The first sign-in also makes the account's example
+paper (§19).
 
 The API token is for scripts, the CLI and agents. It is sent as
 `Authorization: Bearer <token>` or, where a header is impossible, as
@@ -2095,6 +2097,11 @@ instance dashboard. `GET /api/auth/me` says `instance_admin: true` for such
 an account, and the header's user menu then has an "Instance dashboard"
 entry that opens `/admin`.
 
+The example papers (§19) and their made-up coauthors are left out of every
+number on the dashboard, because every new account gets one and nobody wrote
+it. That is the papers with `projects.example`, their memberships, commits,
+compiles, comments, reviews and versions, and the two made-up accounts.
+
 ### Activity
 
 The server keeps on which UTC days each account used meertex
@@ -2142,7 +2149,8 @@ to this one, all in UTC. It returns
 - `growth` is how many signed-in accounts and papers there were at the end
   of each bucket, counting the papers that still exist.
 - `accounts` are the newest 200, by first sign-in and then by creation.
-  `last_active` is the last active day. `papers` counts memberships.
+  `last_active` is the last active day. `papers` counts memberships of
+  papers that are not examples.
   `invited_by` is whoever added the account to a paper first, null for one
   that signed up on its own.
 
@@ -2154,3 +2162,84 @@ months: a line chart of accounts and papers over time, and one small column
 chart per series. Every chart has a tooltip on hover and on the arrow keys,
 and a Table switch that lists its numbers. The accounts close the page in a
 table.
+
+## 19. The example paper
+
+Every account starts with an example paper, so that a new person can try
+meertex on a paper that already has a past. Each section of its text
+explains one part of meertex and says where to find it, and its notes list
+things to try. The code is in `app/example/`.
+
+- **When.** At the account's first sign-in (§2, Accounts), in the request
+  itself, so that the paper list shows it at once. That covers people who
+  signed up on their own and invited people alike. Only the sign-in that
+  sets `first_sign_in_at` makes one, so no account gets two, and accounts
+  that signed in before the example existed get none. `EXAMPLE_PAPER=false`
+  turns it off. A failure is logged, leaves nothing behind and does not stop
+  the sign-in.
+- **The paper.** It is called `example-paper` (`-2` and so on when taken),
+  labelled `example` and sits at the top of the owner's tree. Its venue is
+  the Workshop on Example Papers (`WEP`), which does not exist. The row has
+  `projects.example`, which the API does not send.
+- **The people.** The owner, Jonas Lindqvist (editor) and Amara Okafor
+  (reviewer). Jonas and Amara are made up, on example.org, and the same two
+  accounts serve every example. Their reminders and mention mails are off,
+  and nothing is ever mailed to them (`emailer.send_email` skips them), so
+  nobody can sign in as them either.
+- **Reminders.** Every membership of the example is muted
+  (`memberships.reminders_muted`, §5). The owner can lift the mute.
+
+Its past is dated from the day of the sign-in, day 0. Each step is a
+snapshot (§9) dated when it happened, or a row with that date.
+
+| Day | What happened |
+| --- | --- |
+| -50 | The project and its first commit. |
+| -45 | Jonas writes the first draft. |
+| -38 | Amara adds the sections on reviews and references. Jonas and Amara mark two entries as checked. The abstract is registered. |
+| -37 | Jonas moves the submission deadline from day -35 to day -31. |
+| -31 | The text as handed in, with anonymous authors. Answered yes, it is the version Submission (§7). |
+| -24 | The version arXiv, with the authors' names. |
+| -21 to -18 | Amara reviews Submission with four threads and asks for changes. Jonas answers one of them. |
+| -5 | Jonas rewrites two of the passages and resolves their threads. |
+| -3 | Amara accepts one of the two. |
+| -2 | Amara comments on the current text outside the review and mentions Jonas. |
+| -1 | Jonas asks the owner to review the current text (§13, Requests). |
+
+Ahead are the notification on day 9, which is the next date, the
+camera-ready on day 30 and the conference on days 75 to 77. The rebuttal
+deadline on day -2 has no answer, so the overview asks whether a rebuttal
+went out (§6). Every date is a day in AoE, the conference's are in UTC.
+
+So the owner finds one thread accepted, one resolved and waiting for its
+acceptance, one with a suggestion to apply, one question with a reply, the
+single comment, the open review request and a spelling mistake in the text.
+
+The bibliography is wrong on purpose. The paper's Table 1 lists what the
+reference check (§16) finds.
+
+| Entry | Finding |
+| --- | --- |
+| `hartmann2023deadline` | `not_found`. The paper is made up, authors and all. |
+| `dourish1992awareness` | `doi_not_found` for a DOI with one digit too many, and `suggest_doi` with the right one. |
+| `nicolaescu2016yjs` | `year`, 2015 instead of 2016. |
+| `kleppmann2019local` | `title`, without its subtitle. |
+| `ellis1989concurrency` | `placeholder` for `pages = {TODO}`, and `differs`. |
+| `collabtex` | `url_dead`, a GitHub repository that does not exist. |
+| `wilson2014best` | `changed`. Amara's mark is older than the issue number Jonas added. |
+| `mittelbach2004companion` | Cited without an entry, so it is missing. |
+| `knuth1984texbook` | `not_cited`. |
+
+`shapiro2011crdt` carries Jonas's valid mark and is `checked`. The other
+entries are verified. These outcomes were tried against the live services
+on 2026-10-29. Right after the paper is made, the reference check runs once
+as Jonas when `REFERENCES_NETWORK` is on. The versions are compiled like any
+other (§14).
+
+**How it is made.** `app/example/main.tex` is the text as handed in and
+`refs.bib` its bibliography without the checked marks. The other stages come
+from them by replacing passages, and each replaced passage must be there
+exactly once, so an edit of `main.tex` that breaks the example fails the
+tests. The files go through the live document, versions through the code that
+makes every version, and the threads are anchored and resolved the way the
+review routes do it. `git.init` and the snapshot take the date of the commit.

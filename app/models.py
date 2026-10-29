@@ -232,6 +232,9 @@ class Project(Base):
     planned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     # This paper's writing time in days. Null means the owner's usual time (§5).
     writing_days: Mapped[int | None] = mapped_column(Integer)
+    # The example paper a new account starts with (§19). The instance
+    # dashboard leaves it out.
+    example: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

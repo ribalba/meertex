@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     # The pattern a new account names its projects with (§4).
     default_naming_pattern: str = "{year}-{conference|lower}-{paper|lower}"
 
+    # An example paper for every new account at its first sign-in, with a
+    # history, versions, a review and a bibliography to check (docs/DESIGN.md
+    # §19). False makes none.
+    example_paper: bool = True
+
     # --- Instance admins (docs/DESIGN.md §18) -----------------------------------
     # Email addresses, comma-separated, whose accounts open the instance
     # dashboard at /admin. Empty means nobody.

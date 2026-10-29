@@ -1,0 +1,151 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage[numbers]{natbib}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\title{The Whole Life of a Paper, Shown on an Example}
+\author{Anonymous Authors}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper is an example that lives in your meertex account, so that you can
+try everything on a paper that already has a past. It has a venue with
+deadlines, a version that was handed in, a review with open threads and a
+bibliography with mistakes in it. Each section explains one part of meertex
+and says where to find it. Change whatever you like, because nothing here is
+real. When you are done, delete the paper on its Settings tab.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+
+A paper is more than its \texttt{.tex} files. It has a venue, deadlines in a
+time zone nobody lives in, versions that went out, reviews from coauthors and a
+bibliography that somebody has to check. meertex keeps all of it next to the
+\LaTeX{} source~\cite{lamport1994latex}.
+
+Your coauthors on this paper, Jonas Lindqvist and Amara Okafor, are made up.
+They never get a mail, so write to them as much as you like.
+Section~\ref{sec:writing} is about writing, Section~\ref{sec:dates} about
+deadlines, Section~\ref{sec:versions} about versions,
+Section~\ref{sec:reviews} about reviews and Section~\ref{sec:references} about
+the bibliography.
+
+\section{Writing Together}\label{sec:writing}
+
+The Editor tab shows the files on the left, the source in the middle and the
+PDF on the right. Everybody who has the paper open edits the same document.
+You see their cursors with their names, and edits merge character by
+character, because the document is a conflict-free replicated data
+type~\cite{shapiro2011crdt}. meertex builds it with
+Yjs~\cite{nicolaescu2016yjs,yjs}. Shared editing is much older than
+that~\cite{ellis1989concurrency}, and seeing where the others work is what
+keeps a shared document calm~\cite{dourish1992awareness}.
+
+The PDF compiles two seconds after you stop typing, or at once with
+Ctrl+Enter. A double click in the PDF jumps to its line in the source, and
+back. The editor also underlines spelling mistakes, such as the one we left in
+this sentense on purpose.
+
+You do not have to write in the browser. The command line client keeps a
+folder on your computer in step with the paper, so you can use your own editor
+and your own tools~\cite{kleppmann2019local}.
+
+\begin{verbatim}
+pip install meertex
+meertex login
+meertex checkout example-paper
+\end{verbatim}
+
+\section{Deadlines and the Timeline}\label{sec:dates}
+
+Most of a paper is written in the last days before its
+deadline~\cite{hartmann2023deadline}, so meertex keeps the deadlines in view.
+The Overview tab shows the venue, the Workshop on Example Papers, with its
+dates. They are in AoE, as most calls for papers state them. The submission
+deadline was extended by four days, and the overview still shows where it was
+before. The next date, the notification, counts down at the top of the page.
+
+When a date passes, meertex asks what happened. The rebuttal deadline is over,
+so the overview asks whether we sent a rebuttal. Answering yes freezes the
+text as it was at the deadline and calls it the version Rebuttal. The Timeline
+tab shows all your papers on one chart, with the time you need to write each
+of them.
+
+\section{Versions and History}\label{sec:versions}
+
+The text that went to the venue must never change. When we answered yes to
+``Did you hand it in?'', meertex froze the files as they were at the deadline.
+That is the version Submission. The version arXiv came a week later and adds
+our names, which a double-blind venue must not see. The Versions tab compiles a
+PDF for each of them and compares any two, as a word diff or as a PDF that
+marks every change.
+
+Between versions, meertex takes a snapshot a minute after the last edit and
+keeps it in a git repository, as good research software does
+too~\cite{wilson2014best}. The History tab lists the snapshots, and every
+coauthor can clone the repository for a backup.
+
+\section{Reviews}\label{sec:reviews}
+
+After the submission, Amara reviewed it like a pull request. She commented on
+passages of the text and asked for changes. Jonas reworked the text and
+resolved her threads, so each thread shows the request, the answer and the
+change side by side. On the Reviews tab, one thread is accepted, one waits for
+its acceptance, one carries a suggestion that you can apply with one click and
+one question is still open.
+
+Jonas has also asked you to review the current text. Start your review on the
+Reviews tab, select a passage and comment on it. Typing @ in a comment
+completes a coauthor's name and tells them by mail.
+
+\section{References}\label{sec:references}
+
+We built the bibliography with mistakes in it on purpose, the kind that
+reviewers find and language models make up. The References tab looks every
+entry up at doi.org, Crossref, Semantic Scholar, DBLP, arXiv and Open Library,
+fetches its links and lists what it finds. Table~\ref{tab:refs} says what to
+expect.
+
+\begin{table}[ht]
+  \centering
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    Entry & What is wrong with it \\
+    \midrule
+    \cite{hartmann2023deadline} & Made up, no index knows the paper \\
+    \cite{dourish1992awareness} & A typo in the DOI \\
+    \cite{nicolaescu2016yjs} & The wrong year \\
+    \cite{kleppmann2019local} & The title lacks its subtitle \\
+    \cite{ellis1989concurrency} & A placeholder instead of the pages \\
+    \cite{collabtex} & A link to a repository that is gone \\
+    \cite{wilson2014best} & Changed after somebody checked it \\
+    \cite{mittelbach2004companion} & No entry at all \\
+    \bottomrule
+  \end{tabular}
+  \caption{The mistakes in this paper's bibliography.}\label{tab:refs}
+\end{table}
+
+Where the record knows better, ``Take this value'' writes its value into the
+entry. ``Add a reference'' makes an entry from a DOI, an arXiv id, an ISBN or a
+link, which is how the missing entry can be made. Once you have checked an
+entry by hand, ``Mark as checked'' writes a mark into the entry itself, and the
+mark breaks when somebody changes the entry later.
+
+\section{What Next}\label{sec:next}
+
+Start your own paper with New paper on the paper list. It can start empty, from
+a \texttt{main.tex} with a \texttt{refs.bib}, or from a publisher's template
+zip. When this example has served its purpose, delete it on its Settings tab.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

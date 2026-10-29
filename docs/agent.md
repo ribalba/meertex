@@ -85,6 +85,12 @@ meertex diff 2027-icse-green-llm submission --word   # what changed since the su
 
 `--json` on any command gives the raw shapes of DESIGN.md §11.
 
+A paper called `example-paper` with the label `example` is the example every
+new account starts with (DESIGN.md §19). Its coauthors Jonas Lindqvist and
+Amara Okafor are made up, its question, threads, review request and broken
+references are there on purpose, and its reminders are muted. Leave it out of
+answers about the user's own papers and deadlines.
+
 Questions about the instance itself ("how many users are on meertex", "how
 active was it this month") have no CLI command. If the user's account is an
 instance admin, `GET /api/admin/instance?period=30d` (or `90d`, `12m`) with

@@ -105,6 +105,8 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-hello@meertex.com}
       # One mail for every new account, at its first sign-in (docs/DESIGN.md §2).
       NEW_USER_MAIL_TO: ${NEW_USER_MAIL_TO:-}
+      # An example paper for every new account (docs/DESIGN.md §19).
+      EXAMPLE_PAPER: ${EXAMPLE_PAPER:-true}
       # Accounts that open the instance dashboard at /admin (docs/DESIGN.md §18).
       INSTANCE_ADMINS: ${INSTANCE_ADMINS:-}
     volumes:
