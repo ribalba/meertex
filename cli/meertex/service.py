@@ -154,11 +154,32 @@ def restart() -> bool:
     Unavailable, OSError or CalledProcessError when the restart fails."""
     if not status(0)["running"]:
         return False
-    if MAC:
+    _restart(running=True)
+    return True
+
+
+def restart_or_start() -> dict:
+    """``meertex service restart``. Restarts the service, or starts it when it
+    is installed and does not run. A service that is not installed stays as
+    it is, and ``installed`` says so. Raises Unavailable, OSError or
+    CalledProcessError when systemctl or launchctl fails."""
+    if not MAC:
+        # systemd runs a unit file that changed on disk only after a reload.
+        _systemctl("daemon-reload")
+    s = status(0)
+    if s["installed"]:
+        _restart(s["running"])
+    return {"unit": s["unit"], "installed": s["installed"], "was_running": s["running"]}
+
+
+def _restart(running: bool) -> None:
+    if not MAC:
+        _systemctl("restart", UNIT_NAME)
+    elif running or _loaded():
+        # kickstart starts a loaded agent that does not run. -k stops one that does first.
         _launchctl("kickstart", "-k", f"{domain()}/{LABEL}")
     else:
-        _systemctl("restart", UNIT_NAME)
-    return True
+        _launchctl("bootstrap", domain(), str(plist_path()))
 
 
 def _cannot_run(argv: list[str], exc: OSError) -> Unavailable:

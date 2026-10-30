@@ -28,6 +28,7 @@ meertex checkout 2027-icse-green-llm    # the paper in ~/papers/2027-icse-green-
 meertex sync                            # keeps every checkout in step while it runs
 meertex service install                 # Linux and macOS: runs meertex sync in the background
 meertex service status                  # does it run, and its last log lines (-f follows)
+meertex service restart                 # restarts it, or starts it when it does not run
 ```
 
 `--server` takes the address of your own meertex server just as well.

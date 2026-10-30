@@ -1097,12 +1097,21 @@ def cmd_service(args) -> int:
     try:
         if args.action == "install":
             res = service.install(start=not args.no_start)
+        elif args.action == "restart":
+            res = service.restart_or_start()
         else:
             res = service.uninstall(stop=not args.no_start)
+    except service.Unavailable as exc:
+        raise UsageError(str(exc)) from exc
     except (OSError, subprocess.CalledProcessError) as exc:
         raise UsageError(f"{'launchctl' if service.MAC else 'systemctl'} failed ({exc}).") from exc
+    if args.action == "restart" and not res["installed"]:
+        raise UsageError(f"{service.name()} is not installed. Install it with meertex service install.")
     if args.json:
         print_json(res)
+    elif args.action == "restart":
+        print(f"Restarted {service.name()}" if res["was_running"] else
+              f"Started {service.name()}, which did not run")
     elif args.action == "install":
         print(f"Wrote {res['unit']}")
         print(f"Started {service.name()}" if res["started"] else
@@ -1263,14 +1272,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("project")
     p.add_argument("folder")
 
-    p = cmd("service", cmd_service, "Install, remove or check the background service that runs meertex sync "
+    p = cmd("service", cmd_service, "Install, remove, restart or check the background service that runs meertex sync "
                                     "(a systemd user unit, a launchd agent on macOS)")
-    ssub = p.add_subparsers(dest="action", metavar="install|uninstall|status", required=True)
+    ssub = p.add_subparsers(dest="action", metavar="install|uninstall|restart|status", required=True)
     for action, help in (("install", "write the service and start it"),
                          ("uninstall", "stop the service and remove it")):
         s = ssub.add_parser(action, parents=[common], help=help)
         s.add_argument("--no-start", action="store_true",
                        help="only write or remove the file, no systemctl or launchctl")
+    ssub.add_parser("restart", parents=[common], help="restart it, or start it when it does not run")
     s = ssub.add_parser("status", parents=[common], help="whether it runs, and its last log lines. Exits 1 when it does not run")
     s.add_argument("-n", "--lines", type=int, default=20, help="how many log lines, default 20")
     s.add_argument("-f", "--follow", action="store_true",
