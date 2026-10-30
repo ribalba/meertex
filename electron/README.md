@@ -121,6 +121,32 @@ exists. On Linux and Windows it comes in on the command line, on macOS as an
   to change that).
 - **Permissions** (the clipboard for the copy buttons) only for the server's own
   pages.
+- **The agent panel** in the editor, below.
+
+## The agent panel
+
+The editor's Agent button shows a chat with the Claude Code of this computer,
+or with an Ollama model that Claude Code talks to, as a fourth column or under
+the text (`docs/DESIGN.md` §20, and the paper's Agent tab for the setup). The
+agent works in the paper's checkout (`meertex checkout`), and `meertex sync`
+brings its edits into the editor.
+
+- `agent.js` runs the `claude` command with stream-json on stdin and stdout
+  and answers its permission prompts with native dialogs. `MEERTEX_CLAUDE`
+  names another command, `OLLAMA_HOST` another Ollama.
+- `panel/` is the chat. It is served from `meertex-agent://panel` into an
+  iframe of the editor, so the server's page cannot script it.
+  `preload.js` gives that frame the chat's bridge and the server's pages only
+  the context, the status and the panel's moves.
+- The chat lives in the main process, one per paper, until the app quits. The
+  provider and the models are in `agent.json` in the app's user data folder.
+
+To try it against a local server, check a paper of that server out with the
+CLI pointed at it, run `meertex sync`, and start the app with
+`MEERTEX_URL=http://localhost:8060 npm start`. A second instance next to an
+installed app needs its own `--user-data-dir`, or the installed one takes the
+start over. Started from a Claude Code terminal, the app keeps that session's
+variables away from the agent.
 
 The app icon is `build/icon.png` (1024x1024), scaled up from the 512 px logo in
 `app/static/img/logo-512.png`. A larger original would make it sharper. Code

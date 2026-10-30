@@ -2243,3 +2243,105 @@ exactly once, so an edit of `main.tex` that breaks the example fails the
 tests. The files go through the live document, versions through the code that
 makes every version, and the threads are anchored and resolved the way the
 review routes do it. `git.init` and the snapshot take the date of the commit.
+
+## 20. The agent in the desktop app
+
+In the desktop app the editor can show an agent panel. It is a chat with the
+Claude Code of the person's own computer, or with a local model in Ollama
+that Claude Code talks to. The agent works in the paper's checkout (§10), and
+the sync client carries its edits into the live document, where they show up
+like a coauthor's. The server takes no part in it. The code is
+`electron/agent.js`, `electron/panel/` and `app/static/js/editor-agent.js`.
+
+### The panel and the page
+
+- The panel is a page of the desktop app, served from its own scheme at
+  `meertex-agent://panel/?project=<id>&name=<name>&position=column|below`,
+  and the editor shows it in an iframe. The scheme is standard and secure, so
+  the panel has an origin of its own and the server's page cannot script it.
+  Its responses carry `frame-ancestors <server origin>`.
+- `electron/preload.js` runs in every frame and gives each at most one
+  bridge, by origin. The panel gets `window.meertexAgent` (attach, send,
+  stop, reset, choose a provider and model, open a file, move or close the
+  panel). The top frame of a server page gets `window.meertexDesktop` with
+  `version: 2` and an `agent` part: `status(projectId)`,
+  `setContext(projectId, context)`, `onOpenFile` and `onLayout`. Every other
+  frame gets nothing. `agent.js` checks the sending frame's origin of every
+  message again.
+- The page cannot send a prompt. Prompts are typed in the panel only, and
+  every permission Claude Code asks for is a native dialog of the app, which
+  no page can draw or click.
+- The context is the open file's path, the cursor's line and the selected
+  lines, never text. It goes into the prompt only when the path names a file
+  of the checkout, as a first line like `[In the editor main.tex is open, and
+  lines 40 to 52 are selected.]`. A box in the panel leaves it out of a
+  message.
+
+### Where it goes
+
+- The editor's toolbar has an Agent button, for the owner and editors in
+  the desktop app. It shows the panel as a fourth column after the PDF or as
+  a box under the text in the text's column. Two buttons in the panel switch
+  between the two, and a third closes it. On a phone there is no panel.
+- The place (`meertex.editor.agent`: `column`, `below` or `off`), the last
+  place shown, the column's width and the box's height are kept per browser.
+  With the column the text keeps at least 360 px, and the PDF and the panel
+  give way. Moving the panel loads its iframe again, and it picks the chat up
+  from the app.
+
+### The agent
+
+- It is the `claude` command, found through `MEERTEX_CLAUDE` or the PATH of
+  a login shell (plus `~/.local/bin` and `~/.claude/local`). On Windows only
+  `claude.exe` works. The SDK is not bundled, because its license does not
+  allow that in an AGPL app.
+- The app speaks Claude Code's stream-json on stdin and stdout, with
+  permission prompts as control requests (`--permission-prompt-tool=stdio`,
+  the transport of Anthropic's agent SDKs). It starts it in the checkout with
+  `--permission-mode acceptEdits`, so edits inside the checkout need no
+  question, and commands, web access and files outside it do. Instructions
+  appended to the system prompt say that edits reach coauthors within a
+  second, that `.meertex/` is off limits, and what the context line means.
+- The environment of the app goes to Claude Code without the variables of a
+  running Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID` and
+  the like), so an app started from such a session does not hand them on.
+- A question shows what is asked (the command, the file, the address) and
+  Claude Code's reason, with Allow, Deny and, when Claude Code suggests a
+  rule, "Allow and don't ask again in this chat", which adds that rule for
+  the session. Stop interrupts the turn and closes an open question. A
+  declined call shows as declined.
+- With Claude the person's own Claude Code settings apply (CLAUDE.md,
+  permission rules, MCP servers). The model is Claude Code's default, Opus,
+  Sonnet or Haiku. Another model of the same provider carries on with
+  `--resume`.
+- With Ollama the app points Claude Code at Ollama's Anthropic API
+  (`ANTHROPIC_BASE_URL` from `OLLAMA_HOST`, by default 127.0.0.1:11434, and
+  any `ANTHROPIC_API_KEY`), and every model Claude Code would pick is the
+  chosen one. It runs with `--bare`, only the tools Read, Edit, Write, Glob,
+  Grep and Bash, `--strict-mcp-config` and `--disable-slash-commands`, which
+  takes the first request to about a thousand tokens. Ollama needs 0.14 or
+  newer and a model that can call tools (from `/api/tags`). Switching the
+  provider starts a new chat, after a question in the panel.
+
+### The chat
+
+- There is one chat per paper while the app runs, held in the app. It
+  survives a reload and a move of the panel, not a restart of the app. New
+  chat ends the process and starts over.
+- It shows the messages, the answers as they stream (a little Markdown), and
+  one line per tool call (Read, Edited, Wrote, Ran, Searched for, ...). A
+  file of the paper in such a line opens in the editor.
+- The provider and the models are kept in the app's `agent.json`.
+- The panel says what keeps the agent from working: no checkout (with the
+  commands to make one), no `claude`, Ollama not answering, too old or
+  without a model. It warns when the sync does not run, from the pid in the
+  checkout's `status.json`, and says when the checkout is held.
+
+### The Agent tab
+
+`/p/<name>/agent` says what the agent is and how to set it up: the desktop
+app, `meertex checkout`, the sync service, Claude Code, and Ollama with a
+model that can call tools and a context of at least 32k tokens. In the
+desktop app it checks each of these on the computer (the checkout's folder
+only as `~/...`), and its button opens the editor with the panel. In a
+browser it links the desktop app's latest release.

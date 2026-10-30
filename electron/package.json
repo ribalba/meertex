@@ -24,7 +24,7 @@
     "appId": "com.meertex.desktop",
     "productName": "meertex",
     "directories": { "buildResources": "build", "output": "dist" },
-    "files": ["main.js", "preload.js", "package.json", "build/icon.png"],
+    "files": ["main.js", "preload.js", "agent.js", "panel/**", "package.json", "build/icon.png"],
     "protocols": [
       { "name": "meertex", "schemes": ["meertex"] }
     ],

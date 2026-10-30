@@ -73,6 +73,7 @@ const ICONS = {
   sigma: '<path d="M12.25 4.25v-1.5h-8.5L8.25 8l-4.5 5.25h8.5v-1.5"/>',
   percent: '<path d="M12.75 3.25 3.25 12.75"/><circle cx="4.5" cy="4.5" r="1.75"/><circle cx="11.5" cy="11.5" r="1.75"/>',
   keyboard: '<rect x="1.25" y="3.75" width="13.5" height="8.5" rx="1.5"/><path stroke-width="1.75" d="M4.25 6.75h0M6.75 6.75h0M9.25 6.75h0M11.75 6.75h0M5.25 9.5h5.5"/>',
+  sparkle: '<path d="M7 2.5C7.5 6 8.5 7.5 12.5 8 8.5 8.5 7.5 10 7 13.5 6.5 10 5.5 8.5 1.5 8 5.5 7.5 6.5 6 7 2.5z"/><path d="M12.5 1.25v3.5M10.75 3h3.5"/>',
 };
 
 const SVG_NS = "http://www.w3.org/2000/svg";

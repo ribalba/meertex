@@ -23,6 +23,7 @@ import { editorComments } from "../editor-comments.js";
 import { editorFormat } from "../editor-format.js";
 import { editorGrammar } from "../editor-grammar.js";
 import { editorOutline } from "../editor-outline.js";
+import { editorAgent } from "../editor-agent.js";
 import { editorProblems } from "../editor-problems.js";
 import { showSpot, spotExtension } from "../editor-spot.js";
 
@@ -154,6 +155,7 @@ export async function render(ctx) {
   onLeave(() => ed.pdf.destroy());
   onLeave(() => ed.comments.destroy());
   onLeave(() => ed.outline.destroy());
+  onLeave(() => ed.agent?.destroy());
   ed.grammar.start();
   onLeave(() => ed.grammar.destroy());
   // The page goes up right away and connects in the background.
@@ -278,6 +280,16 @@ function layout(ctx) {
     view: () => (ed.boundText ? ed.view : null),
     note: (text) => note(ed, text),
   });
+  // The desktop app's agent, as a fourth column or under the text
+  // (editor-agent.js). Null in a browser.
+  ed.agent = editorAgent({
+    project: ed.p,
+    canEdit: ed.canEdit,
+    cm: () => ed.cm,
+    view: () => (ed.boundText ? ed.view : null),
+    path: () => ed.openPath,
+    open: (at) => openAt(ed, at),
+  });
 
   el.host = h("div", { class: "editor-host" }, ed.comments.floatEl, ed.grammar.box);
   el.other = h("div", { class: "editor-other" },
@@ -289,7 +301,7 @@ function layout(ctx) {
 
   el.main = h("section", { class: "editor-main", "aria-label": "Editor" },
     h("div", { class: "editor-toolbar" },
-      el.filesBtn, el.path, el.note, el.status, el.presence, el.spell, ed.comments.button, el.pdfBtn),
+      el.filesBtn, el.path, el.note, el.status, el.presence, el.spell, ed.comments.button, ed.agent?.button, el.pdfBtn),
     ed.format.el,
     readOnly,
     h("div", { class: "editor-pane" }, el.host, el.other));
@@ -309,6 +321,7 @@ function layout(ctx) {
   if (treeWidth > 0) el.shell.style.setProperty("--tree-width", `${treeWidth}px`);
   wireDivider(ed);
   wireTreeDivider(ed);
+  ed.agent?.mount(el.shell, el.main);
   paintPdfButton(ed);
   // A file dropped next to the tree would make the browser leave the page.
   el.shell.addEventListener("dragover", (e) => {
@@ -689,6 +702,7 @@ function open(ed, id, { history = "push", focus = false } = {}) {
   setTitle(entry.shownAt, ed.p.name);
   paintPath(ed, entry);
   ed.outline.moved();
+  ed.agent?.opened();
   showTree(ed, false);
   if (focus && ed.view && window.matchMedia("(min-width: 768px)").matches) ed.view.focus();
 }
@@ -788,6 +802,7 @@ function bindText(ed, entry) {
       editorLooks(cm),
       ed.comments.extension(),
       ed.outline.extension(),
+      ed.agent ? ed.agent.extension() : [],
       spotExtension(cm),
       cm.yCollab(entry.text, ed.awareness, { undoManager }),
     ],
