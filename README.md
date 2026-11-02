@@ -131,6 +131,12 @@ updates of the server, the CLI, the desktop app, the editor bundle, the images
 and the GitHub Actions. Minor and patch updates come grouped, majors one by
 one. An editor update needs `make editor` on its branch before merging.
 
+`.github/workflows/tests.yml` runs on every pull request and every push to
+`main`. It runs ruff, the whole test suite against PostgreSQL and with TeX Live,
+the CLI's tests on Python 3.11, and builds the editor bundle again to check that
+the committed one matches `tools/editor`. A Dependabot pull request therefore
+shows whether it breaks anything before it is merged.
+
 ## Releasing the CLI
 
 `.github/workflows/cli.yml` runs on every push to `main` that touches `cli/`,

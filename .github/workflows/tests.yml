@@ -1,0 +1,121 @@
+# Runs the tests on every pull request, Dependabot's included, and on every
+# push to main. Coolify deploys every push to main, so a pull request is where
+# a change shows that it breaks nothing.
+#
+# `lint` runs ruff. `server` runs the whole suite, tests/ and cli/tests/, on
+# the Python of the Dockerfile and against the PostgreSQL of
+# docker-compose.yml, with Ubuntu's TeX Live for the compile tests.
+# tests/test_grammar_live.py needs a LanguageTool (GRAMMAR_TEST_URL) and skips.
+# `cli` runs the CLI's tests on the oldest Python that cli/pyproject.toml
+# allows, with only the CLI installed, the way pipx installs it. Its
+# end-to-end tests skip there without MEERTEX_TEST_DB, and `server` runs them.
+# `editor` builds the editor bundle again from tools/editor and fails when it
+# differs from the committed one, so an update of the editor's packages cannot
+# be merged without `make editor`. The build is reproducible byte for byte.
+
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run of the push before it. Runs on
+# main all finish.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # Pinned, because the repository has no ruff configuration and a new ruff
+      # release can add rules to its defaults.
+      - name: Install ruff
+        run: python -m pip install ruff==0.17.3
+      - name: Lint
+        run: ruff check app cli tests
+
+  server:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: meertex
+          POSTGRES_PASSWORD: meertex
+          POSTGRES_DB: meertex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U meertex -d meertex_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      MEERTEX_TEST_DB: postgresql+psycopg://meertex:meertex@127.0.0.1:5432/meertex_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            cli/pyproject.toml
+      # latexmk, synctex, biber and latexdiff, with pdfLaTeX, XeLaTeX and
+      # LuaLaTeX. texlive-plain-generic brings ulem, which latexdiff's PDF needs.
+      - name: Install TeX Live
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended lmodern \
+            texlive-plain-generic texlive-xetex texlive-luatex texlive-bibtex-extra biber latexdiff
+      - name: Install
+        run: |
+          python -m pip install -r requirements.txt pytest
+          python -m pip install -e ./cli
+      - name: Test
+        run: python -m pytest -q -ra tests cli/tests
+
+  cli:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install the CLI and pytest
+        run: python -m pip install ./cli pytest
+      - name: Test
+        run: python -m pytest -q cli/tests
+
+  editor:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/editor/package-lock.json
+      - name: Build the editor bundle
+        working-directory: tools/editor
+        run: npm ci && node build.mjs
+      - name: Compare it with the committed one
+        run: |
+          changes="$(git status --porcelain -- app/static/vendor)"
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "::error::app/static/vendor does not match tools/editor. Run make editor and commit the result."
+            exit 1
+          fi

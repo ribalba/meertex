@@ -22,7 +22,17 @@ from sqlalchemy.orm import Session as DBSession
 from .. import live, mentions, naming, services, tree, when
 from ..anchors import Anchorer, lines_of, word_diff
 from ..config import get_settings
-from ..models import Comment, Membership, Project, ProjectDate, Review, ReviewRequest, Thread, User, utcnow
+from ..models import (
+    Comment,
+    Membership,
+    Project,
+    ProjectDate,
+    Review,
+    ReviewRequest,
+    Thread,
+    User,
+    utcnow,
+)
 from ..project_schemas import DateIn
 from ..references import bibtex
 from ..references import service as references
