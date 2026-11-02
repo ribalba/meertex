@@ -4,12 +4,12 @@ starlette==1.10.0            # pinned directly, not left to FastAPI's range (see
                             # >=1.3.1 is a floor (CVE-2025-62727, CVE-2026-54283).
 uvicorn[standard]==0.54.0   # [standard] brings the websockets implementation
 sqlalchemy==2.1.6
-pydantic==2.14.1
-pydantic-settings==2.16.1
+pydantic==2.14.2
+pydantic-settings==2.16.2
 email-validator==2.3.0
 python-multipart==0.0.32    # floor (CVE-2026-42561, CVE-2026-53540)
 psycopg[binary]==3.3.6
-tzdata==2026.5              # IANA zones on hosts that ship none (containers)
+tzdata==2026.6              # IANA zones on hosts that ship none (containers)
 
 # The live document (docs/DESIGN.md §8): Yjs-compatible CRDT, and the
 # character diffs that turn an uploaded file into minimal edits.
