@@ -28,8 +28,8 @@ jobs:
       matrix:
         python: ["3.11", "3.13"]
     steps:
+      - uses: actions/setup-python@v7
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
       - name: Install the CLI and pytest
@@ -44,8 +44,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      - uses: actions/setup-python@v7
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
       - name: Stamp the version
