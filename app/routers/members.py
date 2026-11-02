@@ -83,7 +83,7 @@ def add_member(ref: str, body: MemberIn, db: DB, user: SessionOrTokenUser) -> di
     db.add(added)
     db.commit()
 
-    token = create_login_token(db, invited.email, redirect_to=f"/p/{project.id}")
+    token = create_login_token(db, invited.email, redirect_to=f"/p/{project.id}", expires=False)
     link = f"{get_settings().base_url.rstrip('/')}/api/auth/callback?token={token}"
     send_invite(invited.email, user.name or user.email, project.title or project.name, body.role, link)
     return serialize.member_dict(added, invited)

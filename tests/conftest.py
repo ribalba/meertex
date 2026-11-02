@@ -27,6 +27,9 @@ os.environ.setdefault("SNAPSHOT_MAX_SECONDS", "3600")
 # No reminder loop in the test apps. tests/test_reminders.py calls its functions
 # directly, with a "now" of its own.
 os.environ["REMINDERS_ENABLED"] = "false"
+# Every first sign-in would make an example paper, and most tests count the
+# papers. tests/test_example.py switches it on.
+os.environ["EXAMPLE_PAPER"] = "false"
 if os.environ.get("MEERTEX_TEST_DB"):
     os.environ["DATABASE_URL"] = os.environ["MEERTEX_TEST_DB"]
 else:

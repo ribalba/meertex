@@ -39,6 +39,8 @@ def server(tmp_path_factory):
         "DATABASE_URL": os.environ["MEERTEX_TEST_DB"],
         # No mails from the reminder loop in a test server.
         "REMINDERS_ENABLED": "false",
+        # New accounts start without the example paper, so lists start empty.
+        "EXAMPLE_PAPER": "false",
         "DATA_DIR": str(tmp / "data"),
         "BASE_URL": BASE,
         "SECRET_KEY": "e2e-secret",

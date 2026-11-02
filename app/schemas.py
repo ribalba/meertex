@@ -44,6 +44,8 @@ class UserOut(BaseModel):
     mention_mails: bool = True
     # The profile picture (§2, Accounts), or None for the initials.
     avatar_url: str | None = None
+    # INSTANCE_ADMINS names this account. It opens /admin (§18).
+    instance_admin: bool = False
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

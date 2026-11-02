@@ -7,12 +7,13 @@
 * Everything that belongs to a project goes with it (ON DELETE CASCADE).
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -82,22 +83,31 @@ class User(Base):
     # The profile picture's file name in DATA_DIR/avatars (app/avatars.py).
     # None shows the initials.
     avatar: Mapped[str | None] = mapped_column(String(80))
+    # The first sign-in. An invite makes the account before that, so None is an
+    # invited person who has not signed in yet (DESIGN §2, Accounts).
+    first_sign_in_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     @property
     def avatar_url(self) -> str | None:
         return f"/api/avatars/{self.avatar}" if self.avatar else None
 
+    @property
+    def instance_admin(self) -> bool:
+        """INSTANCE_ADMINS names this account (DESIGN §18)."""
+        return self.email in get_settings().instance_admin_emails
+
 
 class LoginToken(Base):
     """Magic link token emailed to a user, reusable until it expires (so mail
-    scanners that prefetch the link do not burn it)."""
+    scanners that prefetch the link do not burn it). An invite's token has no
+    ``expires_at`` and never expires."""
 
     __tablename__ = "login_tokens"
 
     token: Mapped[str] = mapped_column(String(64), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), index=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
     # Where to land after signing in (an invited project, for instance).
     redirect_to: Mapped[str | None] = mapped_column(String(500))
 
@@ -122,6 +132,17 @@ class RateLimit(Base):
     key: Mapped[str] = mapped_column(String(200), primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class ActiveDay(Base):
+    """A UTC day on which the account used meertex: the web app, the CLI, the
+    sync or git (DESIGN §18). One row per account and day, for the instance
+    dashboard's active people."""
+
+    __tablename__ = "active_days"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
 
 
 class Session(Base):
@@ -211,6 +232,9 @@ class Project(Base):
     planned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     # This paper's writing time in days. Null means the owner's usual time (§5).
     writing_days: Mapped[int | None] = mapped_column(Integer)
+    # The example paper a new account starts with (§19). The instance
+    # dashboard leaves it out.
+    example: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

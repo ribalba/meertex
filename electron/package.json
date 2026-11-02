@@ -17,14 +17,14 @@
     "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "44.10.0",
-    "electron-builder": "26.15.3"
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
   },
   "build": {
     "appId": "com.meertex.desktop",
     "productName": "meertex",
     "directories": { "buildResources": "build", "output": "dist" },
-    "files": ["main.js", "preload.js", "package.json", "build/icon.png"],
+    "files": ["main.js", "preload.js", "agent.js", "panel/**", "package.json", "build/icon.png"],
     "protocols": [
       { "name": "meertex", "schemes": ["meertex"] }
     ],
@@ -41,7 +41,7 @@
       "icon": "build/icon.png",
       "synopsis": "Desktop wrapper for meertex.",
       "syncDesktopName": true,
-      "executableName": "meertex",
+      "executableName": "meertex-gui",
       "desktop": {
         "entry": { "StartupWMClass": "meertex" }
       }

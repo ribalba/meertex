@@ -86,11 +86,11 @@ def _editors(message: str) -> list[str]:
     return [e.strip() for e in first[len(EDITS_BY) :].split(",") if e.strip()]
 
 
-def init_project(project_id: str, template: str = "empty") -> str:
+def init_project(project_id: str, template: str = "empty", *, at: datetime | None = None) -> str:
     """Create the project's data directory, its git repository with a first
-    commit, and its (empty, or ``basic``: main.tex + refs.bib) live document.
-    Returns the newest commit."""
-    git.init(project_id, "Project created")
+    commit (dated ``at``, naive UTC, when given), and its (empty, or
+    ``basic``: main.tex + refs.bib) live document. Returns the newest commit."""
+    git.init(project_id, "Project created", at=at)
     if template == "basic":
         return add_starter_files(project_id)
     return git.head(project_id)

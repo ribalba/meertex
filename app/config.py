@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_use_tls: bool = True
     email_from: str = "hello@meertex.com"
+    # Who hears about every new account: one mail at its first sign-in, saying
+    # who invited it or that it signed up on its own (docs/DESIGN.md §2,
+    # Accounts). Empty mails nobody.
+    new_user_mail_to: str = ""
 
     # --- The live document (docs/DESIGN.md §8-§10) ------------------------------
     # A file is text up to this size, a blob above it. Blobs are capped too.
@@ -109,9 +113,23 @@ class Settings(BaseSettings):
     # The pattern a new account names its projects with (§4).
     default_naming_pattern: str = "{year}-{conference|lower}-{paper|lower}"
 
+    # An example paper for every new account at its first sign-in, with a
+    # history, versions, a review and a bibliography to check (docs/DESIGN.md
+    # §19). False makes none.
+    example_paper: bool = True
+
+    # --- Instance admins (docs/DESIGN.md §18) -----------------------------------
+    # Email addresses, comma-separated, whose accounts open the instance
+    # dashboard at /admin. Empty means nobody.
+    instance_admins: str = ""
+
     @property
     def projects_dir(self) -> Path:
         return self.data_dir / "projects"
+
+    @property
+    def instance_admin_emails(self) -> frozenset[str]:
+        return frozenset(e.strip().lower() for e in self.instance_admins.split(",") if e.strip())
 
 
 @lru_cache

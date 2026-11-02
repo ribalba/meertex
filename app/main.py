@@ -23,6 +23,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .config import get_settings
 from .database import init_db
 from .routers import (
+    admin,
     auth,
     avatars,
     blobs,
@@ -78,6 +79,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6,
                    exclude_content_types=(*DEFAULT_EXCLUDED_CONTENT_TYPES, "application/x-git-upload-pack-result"))
 
 app.include_router(auth.router)
+app.include_router(admin.router)
 app.include_router(folders.router)
 app.include_router(projects.router)
 app.include_router(dates.router)
@@ -157,6 +159,7 @@ def llms_txt() -> FileResponse:
 # sends a signed-out visitor to /login?next=<path>.
 @app.get("/new")
 @app.get("/settings")
+@app.get("/admin")
 @app.get("/timeline")
 @app.get("/folders/{rest:path}")
 @app.get("/p/{rest:path}")

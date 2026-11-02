@@ -1063,6 +1063,116 @@ def autocomplete(env, browser):
     return "labels, keys, paths, environments and the paper's commands"
 
 
+def select_text(page: Page, needle: str, collapse=False):
+    """Select `needle` in the open file, or put the cursor right after it."""
+    page.evaluate(
+        """async ([needle, collapse]) => {
+            const { EditorView } = await import('/static/vendor/editor/editor.js');
+            const view = EditorView.findFromDOM(document.querySelector('.cm-editor'));
+            const from = view.state.doc.toString().indexOf(needle);
+            if (from < 0) throw new Error(`${needle} is not in the text`);
+            const to = from + needle.length;
+            view.dispatch({ selection: collapse ? { anchor: to } : { anchor: from, head: to } });
+            view.focus();
+        }""",
+        [needle, collapse],
+    )
+
+
+@test
+def formatting(env, browser):
+    env.put("alice", "format.tex", "Energy matters.\nSee the results\n\nfirst line\nsecond line\n\nTitle here\n")
+    env.put("alice", "notes.md", "# Notes\n")
+    ctx = env.context(browser, "alice")
+    page = env.open_editor(env.page(ctx, "alice"), "format.tex")
+    bar = page.locator(".editor-format")
+    expect(bar).to_be_visible()
+    text = lambda: editor_text(page)
+
+    # Ctrl+B wraps the selection and takes the bold away again. Undo goes back.
+    select_text(page, "matters")
+    page.keyboard.press("Control+b")
+    wait_until(lambda: "Energy \\textbf{matters}." in text(), what="\\textbf")
+    page.keyboard.press("Control+b")
+    wait_until(lambda: text().startswith("Energy matters."), what="the bold to go")
+    # Ctrl+I writes \emph, and the button takes it away, also from a cursor inside.
+    page.keyboard.press("Control+i")
+    wait_until(lambda: "\\emph{matters}" in text(), what="\\emph")
+    select_text(page, "\\emph{mat", collapse=True)
+    bar.get_by_label("Emphasis").click()
+    wait_until(lambda: text().startswith("Energy matters."), what="the emphasis to go")
+    # Without a selection the command goes at the cursor with the cursor in its braces.
+    select_text(page, "Energy", collapse=True)
+    page.keyboard.press("Control+e")
+    page.keyboard.type("x")
+    wait_until(lambda: text().startswith("Energy\\texttt{x} matters."), what="\\texttt at the cursor")
+    page.keyboard.press("Control+z")
+    wait_until(lambda: text().startswith("Energy matters."), what="the undo")
+    select_text(page, "results")
+    # A keyboard sends a capital M with Shift held. Playwright's "m" would not.
+    page.keyboard.press("Control+Shift+M")
+    wait_until(lambda: "See the $results$" in text(), what="inline math")
+    # A citation is tied to the word before, as the papers write it.
+    select_text(page, "$results$", collapse=True)
+    bar.get_by_label("Insert").click()
+    page.get_by_role("menuitem", name="Citation").click()
+    wait_until(lambda: "See the $results$~\\cite{}" in text(), what="the citation")
+
+    # Lines become a list, the list changes its kind, and goes back to lines.
+    select_text(page, "first line\nsecond line")
+    bar.get_by_label("Bulleted list").click()
+    listed = "\\begin{itemize}\n  \\item first line\n  \\item second line\n\\end{itemize}"
+    wait_until(lambda: listed in text(), what="the itemize")
+    select_text(page, listed)
+    bar.get_by_label("Numbered list").click()
+    wait_until(lambda: listed.replace("itemize", "enumerate") in text(), what="the enumerate")
+    select_text(page, listed.replace("itemize", "enumerate"))
+    bar.get_by_label("Numbered list").click()
+    wait_until(lambda: "\n\nfirst line\nsecond line\n\n" in text(), what="the plain lines")
+
+    # A line becomes a heading, changes its level and goes back to text.
+    select_text(page, "Title", collapse=True)
+    bar.get_by_label("Heading").click()
+    env.shot(page, "format-heading-1280")
+    page.get_by_role("menuitemradio", name="Section \\section", exact=True).click()
+    wait_until(lambda: "\\section{Title here}" in text(), what="the section")
+    bar.get_by_label("Heading").click()
+    expect(page.get_by_role("menuitemradio", name="Section \\section", exact=True)).to_have_attribute("aria-checked", "true")
+    page.get_by_role("menuitemradio", name="Subsection \\subsection", exact=True).click()
+    wait_until(lambda: "\\subsection{Title here}" in text(), what="the subsection")
+    bar.get_by_label("Heading").click()
+    page.get_by_role("menuitemradio", name="Plain text").click()
+    wait_until(lambda: text().endswith("\nTitle here\n"), what="the heading to go")
+    # Ctrl+/ comments the line out, and the button comments it in again.
+    page.keyboard.press("Control+/")
+    wait_until(lambda: "% Title here" in text(), what="the comment")
+    bar.get_by_label("Comment the lines out, or in again").click()
+    wait_until(lambda: text().endswith("\nTitle here\n"), what="the line back")
+    env.shot(page, "format-1280")
+
+    final = "Energy matters.\nSee the $results$~\\cite{}\n\nfirst line\nsecond line\n\nTitle here\n"
+    wait_until(lambda: env.file("alice", "format.tex") == final, what="the server to have the formatted text")
+
+    bar.get_by_label("Keyboard shortcuts").click()
+    dialog = page.get_by_role("dialog", name="Keyboard shortcuts")
+    expect(dialog).to_contain_text("Emphasis, \\emph")
+    expect(dialog.locator("kbd").first).to_have_text("Ctrl")
+    env.shot(page, "format-shortcuts-1280")
+    page.keyboard.press("Escape")
+    expect(dialog).to_have_count(0)
+
+    # Other files, and people who may not edit, get no bar.
+    page.locator(".editor-tree a.tree-link", has_text="notes.md").click()
+    expect(page.locator(".editor-path")).to_contain_text("notes.md")
+    expect(bar).to_be_hidden()
+    ctx.close()
+    ctx = env.context(browser, "carol")
+    page = env.open_editor(env.page(ctx, "carol"), "format.tex")
+    expect(page.locator(".editor-format")).to_be_hidden()
+    ctx.close()
+    return "bold, emphasis, monospace, math, citation, lists, headings, comments"
+
+
 PAPER = r"""\documentclass{article}
 \begin{document}
 \section{Introduction}

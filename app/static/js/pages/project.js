@@ -16,6 +16,7 @@ import * as historyTab from "./history.js";
 import * as settings from "./project-settings.js";
 import * as reviews from "./reviews.js";
 import * as references from "./references.js";
+import * as agent from "./agent.js";
 import { openThreadCounter } from "../threads.js";
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
   { key: "history", text: "History", icon: "history", path: "/history" },
   { key: "reviews", text: "Reviews", icon: "comment", path: "/reviews" },
   { key: "references", text: "References", icon: "quote", path: "/references" },
+  { key: "agent", text: "Agent", icon: "sparkle", path: "/agent" },
   { key: "settings", text: "Settings", icon: "gear", path: "/settings" },
 ];
 
@@ -38,6 +40,7 @@ function tabFor(sub) {
   if (first === "settings") return "settings";
   if (first === "reviews") return "reviews";
   if (first === "references") return "references";
+  if (first === "agent") return "agent";
   return "overview";
 }
 
@@ -111,6 +114,7 @@ export async function render(ctx) {
     settings: settings.render,
     reviews: reviews.render,
     references: references.render,
+    agent: agent.render,
   }[tab];
 
   // Render the tab off-screen first, then swap in one go. A failing tab keeps

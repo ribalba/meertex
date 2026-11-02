@@ -5,6 +5,8 @@
 // y-codemirror.next pull in most of it anyway. StateField, StateEffect and
 // Decoration draw the comments' highlights (app/static/js/editor-comments.js),
 // and @codemirror/lint the compile's problems (app/static/js/editor-problems.js).
+// toggleComment backs the comment button of the formatting bar
+// (app/static/js/editor-format.js), the same command as Ctrl+/.
 // The Files view of a review (app/static/js/pages/review-files.js) colours its
 // LaTeX with the same mode, through highlightTree and tagHighlighter.
 
@@ -24,7 +26,7 @@ export {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
-export { defaultKeymap, indentWithTab } from "@codemirror/commands";
+export { defaultKeymap, indentWithTab, toggleComment } from "@codemirror/commands";
 export { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 export {
   HighlightStyle,

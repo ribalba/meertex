@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<!-- The editor's agent panel (agent.js). It is a page of the desktop app in an
+     iframe of the editor, so the server's page cannot script it. -->
+<body>
+  <header class="bar">
+    <svg class="mark" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M7 2.5C7.5 6 8.5 7.5 12.5 8 8.5 8.5 7.5 10 7 13.5 6.5 10 5.5 8.5 1.5 8 5.5 7.5 6.5 6 7 2.5z"/><path d="M12.5 1.25v3.5M10.75 3h3.5"/></svg>
+    <select id="provider" class="select" aria-label="Agent">
+      <option value="claude">Claude</option>
+      <option value="ollama">Ollama</option>
+    </select>
+    <select id="model" class="select" aria-label="Model"></select>
+    <button id="new" class="btn" type="button" title="Start a new chat">New chat</button>
+    <span class="spacer"></span>
+    <button id="to-column" class="icon-btn" type="button" aria-label="Show as a column next to the PDF" title="Show as a column next to the PDF">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M10.25 2.75v10.5"/></svg>
+    </button>
+    <button id="to-below" class="icon-btn" type="button" aria-label="Show under the text" title="Show under the text">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M1.75 9.25h12.5"/></svg>
+    </button>
+    <button id="close" class="icon-btn" type="button" aria-label="Close the agent" title="Close the agent">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.75 3.75l8.5 8.5M12.25 3.75l-8.5 8.5"/></svg>
+    </button>
+  </header>
+
+  <div id="notices" class="notices"></div>
+
+  <main id="log" class="log" aria-live="polite"></main>
+
+  <footer class="composer">
+    <label id="context" class="context" hidden>
+      <input id="with-context" type="checkbox" checked />
+      <span id="context-text"></span>
+    </label>
+    <textarea id="input" rows="2" aria-label="Message to the agent"></textarea>
+    <div class="row">
+      <span class="hint">Enter sends, Shift+Enter starts a new line.</span>
+      <button id="stop" class="btn" type="button" hidden>Stop</button>
+      <button id="send" class="btn primary" type="button">Send</button>
+    </div>
+  </footer>
+
+  <script src="panel.js"></script>
+</body>
+</html>

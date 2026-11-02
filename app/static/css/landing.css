@@ -583,6 +583,7 @@ code {
 .skill .code { margin: 0; font-size: 12.5px; }
 .skill-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 .skill-note { flex: 1 1 320px; color: var(--fg-muted); font-size: 14px; }
+.skill + .skill { margin-top: 24px; }
 
 /* --- Get started ------------------------------------------------------------------ */
 
@@ -663,7 +664,7 @@ code {
   /* The nav would wrap with it. The hero and the footer link the section too. */
   .site-nav a[href="#download"] { display: none; }
   .grid, .map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  /* Nine cards and a wide one in two columns leave the last card alone. It
+  /* Nine cards and two wide ones in two columns leave the last card alone. It
      takes the whole row. */
   .grid > .card:last-child { grid-column: 1 / -1; }
 }

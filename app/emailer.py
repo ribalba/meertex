@@ -11,6 +11,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 
 from .config import get_settings
+from .example import made_up
 
 settings = get_settings()
 
@@ -25,6 +26,9 @@ def _compose(subject: str, body: str) -> tuple[str, str]:
 
 
 def send_email(to: str, subject: str, body: str) -> None:
+    if made_up(to):
+        # The example paper's coauthors (app/example) have no mailbox.
+        return
     subject, body = _compose(subject, body)
 
     if not settings.smtp_host:
@@ -100,10 +104,35 @@ def send_invite(to: str, inviter: str, project_title: str, role: str, link: str)
 
         {link}
 
-        The link expires in {settings.login_token_ttl_minutes} minutes. After that,
-        sign in at {settings.base_url} with this email address.
+        You can also sign in at {settings.base_url} with this email address.
         """,
     )
+
+
+def send_new_user(
+    to: str, email: str, invites: list[tuple[str, str, str, str]], way: str, address: str, agent: str,
+    signed_in: int, waiting: int,
+) -> None:
+    """Somebody signed in for the first time (DESIGN §2, Accounts). Goes to
+    NEW_USER_MAIL_TO and says where they come from. ``invites`` holds the
+    inviter, the paper, the role and the day of each invite, and is empty
+    for somebody who signed up on their own."""
+    parts = [f"{email} signed in to {APP_NAME} for the first time."]
+    if invites:
+        parts.append("\n".join(
+            f'{inviter} invited them to "{title}" as {role} on {day}.' for inviter, title, role, day in invites
+        ))
+    else:
+        parts.append("Nobody invited them. They signed up on their own.")
+    parts.append(
+        f"They signed in {way}.\n"
+        f"Their IP address is {address or 'unknown'} and their user agent is {agent or 'unknown'}."
+    )
+    count = f"{signed_in} {'account has' if signed_in == 1 else 'accounts have'} signed in so far."
+    if waiting:
+        count += f" {waiting} invited {'person has' if waiting == 1 else 'people have'} not signed in yet."
+    parts.append(count)
+    send_email(to, f"New user {email}", "\n\n".join(parts))
 
 
 # --- Reviews (DESIGN §13) --------------------------------------------------------

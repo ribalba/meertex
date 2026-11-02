@@ -2,8 +2,9 @@
 
 The contract every part of meertex codes against. It covers accounts, folders,
 projects and their dates, versions, the live document and its sync protocol,
-the HTTP API, the CLI, the deployment and the reference check. If code and
-this file disagree, one of them is a bug.
+the HTTP API, the CLI, the deployment, the reference check and the example
+paper new accounts start with. If code and this file disagree, one of them is
+a bug.
 
 meertex is a hosted LaTeX workspace for papers. You edit locally (VS Code,
 Claude), a small sync client keeps the folder in step with the server within
@@ -59,12 +60,24 @@ carries a `meertex://login?token=` link instead of the web one. The app loads
 the ordinary callback with that token inside its window, so the session lands
 there and not in the system browser. The code works in the app as well.
 
-A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, created_at`.
+A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, instance_admin, created_at`.
 `naming_pattern` is described in §4, `writing_days` and the reminders in §5,
-`mention_mails` in §13 (Mentions).
+`mention_mails` in §13 (Mentions), `instance_admin` in §18.
 A new account, whether it signed in itself or was invited, has no
 `timezone` yet and reads as UTC. The first time the web app loads for it,
 it sends the browser's zone. After that only the settings change it.
+
+The server keeps each account's first sign-in (`first_sign_in_at`, not in
+the API). An invite makes the account long before that, so this is what
+tells an invited person who never signed in from one who did. With
+`NEW_USER_MAIL_TO` set, the first sign-in mails that address once. The mail
+says where the person comes from, which is who invited them to which paper
+as what, or that they signed up on their own. It also says how they signed
+in (code, sign-in link or invite link, and browser, CLI or desktop app),
+their IP address and user agent, and how many accounts have signed in so
+far. A mail scanner that opens the link first counts as that sign-in, and
+its user agent shows it. The first sign-in also makes the account's example
+paper (§19).
 
 The API token is for scripts, the CLI and agents. It is sent as
 `Authorization: Bearer <token>` or, where a header is impossible, as
@@ -102,7 +115,9 @@ A project has members. Each member has one role.
 Inviting is by email (`POST /api/projects/{ref}/members {email, role}`). An
 email without an account gets one right away, so the membership exists
 before the person ever signs in. The invite is mailed with a sign-in link
-that lands on the project.
+that lands on the project. That link never expires, because an invite may
+sit unread for days. The links and codes you ask for yourself expire after
+30 minutes.
 
 A project that is not yours and where you are not a member is 404
 everywhere, never 403. Too low a role for a write is 403.
@@ -702,6 +717,19 @@ sync client's, and other people's cursors show with their names (awareness).
   A click opens a heading's line, and the heading the cursor is under is
   marked. It follows everybody's edits. The box folds to its header, and the
   choice is kept per browser.
+- A formatting bar over a LaTeX file's text, for editors and the owner
+  (`app/static/js/editor-format.js`): a Heading menu (plain text, `\section`
+  to `\paragraph`), bold, emphasis, monospace, inline math, bulleted and
+  numbered lists, comment out, an Insert menu (citation, reference,
+  footnote, link, figure, table, equation) and a list of every keyboard
+  shortcut. Ctrl+B is `\textbf`, Ctrl+I `\emph` (it also takes `\textit`
+  away), Ctrl+E `\texttt`, Ctrl+Shift+M `$…$`, Ctrl+K `\href` (`\url` for a
+  selected address) and Ctrl+/ comments lines. A selection gets wrapped,
+  without one the command goes in with the cursor in its braces, and the same
+  command inside it takes it away again. A selection with a brace but not its
+  partner is refused with a note. Citations and references are tied to the
+  word before with `~`, as the papers write them, and open their list of keys
+  or labels. Each command is one edit, so one Ctrl+Z undoes it.
 - Viewers and reviewers get a read-only editor. A role change closes the
   socket with 4009 and the page says to reload.
 
@@ -1032,6 +1060,7 @@ Projects are addressed by name or id.
 | `meertex diff <project> <from> [<to>] [--word]` | Diff between refs. `to` defaults to `live`. |
 | `meertex folders` / `meertex folder add\|mv\|rm ...` / `meertex mv <project> <folder>` | The folder tree. |
 | `meertex service install\|uninstall` | The background service that runs `meertex sync` and starts with the user's session. On Linux a systemd user unit (`~/.config/systemd/user/meertex.service`). On macOS a launchd agent (`~/Library/LaunchAgents/com.meertex.sync.plist`), which writes its log to `~/Library/Logs/meertex/sync.log`. Both restart it 10 s after a crash, never after a clean stop. |
+| `meertex service restart` | Restarts the service, or starts it when it is installed and does not run. On Linux `systemctl --user daemon-reload` first (so a changed unit file counts) and then `systemctl --user restart`. On macOS `launchctl kickstart -k` for a loaded agent and `launchctl bootstrap` for one that is not loaded. A service that is not installed is an error (exit 2). The JSON has `unit`, `installed` and `was_running`. |
 | `meertex service status [-n LINES] [-f]` | Whether the service is installed, enabled at login and running (since when, pid, restarts, last exit), and its last log lines (default 20). On Linux from `systemctl --user show` and `journalctl --user`. On macOS from `launchctl print gui/<uid>/com.meertex.sync` and the agent's log file (`log_file` in the JSON, null on Linux). The sync client writes a full ISO 8601 time with the offset in front of each line when its output is a regular file, which is where those lines' times come from. `-f` keeps printing new lines. Exits 1 when it does not run. |
 | `meertex refs <project> [check\|add\|mark\|unmark\|set ...]` | The reference check (§16, CLI). |
 | `meertex update [--check]` | Updates meertex from PyPI the way it was installed and restarts the sync service when it runs (see Updating). `--check` only says whether a newer version is out. Exits 1 when an update fails. |
@@ -2058,3 +2087,262 @@ grammar_match  {offset, length, message, short, replacements: [string], rule,
   underlines. Without a checker it is the browser's spellchecker, as before.
 - Settings has a "Spelling and grammar" section: on or off, the language,
   the preferred variants, picky, the dictionary and the rules turned off.
+
+## 18. Instance admins
+
+An instance admin is an account that `INSTANCE_ADMINS` names. It is a list
+of email addresses, separated by commas, in the server's configuration and
+nowhere else. Upper and lower case do not matter. Empty, the default, means
+nobody. Being an admin gives no access to papers. It only opens the
+instance dashboard. `GET /api/auth/me` says `instance_admin: true` for such
+an account, and the header's user menu then has an "Instance dashboard"
+entry that opens `/admin`.
+
+The example papers (§19) and their made-up coauthors are left out of every
+number on the dashboard, because every new account gets one and nobody wrote
+it. That is the papers with `projects.example`, their memberships, commits,
+compiles, comments, reviews and versions, and the two made-up accounts.
+
+### Activity
+
+The server keeps on which UTC days each account used meertex
+(`active_days`, one row per account and day). Every signed-in request counts
+(the web app, the CLI, the sync, git), and so does signing in. A process
+writes each account at most once a day. The days before this table existed
+come from the rows the accounts left behind (sign-ins, compiles, versions,
+comments, reviews and the projects they made). Edits on the live text leave
+no such row, so a day with nothing but typing is missing from that history.
+
+### The route
+
+`GET /api/admin/instance?period=30d|90d|12m` (session or token). For an
+account that is not an admin it is 404, as if it did not exist. `30d` counts
+in days, `90d` in the 13 ISO weeks up to this one, `12m` in the 12 months up
+to this one, all in UTC. It returns
+
+```json
+{
+  "base_url": "https://meertex.com",
+  "generated_at": "2026-10-29T18:40:00Z",
+  "period": "30d", "unit": "day",
+  "buckets": ["2026-09-30", "…", "2026-10-29"],
+  "totals": {"accounts": 18, "signed_in": 17, "waiting": 1, "papers": 4,
+             "accepted": 1, "planned": 0, "active_7d": 11, "active_30d": 15},
+  "storage": {"database_bytes": 9400000, "files_bytes": 110000},
+  "series": {"active": [], "accounts": [], "papers": [], "snapshots": [],
+             "compiles": [], "comments": [], "reviews": [], "versions": []},
+  "growth": {"accounts": [], "papers": []},
+  "accounts": [{"id": "…", "email": "…", "name": null, "avatar_url": null,
+                "created_at": "…", "first_sign_in_at": "…", "last_active": "2026-10-29",
+                "papers": 2, "invited_by": {"email": "…", "name": "…"}}],
+  "accounts_total": 18
+}
+```
+
+- `totals` and `storage` are the instance now. `waiting` are invited
+  accounts that never signed in (§2, Accounts). `storage` is the database's
+  size and everything under `DATA_DIR`.
+- `series` has one number per bucket. `active` counts each account once per
+  bucket. `accounts` are first sign-ins, `snapshots` the commits of every
+  project's history (§9), `compiles` leaves out `unavailable`, `comments`
+  are comments and replies but not the resolve and accept notes, and
+  `reviews` are submitted reviews.
+- `growth` is how many signed-in accounts and papers there were at the end
+  of each bucket, counting the papers that still exist.
+- `accounts` are the newest 200, by first sign-in and then by creation.
+  `last_active` is the last active day. `papers` counts memberships of
+  papers that are not examples.
+  `invited_by` is whoever added the account to a paper first, null for one
+  that signed up on its own.
+
+### In the web app
+
+`/admin` shows four tiles (accounts, active in the last 7 days, papers,
+storage), then the activity with a switch for 30 days, 90 days and 12
+months: a line chart of accounts and papers over time, and one small column
+chart per series. Every chart has a tooltip on hover and on the arrow keys,
+and a Table switch that lists its numbers. The accounts close the page in a
+table.
+
+## 19. The example paper
+
+Every account starts with an example paper, so that a new person can try
+meertex on a paper that already has a past. Each section of its text
+explains one part of meertex and says where to find it, and its notes list
+things to try. The code is in `app/example/`.
+
+- **When.** At the account's first sign-in (§2, Accounts), in the request
+  itself, so that the paper list shows it at once. That covers people who
+  signed up on their own and invited people alike. Only the sign-in that
+  sets `first_sign_in_at` makes one, so no account gets two, and accounts
+  that signed in before the example existed get none. `EXAMPLE_PAPER=false`
+  turns it off. A failure is logged, leaves nothing behind and does not stop
+  the sign-in.
+- **The paper.** It is called `example-paper` (`-2` and so on when taken),
+  labelled `example` and sits at the top of the owner's tree. Its venue is
+  the Workshop on Example Papers (`WEP`), which does not exist. The row has
+  `projects.example`, which the API does not send.
+- **The people.** The owner, Jonas Lindqvist (editor) and Amara Okafor
+  (reviewer). Jonas and Amara are made up, on example.org, and the same two
+  accounts serve every example. Their reminders and mention mails are off,
+  and nothing is ever mailed to them (`emailer.send_email` skips them), so
+  nobody can sign in as them either.
+- **Reminders.** Every membership of the example is muted
+  (`memberships.reminders_muted`, §5). The owner can lift the mute.
+
+Its past is dated from the day of the sign-in, day 0. Each step is a
+snapshot (§9) dated when it happened, or a row with that date.
+
+| Day | What happened |
+| --- | --- |
+| -50 | The project and its first commit. |
+| -45 | Jonas writes the first draft. |
+| -38 | Amara adds the sections on reviews and references. Jonas and Amara mark two entries as checked. The abstract is registered. |
+| -37 | Jonas moves the submission deadline from day -35 to day -31. |
+| -31 | The text as handed in, with anonymous authors. Answered yes, it is the version Submission (§7). |
+| -24 | The version arXiv, with the authors' names. |
+| -21 to -18 | Amara reviews Submission with four threads and asks for changes. Jonas answers one of them. |
+| -5 | Jonas rewrites two of the passages and resolves their threads. |
+| -3 | Amara accepts one of the two. |
+| -2 | Amara comments on the current text outside the review and mentions Jonas. |
+| -1 | Jonas asks the owner to review the current text (§13, Requests). |
+
+Ahead are the notification on day 9, which is the next date, the
+camera-ready on day 30 and the conference on days 75 to 77. The rebuttal
+deadline on day -2 has no answer, so the overview asks whether a rebuttal
+went out (§6). Every date is a day in AoE, the conference's are in UTC.
+
+So the owner finds one thread accepted, one resolved and waiting for its
+acceptance, one with a suggestion to apply, one question with a reply, the
+single comment, the open review request and a spelling mistake in the text.
+
+The bibliography is wrong on purpose. The paper's Table 1 lists what the
+reference check (§16) finds.
+
+| Entry | Finding |
+| --- | --- |
+| `hartmann2023deadline` | `not_found`. The paper is made up, authors and all. |
+| `dourish1992awareness` | `doi_not_found` for a DOI with one digit too many, and `suggest_doi` with the right one. |
+| `nicolaescu2016yjs` | `year`, 2015 instead of 2016. |
+| `kleppmann2019local` | `title`, without its subtitle. |
+| `ellis1989concurrency` | `placeholder` for `pages = {TODO}`, and `differs`. |
+| `collabtex` | `url_dead`, a GitHub repository that does not exist. |
+| `wilson2014best` | `changed`. Amara's mark is older than the issue number Jonas added. |
+| `mittelbach2004companion` | Cited without an entry, so it is missing. |
+| `knuth1984texbook` | `not_cited`. |
+
+`shapiro2011crdt` carries Jonas's valid mark and is `checked`. The other
+entries are verified. These outcomes were tried against the live services
+on 2026-10-29. Right after the paper is made, the reference check runs once
+as Jonas when `REFERENCES_NETWORK` is on. The versions are compiled like any
+other (§14).
+
+**How it is made.** `app/example/main.tex` is the text as handed in and
+`refs.bib` its bibliography without the checked marks. The other stages come
+from them by replacing passages, and each replaced passage must be there
+exactly once, so an edit of `main.tex` that breaks the example fails the
+tests. The files go through the live document, versions through the code that
+makes every version, and the threads are anchored and resolved the way the
+review routes do it. `git.init` and the snapshot take the date of the commit.
+
+## 20. The agent in the desktop app
+
+In the desktop app the editor can show an agent panel. It is a chat with the
+Claude Code of the person's own computer, or with a local model in Ollama
+that Claude Code talks to. The agent works in the paper's checkout (§10), and
+the sync client carries its edits into the live document, where they show up
+like a coauthor's. The server takes no part in it. The code is
+`electron/agent.js`, `electron/panel/` and `app/static/js/editor-agent.js`.
+
+### The panel and the page
+
+- The panel is a page of the desktop app, served from its own scheme at
+  `meertex-agent://panel/?project=<id>&name=<name>&position=column|below`,
+  and the editor shows it in an iframe. The scheme is standard and secure, so
+  the panel has an origin of its own and the server's page cannot script it.
+  Its responses carry `frame-ancestors <server origin>`.
+- `electron/preload.js` runs in every frame and gives each at most one
+  bridge, by origin. The panel gets `window.meertexAgent` (attach, send,
+  stop, reset, choose a provider and model, open a file, move or close the
+  panel). The top frame of a server page gets `window.meertexDesktop` with
+  `version: 2` and an `agent` part: `status(projectId)`,
+  `setContext(projectId, context)`, `onOpenFile` and `onLayout`. Every other
+  frame gets nothing. `agent.js` checks the sending frame's origin of every
+  message again.
+- The page cannot send a prompt. Prompts are typed in the panel only, and
+  every permission Claude Code asks for is a native dialog of the app, which
+  no page can draw or click.
+- The context is the open file's path, the cursor's line and the selected
+  lines, never text. It goes into the prompt only when the path names a file
+  of the checkout, as a first line like `[In the editor main.tex is open, and
+  lines 40 to 52 are selected.]`. A box in the panel leaves it out of a
+  message.
+
+### Where it goes
+
+- The editor's toolbar has an Agent button, for the owner and editors in
+  the desktop app. It shows the panel as a fourth column after the PDF or as
+  a box under the text in the text's column. Two buttons in the panel switch
+  between the two, and a third closes it. On a phone there is no panel.
+- The place (`meertex.editor.agent`: `column`, `below` or `off`), the last
+  place shown, the column's width and the box's height are kept per browser.
+  With the column the text keeps at least 360 px, and the PDF and the panel
+  give way. Moving the panel loads its iframe again, and it picks the chat up
+  from the app.
+
+### The agent
+
+- It is the `claude` command, found through `MEERTEX_CLAUDE` or the PATH of
+  a login shell (plus `~/.local/bin` and `~/.claude/local`). On Windows only
+  `claude.exe` works. The SDK is not bundled, because its license does not
+  allow that in an AGPL app.
+- The app speaks Claude Code's stream-json on stdin and stdout, with
+  permission prompts as control requests (`--permission-prompt-tool=stdio`,
+  the transport of Anthropic's agent SDKs). It starts it in the checkout with
+  `--permission-mode acceptEdits`, so edits inside the checkout need no
+  question, and commands, web access and files outside it do. Instructions
+  appended to the system prompt say that edits reach coauthors within a
+  second, that `.meertex/` is off limits, and what the context line means.
+- The environment of the app goes to Claude Code without the variables of a
+  running Claude Code session (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID` and
+  the like), so an app started from such a session does not hand them on.
+- A question shows what is asked (the command, the file, the address) and
+  Claude Code's reason, with Allow, Deny and, when Claude Code suggests a
+  rule, "Allow and don't ask again in this chat", which adds that rule for
+  the session. Stop interrupts the turn and closes an open question. A
+  declined call shows as declined.
+- With Claude the person's own Claude Code settings apply (CLAUDE.md,
+  permission rules, MCP servers). The model is Claude Code's default, Opus,
+  Sonnet or Haiku. Another model of the same provider carries on with
+  `--resume`.
+- With Ollama the app points Claude Code at Ollama's Anthropic API
+  (`ANTHROPIC_BASE_URL` from `OLLAMA_HOST`, by default 127.0.0.1:11434, and
+  any `ANTHROPIC_API_KEY`), and every model Claude Code would pick is the
+  chosen one. It runs with `--bare`, only the tools Read, Edit, Write, Glob,
+  Grep and Bash, `--strict-mcp-config` and `--disable-slash-commands`, which
+  takes the first request to about a thousand tokens. Ollama needs 0.14 or
+  newer and a model that can call tools (from `/api/tags`). Switching the
+  provider starts a new chat, after a question in the panel.
+
+### The chat
+
+- There is one chat per paper while the app runs, held in the app. It
+  survives a reload and a move of the panel, not a restart of the app. New
+  chat ends the process and starts over.
+- It shows the messages, the answers as they stream (a little Markdown), and
+  one line per tool call (Read, Edited, Wrote, Ran, Searched for, ...). A
+  file of the paper in such a line opens in the editor.
+- The provider and the models are kept in the app's `agent.json`.
+- The panel says what keeps the agent from working: no checkout (with the
+  commands to make one), no `claude`, Ollama not answering, too old or
+  without a model. It warns when the sync does not run, from the pid in the
+  checkout's `status.json`, and says when the checkout is held.
+
+### The Agent tab
+
+`/p/<name>/agent` says what the agent is and how to set it up: the desktop
+app, `meertex checkout`, the sync service, Claude Code, and Ollama with a
+model that can call tools and a context of at least 32k tokens. In the
+desktop app it checks each of these on the computer (the checkout's folder
+only as `~/...`), and its button opens the editor with the panel. In a
+browser it links the desktop app's latest release.

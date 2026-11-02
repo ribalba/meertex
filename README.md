@@ -99,7 +99,7 @@ macOS and Windows warn once on the first start.
 ```bash
 cd electron && npm install && npm start   # against https://meertex.com
 make desktop                              # against the local server
-cd electron && make distinstall           # build and register it with the desktop
+cd electron && make distinstall           # build, register it with the desktop, run it as meertex-gui
 ```
 
 [electron/README.md](electron/README.md) has the details.

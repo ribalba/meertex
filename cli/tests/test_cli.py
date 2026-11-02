@@ -435,6 +435,32 @@ def test_service_status_follows_the_log(capsys, monkeypatch):
     assert "--follow" in started[0].argv and "--lines=2" in started[0].argv and started[0].stopped
 
 
+def test_service_restart(capsys, monkeypatch, isolated_home):
+    unit = isolated_home / "meertex.service"
+    props = {**UNIT_GONE, "LoadState": "loaded", "FragmentPath": str(unit),
+             "ActiveState": "active", "SubState": "running"}
+    calls = fake_systemd(monkeypatch, props)
+    code, out, _ = run(capsys, "service", "restart")
+    assert code == 0 and "Restarted meertex.service" in out
+    changes = [argv[2:] for argv in calls if argv[0] == "systemctl" and argv[2] != "show"]
+    assert changes == [["daemon-reload"], ["restart", "meertex.service"]]
+
+    # A unit that failed starts again.
+    props.update(ActiveState="failed", SubState="failed")
+    code, out, _ = run(capsys, "service", "restart", "--json")
+    assert code == 0 and json.loads(out) == {"unit": str(unit), "installed": True, "was_running": False}
+    assert calls[-1] == ["systemctl", "--user", "restart", "meertex.service"]
+    code, out, _ = run(capsys, "service", "restart")
+    assert "Started meertex.service, which did not run" in out
+
+
+def test_service_restart_when_not_installed(capsys, monkeypatch):
+    calls = fake_systemd(monkeypatch, UNIT_GONE)
+    code, _, err = run(capsys, "service", "restart")
+    assert code == 2 and "not installed" in err and "meertex service install" in err
+    assert ["systemctl", "--user", "restart", "meertex.service"] not in calls
+
+
 # What launchctl print says about a loaded agent. The nested blocks have
 # key = value lines of their own, which are not the agent's.
 AGENT_RUNNING = """gui/501/com.meertex.sync = {
@@ -599,6 +625,27 @@ def test_launchd_status_follows_the_log_file(capsys, monkeypatch, tmp_path):
     code, out, _ = run(capsys, "service", "status", "--follow", "--json", "-n", "2")
     assert code == 0 and json.loads(out)["message"] == "paper  ↑ main.tex"
     assert started == [["tail", "-n", "2", "-F", str(service.log_path())]]
+
+
+def test_launchd_restart(capsys, monkeypatch, tmp_path):
+    domain = f"gui/{os.getuid()}"
+    calls = fake_launchd(monkeypatch, tmp_path, printed=AGENT_RUNNING)
+    code, out, _ = run(capsys, "service", "restart")
+    assert code == 0 and "Restarted com.meertex.sync" in out
+    assert calls[-1] == ["launchctl", "kickstart", "-k", f"{domain}/com.meertex.sync"]
+
+    # Loaded and waiting out the ThrottleInterval: kickstart starts it now.
+    waiting = AGENT_RUNNING.replace("state = running", "state = spawn scheduled").replace("\tpid = 4242\n", "")
+    calls = fake_launchd(monkeypatch, tmp_path, printed=waiting)
+    code, out, _ = run(capsys, "service", "restart")
+    assert code == 0 and "Started com.meertex.sync, which did not run" in out
+    assert calls[-1] == ["launchctl", "kickstart", "-k", f"{domain}/com.meertex.sync"]
+
+    # Not loaded, only the plist: bootstrap loads it.
+    calls = fake_launchd(monkeypatch, tmp_path)
+    run(capsys, "service", "install", "--no-start")
+    code, out, _ = run(capsys, "service", "restart")
+    assert code == 0 and calls[-1] == ["launchctl", "bootstrap", domain, str(service.plist_path())]
 
 
 def test_a_log_file_gets_the_day_for_the_service(tmp_path):

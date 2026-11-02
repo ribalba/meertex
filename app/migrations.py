@@ -37,8 +37,68 @@ def _users_timezone_nullable(conn: Connection) -> bool:
     return True
 
 
+def _login_tokens_expires_nullable(conn: Connection) -> bool:
+    """An invite's sign-in link never expires, so its token has no
+    ``expires_at``. The sign-in links keep theirs."""
+    nullable = conn.execute(
+        text(
+            "SELECT is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = 'login_tokens' AND column_name = 'expires_at'"
+        )
+    ).scalar()
+    if nullable != "NO":
+        return False
+    conn.execute(text("ALTER TABLE login_tokens ALTER COLUMN expires_at DROP NOT NULL"))
+    return True
+
+
+def _users_first_sign_in_backfill(conn: Connection) -> bool:
+    """``first_sign_in_at`` came after the first accounts. Those that show they
+    signed in get their creation time: a session, an API token, the zone the
+    web app sends on its first load, or a project of their own. An invited
+    person with none of it is still waiting, and their first sign-in mails
+    NEW_USER_MAIL_TO like anybody else's."""
+    result = conn.execute(
+        text(
+            "UPDATE users SET first_sign_in_at = created_at"
+            " WHERE first_sign_in_at IS NULL AND ("
+            "  api_token IS NOT NULL OR timezone IS NOT NULL"
+            "  OR EXISTS (SELECT 1 FROM sessions s WHERE s.user_id = users.id)"
+            "  OR EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = users.id AND m.role = 'owner'))"
+        )
+    )
+    return result.rowcount > 0
+
+
+def _active_days_backfill(conn: Connection) -> bool:
+    """``active_days`` came after the first accounts. The days before it are
+    the ones their rows show: sign-ins, compiles, versions, comments, reviews
+    and the projects they made. Edits on the live text leave no such row."""
+    result = conn.execute(
+        text(
+            "INSERT INTO active_days (user_id, day)"
+            " SELECT DISTINCT user_id, day FROM ("
+            "  SELECT user_id, created_at::date AS day FROM sessions"
+            "  UNION SELECT id, first_sign_in_at::date FROM users"
+            "  UNION SELECT created_by, created_at::date FROM compiles"
+            "  UNION SELECT created_by, created_at::date FROM versions"
+            "  UNION SELECT author_id, created_at::date FROM comments"
+            "  UNION SELECT reviewer_id, created_at::date FROM reviews"
+            "  UNION SELECT user_id, added_at::date FROM memberships WHERE role = 'owner'"
+            " ) AS seen"
+            " WHERE user_id IS NOT NULL AND day IS NOT NULL"
+            " AND EXISTS (SELECT 1 FROM users u WHERE u.id = seen.user_id)"
+            " ON CONFLICT DO NOTHING"
+        )
+    )
+    return result.rowcount > 0
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
+    ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
+    ("0003_users_first_sign_in_backfill", _users_first_sign_in_backfill),
+    ("0004_active_days_backfill", _active_days_backfill),
 ]
 
 

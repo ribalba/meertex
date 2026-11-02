@@ -92,12 +92,21 @@ def safe_ref(ref: str) -> bool:
     return bool(_REF_RE.match(ref)) and ".." not in ref and "@{" not in ref
 
 
-def init(project_id: str, message: str) -> str:
-    """Create the repository with one empty commit. Returns its id."""
+def _dated(at: datetime | None) -> dict[str, str] | None:
+    """The environment that dates a commit at ``at`` (naive UTC)."""
+    if at is None:
+        return None
+    stamp = f"@{int(at.replace(tzinfo=UTC).timestamp())} +0000"
+    return {"GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
+
+
+def init(project_id: str, message: str, *, at: datetime | None = None) -> str:
+    """Create the repository with one empty commit, dated ``at`` when given.
+    Returns its id."""
     repo = repo_dir(project_id)
     repo.mkdir(parents=True, exist_ok=True)
     run(project_id, "init", "-q", "-b", "main")
-    run(project_id, "commit", "-q", "--allow-empty", "-m", message)
+    run(project_id, "commit", "-q", "--allow-empty", "-m", message, env=_dated(at))
     return head(project_id)
 
 
@@ -159,11 +168,7 @@ def commit_all(project_id: str, message: str, *, at: datetime | None = None) -> 
     run(project_id, "add", "-A")
     if not run(project_id, "status", "--porcelain").strip():
         return None
-    env = None
-    if at is not None:
-        stamp = f"@{int(at.replace(tzinfo=UTC).timestamp())} +0000"
-        env = {"GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp}
-    run(project_id, "commit", "-q", "-m", message, env=env)
+    run(project_id, "commit", "-q", "-m", message, env=_dated(at))
     return head(project_id)
 
 
@@ -350,6 +355,15 @@ def log(project_id: str, limit: int) -> list[dict]:
     for c in commits:
         c["files_changed"] = counts.get(c["commit"], 0)
     return commits
+
+
+def commit_times(project_id: str, since: datetime) -> list[datetime]:
+    """When each commit on HEAD made since ``since`` was made, naive UTC, for
+    the instance dashboard (DESIGN §18). Empty without a repository or a HEAD."""
+    if not repo_dir(project_id).is_dir():
+        return []
+    out = run(project_id, "log", "--format=%ct", f"--since={since:%Y-%m-%d %H:%M:%S} +0000", "HEAD", check=False)
+    return [datetime.fromtimestamp(int(stamp), UTC).replace(tzinfo=None) for stamp in out.split()]
 
 
 def archive(project_id: str, commit: str, target: Path) -> None:

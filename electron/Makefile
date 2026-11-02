@@ -15,6 +15,13 @@ NPM ?= npm
 # so no root is needed. Override e.g. with  make distinstall XDG_DATA_HOME=/opt/share
 BIN_DIR       := $(HOME)/.local/bin
 
+# The command is meertex-gui, because `meertex` is the CLI (cli/, `make cli` in
+# the repo root), and pipx puts it in the same BIN_DIR. Older installs linked
+# the app as BIN_DIR/meertex. distinstall and distuninstall remove that link,
+# but only while it still points at the app.
+BIN_NAME      := meertex-gui
+OLD_BIN       := $(BIN_DIR)/meertex
+
 # Linux: an AppImage plus an XDG desktop entry.
 XDG_DATA_HOME ?= $(HOME)/.local/share
 APP_HOME      := $(XDG_DATA_HOME)/meertex
@@ -73,7 +80,11 @@ distinstall-linux: dist
 	mkdir -p "$(APP_HOME)" "$(BIN_DIR)" "$(DESKTOP_DIR)" "$(ICON_DIR)"; \
 	install -m 0755 "$$src" "$(APP_IMAGE)"; \
 	install -m 0644 build/icon.png "$(ICON_DIR)/meertex.png"; \
-	ln -sfn "$(APP_IMAGE)" "$(BIN_DIR)/meertex"; \
+	ln -sfn "$(APP_IMAGE)" "$(BIN_DIR)/$(BIN_NAME)"; \
+	if [ "$$(readlink "$(OLD_BIN)")" = "$(APP_IMAGE)" ]; then \
+		rm -f "$(OLD_BIN)"; \
+		echo "Removed the old $(OLD_BIN) link to the app. That name is the CLI's, 'make cli' in the repo root installs it."; \
+	fi; \
 	printf '%s\n' \
 		'[Desktop Entry]' \
 		'Type=Application' \
@@ -96,10 +107,11 @@ distinstall-linux: dist
 	command -v xdg-mime >/dev/null 2>&1 && xdg-mime default meertex.desktop x-scheme-handler/meertex || true; \
 	command -v gtk-update-icon-cache  >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$(XDG_DATA_HOME)/icons/hicolor" >/dev/null 2>&1 || true; \
 	for k in kbuildsycoca6 kbuildsycoca5; do command -v $$k >/dev/null 2>&1 && $$k >/dev/null 2>&1 && break; done; true; \
-	echo "Installed. Launch from your app menu, or run 'meertex' (needs $(BIN_DIR) on PATH)."
+	echo "Installed. Launch from your app menu, or run '$(BIN_NAME)' (needs $(BIN_DIR) on PATH)."
 
 distuninstall-linux:
-	@rm -f "$(DESKTOP_FILE)" "$(ICON_DIR)/meertex.png" "$(BIN_DIR)/meertex" "$(APP_IMAGE)"
+	@if [ "$$(readlink "$(OLD_BIN)")" = "$(APP_IMAGE)" ]; then rm -f "$(OLD_BIN)"; fi
+	@rm -f "$(DESKTOP_FILE)" "$(ICON_DIR)/meertex.png" "$(BIN_DIR)/$(BIN_NAME)" "$(APP_IMAGE)"
 	@rmdir "$(APP_HOME)" 2>/dev/null || true
 	@command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(DESKTOP_DIR)" || true
 	@command -v gtk-update-icon-cache  >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$(XDG_DATA_HOME)/icons/hicolor" >/dev/null 2>&1 || true
@@ -119,19 +131,24 @@ distinstall-macos: dist
 	mkdir -p "$(MAC_APP_DIR)" "$(BIN_DIR)"; \
 	rm -rf "$(MAC_APP)"; \
 	ditto "$$src" "$(MAC_APP)"; \
-	ln -sfn "$(MAC_APP)/Contents/MacOS/meertex" "$(BIN_DIR)/meertex"; \
-	echo "Installed. Launch from Spotlight or Launchpad, or run 'meertex' (needs $(BIN_DIR) on PATH)."; \
+	ln -sfn "$(MAC_APP)/Contents/MacOS/meertex" "$(BIN_DIR)/$(BIN_NAME)"; \
+	if [ "$$(readlink "$(OLD_BIN)")" = "$(MAC_APP)/Contents/MacOS/meertex" ]; then \
+		rm -f "$(OLD_BIN)"; \
+		echo "Removed the old $(OLD_BIN) link to the app. That name is the CLI's, 'make cli' in the repo root installs it."; \
+	fi; \
+	echo "Installed. Launch from Spotlight or Launchpad, or run '$(BIN_NAME)' (needs $(BIN_DIR) on PATH)."; \
 	if [ "$(MEERTEX_URL)" != "https://meertex.com" ]; then \
 		echo; \
 		echo "Note: MEERTEX_URL is not baked into the bundle. macOS does not give a"; \
 		echo "      Finder launch your shell environment, so the app menu starts it on"; \
 		echo "      the default https://meertex.com. To reach $(MEERTEX_URL),"; \
-		echo "      run 'meertex' from a shell that has MEERTEX_URL set."; \
+		echo "      run '$(BIN_NAME)' from a shell that has MEERTEX_URL set."; \
 	fi
 
 distuninstall-macos:
+	@if [ "$$(readlink "$(OLD_BIN)")" = "$(MAC_APP)/Contents/MacOS/meertex" ]; then rm -f "$(OLD_BIN)"; fi
 	@rm -rf "$(MAC_APP)"
-	@rm -f "$(BIN_DIR)/meertex"
+	@rm -f "$(BIN_DIR)/$(BIN_NAME)"
 	@rmdir "$(MAC_APP_DIR)" 2>/dev/null || true
 	@echo "Uninstalled."
 

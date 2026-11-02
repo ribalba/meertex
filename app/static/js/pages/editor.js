@@ -20,8 +20,10 @@ import { FILES, materialize, pathProblem } from "../livefiles.js";
 import { ProjectIndex, latexAutocomplete } from "../latexcomplete.js";
 import { pdfPane } from "./editor-pdf.js";
 import { editorComments } from "../editor-comments.js";
+import { editorFormat } from "../editor-format.js";
 import { editorGrammar } from "../editor-grammar.js";
 import { editorOutline } from "../editor-outline.js";
+import { editorAgent } from "../editor-agent.js";
 import { editorProblems } from "../editor-problems.js";
 import { showSpot, spotExtension } from "../editor-spot.js";
 
@@ -153,6 +155,7 @@ export async function render(ctx) {
   onLeave(() => ed.pdf.destroy());
   onLeave(() => ed.comments.destroy());
   onLeave(() => ed.outline.destroy());
+  onLeave(() => ed.agent?.destroy());
   ed.grammar.start();
   onLeave(() => ed.grammar.destroy());
   // The page goes up right away and connects in the background.
@@ -271,6 +274,22 @@ function layout(ctx) {
     canEdit: ed.canEdit,
     onChange: () => paintSpell(ed),
   });
+  // Bold, emphasis, headings, lists and the like over a LaTeX file's text (editor-format.js).
+  ed.format = editorFormat({
+    cm: () => ed.cm,
+    view: () => (ed.boundText ? ed.view : null),
+    note: (text) => note(ed, text),
+  });
+  // The desktop app's agent, as a fourth column or under the text
+  // (editor-agent.js). Null in a browser.
+  ed.agent = editorAgent({
+    project: ed.p,
+    canEdit: ed.canEdit,
+    cm: () => ed.cm,
+    view: () => (ed.boundText ? ed.view : null),
+    path: () => ed.openPath,
+    open: (at) => openAt(ed, at),
+  });
 
   el.host = h("div", { class: "editor-host" }, ed.comments.floatEl, ed.grammar.box);
   el.other = h("div", { class: "editor-other" },
@@ -282,7 +301,8 @@ function layout(ctx) {
 
   el.main = h("section", { class: "editor-main", "aria-label": "Editor" },
     h("div", { class: "editor-toolbar" },
-      el.filesBtn, el.path, el.note, el.status, el.presence, el.spell, ed.comments.button, el.pdfBtn),
+      el.filesBtn, el.path, el.note, el.status, el.presence, el.spell, ed.comments.button, ed.agent?.button, el.pdfBtn),
+    ed.format.el,
     readOnly,
     h("div", { class: "editor-pane" }, el.host, el.other));
   el.pdfColumn = h("div", { class: "editor-pdf" }, ed.comments.el);
@@ -301,6 +321,7 @@ function layout(ctx) {
   if (treeWidth > 0) el.shell.style.setProperty("--tree-width", `${treeWidth}px`);
   wireDivider(ed);
   wireTreeDivider(ed);
+  ed.agent?.mount(el.shell, el.main);
   paintPdfButton(ed);
   // A file dropped next to the tree would make the browser leave the page.
   el.shell.addEventListener("dragover", (e) => {
@@ -612,6 +633,7 @@ function follow(ed) {
     setTitle(entry.shownAt, ed.p.name);
     paintPath(ed, entry);
     if (entry.kind === "text") ed.view?.dispatch({ effects: ed.langComp.reconfigure(language(ed, entry.shownAt)) });
+    paintFormat(ed);
     if (entry.conflict && entry.path === from) note(ed, `Someone else made ${from} at the same time. This one is now a conflict copy.`);
     else note(ed, own ? `Renamed to ${entry.shownAt}` : `Someone renamed it to ${entry.shownAt}`);
   } else {
@@ -680,6 +702,7 @@ function open(ed, id, { history = "push", focus = false } = {}) {
   setTitle(entry.shownAt, ed.p.name);
   paintPath(ed, entry);
   ed.outline.moved();
+  ed.agent?.opened();
   showTree(ed, false);
   if (focus && ed.view && window.matchMedia("(min-width: 768px)").matches) ed.view.focus();
 }
@@ -708,14 +731,21 @@ function paintPath(ed, entry) {
 
 // --- Text files -----------------------------------------------------------------
 
-// LaTeX highlighting, and for those who may edit, completions.
+// LaTeX highlighting, and for those who may edit, completions and the
+// formatting keys. They come before the editor's own keymap, so Ctrl+I is
+// emphasis rather than CodeMirror's "select the syntax around".
 function language(ed, path) {
   if (!LATEX.test(path)) return [];
   ed.latex ??= [
     ed.cm.StreamLanguage.define(ed.cm.stex),
-    ed.canEdit ? latexAutocomplete(ed.cm, () => ed.index.read(ed.byPath)) : [],
+    ed.canEdit ? [latexAutocomplete(ed.cm, () => ed.index.read(ed.byPath)), ed.format.extension()] : [],
   ];
   return ed.latex;
+}
+
+// The formatting bar shows over LaTeX files for those who may edit.
+function paintFormat(ed) {
+  ed.format.shown(Boolean(ed.canEdit && ed.boundText && LATEX.test(ed.openPath || "")));
 }
 
 function bindText(ed, entry) {
@@ -772,6 +802,7 @@ function bindText(ed, entry) {
       editorLooks(cm),
       ed.comments.extension(),
       ed.outline.extension(),
+      ed.agent ? ed.agent.extension() : [],
       spotExtension(cm),
       cm.yCollab(entry.text, ed.awareness, { undoManager }),
     ],
@@ -782,6 +813,7 @@ function bindText(ed, entry) {
   if (ed.view) ed.view.setState(state);
   else ed.view = new cm.EditorView({ state, parent: ed.el.host });
   ed.boundText = entry.text;
+  paintFormat(ed);
   ed.comments.opened();
   ed.problems.opened();
   ed.grammar.opened();
@@ -813,6 +845,7 @@ function unbind(ed) {
   ed.view = null;
   ed.boundText = null;
   ed.awareness?.setLocalStateField("cursor", null);
+  ed.format?.shown(false);
   ed.comments?.opened();
   ed.grammar?.opened();
 }

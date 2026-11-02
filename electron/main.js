@@ -11,9 +11,13 @@
  *
  * Override the spellchecker languages with MEERTEX_SPELLCHECK_LANGS:
  *   MEERTEX_SPELLCHECK_LANGS=en-GB,fr npm start
+ *
+ * The editor's agent panel, which runs the local `claude` command in the
+ * paper's checkout, is in agent.js.
  */
 const { app, BrowserWindow, Menu, dialog, session, shell } = require("electron");
 const path = require("path");
+const agent = require("./agent");
 
 const APP_URL = (process.env.MEERTEX_URL || "https://meertex.com").replace(/\/+$/, "");
 const APP_ORIGIN = new URL(APP_URL).origin;
@@ -35,8 +39,9 @@ const SPELLCHECK_LANGS = (process.env.MEERTEX_SPELLCHECK_LANGS || "en-US,de-DE")
   .split(",").map((l) => l.trim()).filter(Boolean);
 
 // Linux shells match a window to its installed icon by name. X11 uses WM_CLASS
-// (from the app name), Wayland uses app_id (the executable, or --class in the
-// start script) against StartupWMClass in meertex.desktop. Same as meerpad.
+// (from the app name), Wayland uses app_id (from desktopName in package.json)
+// against StartupWMClass in meertex.desktop. Same as meerpad. Both stay
+// meertex, even though the command is meertex-gui.
 app.setName("meertex");
 
 let mainWindow = null;
@@ -99,6 +104,9 @@ function createWindow() {
       preload: path.join(__dirname, "preload.js"),
       partition: PARTITION,
       spellcheck: true,
+      // preload.js also runs in the agent panel, an iframe of the editor. It
+      // hands each frame its own bridge, by origin.
+      nodeIntegrationInSubFrames: true,
       // Read back by preload.js, which in a sandbox cannot open package.json.
       additionalArguments: [`--meertex-shell-version=${app.getVersion()}`],
     },
@@ -332,6 +340,8 @@ function registerProtocol() {
   }
 }
 
+agent.registerScheme();
+
 // Single instance. A second launch (a deep link opened on Windows or Linux)
 // hands its argv to the running app instead of starting another.
 if (!app.requestSingleInstanceLock()) {
@@ -353,6 +363,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     registerProtocol();
     setPermissions();
+    agent.setup(session.fromPartition(PARTITION), APP_ORIGIN);
     setSpellCheckLanguages();
     buildMenu();
     createWindow();
