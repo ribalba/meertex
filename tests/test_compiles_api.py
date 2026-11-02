@@ -342,13 +342,43 @@ def test_synctex(service):
         assert client.post(f"{base}/view", json={"path": "nope.tex", "line": 1}).status_code == 422
         assert client.post(f"{base}/edit", json={"page": 0, "x": 1, "y": 1}).status_code == 422
 
-        # The service forgot the job.
-        with SessionLocal() as db:
-            db.get(Compile, c["id"]).job_id = uuid.uuid4().hex
-            db.commit()
+        def forget() -> None:
+            """The service no longer has the jobs, as once it made COMPILE_KEEP_JOBS newer ones."""
+            with SessionLocal() as db:
+                for row in db.query(Compile).filter(Compile.project_id == pid):
+                    row.job_id = uuid.uuid4().hex
+                db.commit()
+
+        # A review reads the PDF of a commit. Its files are compiled again for
+        # SyncTeX, once for requests that come together (a selection's start
+        # and end), and every compile of the same files gets the new job.
+        client.post(f"/api/projects/{pid}/versions", json={"kind": "submission"})
+        v = _wait_compiled(client, pid, "submission")
+        tagged = _compile(client, pid, v["commit"])
+        tagged_base = f"/api/projects/{pid}/compiles/{tagged['id']}/synctex"
+        forget()
+        before = service.job_count()
+        point = {"page": 1, "x": box["x"] + 5, "y": box["y"] + box["height"] / 2}
+        answers: list = []
+        threads = [threading.Thread(target=lambda: answers.append(client.post(f"{tagged_base}/edit", json=point))) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        assert [r.status_code for r in answers] == [200, 200], [r.text for r in answers]
+        assert [r.json() for r in answers] == [{"path": "sections/intro.tex", "line": 3, "column": 0}] * 2
+        assert service.job_count() == before + 1
+        assert client.post(f"{base}/view", json={"path": "sections/intro.tex", "line": 3}).json()["boxes"] == boxes
+        assert service.job_count() == before + 1
+
+        # A live compile the text has moved on from cannot be made again.
+        client.put(f"/api/projects/{pid}/files/main.tex", content=HELLO.replace(b"Hello world.", b"Hello brave world."))
+        forget()
         r = client.post(f"{base}/view", json={"path": "main.tex", "line": 3})
         assert r.status_code == 410
-        assert client.post(f"{base}/edit", json={"page": 1, "x": 100, "y": 100}).status_code == 410
+        assert "Compile again" in r.json()["detail"]
+        assert client.post(f"{base}/edit", json=point).status_code == 410
+        assert client.post(f"{tagged_base}/edit", json=point).json()["line"] == 3
 
 
 def test_roles(service):

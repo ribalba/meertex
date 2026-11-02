@@ -56,7 +56,8 @@ class Unavailable(Exception):
 
 
 class Gone(Exception):
-    """The compile service no longer has the job (it keeps the newest few)."""
+    """The compile service no longer has the job (it keeps the newest few),
+    and its files cannot be compiled again because they have changed since."""
 
 
 @dataclass
@@ -201,8 +202,9 @@ class _Result:
     pdf: bytes | None = None
 
 
-def _run_service(source: Source) -> _Result:
-    """Send ``source`` to the compile service and fetch the PDF. Raises Unavailable."""
+def _run_service(source: Source, with_pdf: bool = True) -> _Result:
+    """Send ``source`` to the compile service and fetch the PDF, unless
+    ``with_pdf`` is false. Raises Unavailable."""
     if source.kind == "pdfdiff":
         path, body = "/latexdiff", pack({"old/": source.old or {}, "new/": source.files})
     else:
@@ -227,7 +229,7 @@ def _run_service(source: Source) -> _Result:
         duration_ms=data.get("duration_ms"),
         job_id=data.get("job_id"),
     )
-    if result.status in ("success", "errors") and result.job_id:
+    if with_pdf and result.status in ("success", "errors") and result.job_id:
         try:
             pdf = _service("GET", f"/jobs/{result.job_id}/output.pdf")
         except httpx.ReadTimeout as e:
@@ -510,22 +512,65 @@ def _compile_version(
 # --- SyncTeX ----------------------------------------------------------------------------
 
 
-def _synctex(row: Compile, what: str, payload: dict) -> httpx.Response:
-    _require()
-    if not row.job_id:
-        raise Gone("The compile service no longer has this compile. Compile again.")
+def _ask_job(job_id: str | None, what: str, payload: dict) -> httpx.Response | None:
+    """SyncTeX of one job, or None when the service no longer has it."""
+    if not job_id:
+        return None
     try:
-        resp = _service("POST", f"/jobs/{row.job_id}/synctex/{what}", json=payload)
+        resp = _service("POST", f"/jobs/{job_id}/synctex/{what}", json=payload)
     except httpx.ReadTimeout as e:
         raise Unavailable("SyncTeX took too long.") from e
-    if resp.status_code == 404:
-        raise Gone("The compile service no longer has this compile. Compile again.")
+    return None if resp.status_code == 404 else resp
+
+
+def _rerun(db: DBSession, row: Compile) -> str | None:
+    """A new job for ``row``, whose job the service no longer has (it keeps
+    the newest COMPILE_KEEP_JOBS). The same files and compiler lay out the
+    same pages, so SyncTeX of the new job finds its places in the PDF ``row``
+    already has. Every row of the same files gets the new job. None when the
+    files cannot be had again: a live compile the text has moved on from, or
+    a pdfdiff. Raises Unavailable."""
+    if row.kind != "pdf":
+        return None
+    row_id, project_id, gone, content_hash = row.id, row.project_id, row.job_id, row.content_hash
+    ref, commit, main_file, compiler = row.ref, row.commit, row.main_file, row.compiler
+    # Hand the request's database connection back while TeX runs.
+    db.rollback()
+    with _project_lock(project_id):
+        with SessionLocal() as s:
+            now = s.get(Compile, row_id)
+            if now is None:
+                return None
+            if now.job_id != gone:
+                return now.job_id  # another request ran it meanwhile
+        commit, files = files_at(project_id, commit or "live")
+        source = Source("pdf", ref, commit, main_file, compiler, files)
+        if source.content_hash != content_hash:
+            return None
+        result = _run_service(source, with_pdf=False)
+        if result.status not in ("success", "errors") or not result.job_id:
+            raise Unavailable(f"SyncTeX needed this PDF compiled again, which ended with {result.status}.")
+        with SessionLocal() as s:
+            s.query(Compile).filter(Compile.project_id == project_id, Compile.content_hash == content_hash).update(
+                {Compile.job_id: result.job_id}, synchronize_session=False
+            )
+            s.commit()
+        return result.job_id
+
+
+def _synctex(db: DBSession, row: Compile, what: str, payload: dict) -> httpx.Response:
+    _require()
+    resp = _ask_job(row.job_id, what, payload)
+    if resp is None:
+        resp = _ask_job(_rerun(db, row), what, payload)
+    if resp is None:
+        raise Gone("The files have changed since this PDF was made. Compile again.")
     return resp
 
 
-def synctex_edit(row: Compile, page: int, x: float, y: float) -> dict | None:
+def synctex_edit(db: DBSession, row: Compile, page: int, x: float, y: float) -> dict | None:
     """``{path, line, column}`` of the source at a point of the PDF, or None."""
-    resp = _synctex(row, "edit", {"page": page, "x": x, "y": y})
+    resp = _synctex(db, row, "edit", {"page": page, "x": x, "y": y})
     if resp.status_code == 422:
         return None
     if resp.status_code != 200:
@@ -534,10 +579,10 @@ def synctex_edit(row: Compile, page: int, x: float, y: float) -> dict | None:
     return {"path": data["file"], "line": data["line"], "column": data["column"]}
 
 
-def synctex_view(row: Compile, path: str, line: int, column: int) -> list[dict]:
+def synctex_view(db: DBSession, row: Compile, path: str, line: int, column: int) -> list[dict]:
     """The boxes of the PDF that show a source line. Raises live.Refused for a
     path that is not a file of the compile."""
-    resp = _synctex(row, "view", {"file": path, "line": line, "column": column})
+    resp = _synctex(db, row, "view", {"file": path, "line": line, "column": column})
     if resp.status_code == 422:
         raise live.Refused(_detail(resp))
     if resp.status_code != 200:

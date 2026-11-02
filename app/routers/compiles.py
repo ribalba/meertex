@@ -3,9 +3,10 @@ SyncTeX between a PDF and the sources (docs/DESIGN.md §14).
 
 Viewers may compile, because reviewers read the PDF. A compile waits for TeX,
 which takes seconds and, behind other compiles of the same project, minutes.
-So the two routes that compile are async and run their work in threads of
-their own (``_limiter``), and a crowd of them cannot take the threads that
-every other route runs in.
+So the routes that compile are async and run their work in threads of their
+own (``_limiter``), and a crowd of them cannot take the threads that every
+other route runs in. SyncTeX is among them, because it compiles again when
+the compile service no longer has the job.
 
 The compile service is a separate container. When COMPILE_URL is empty or the
 service cannot be reached, these routes answer 503 with the reason.
@@ -200,21 +201,29 @@ def _synctex(fn: Callable[..., T], *args: object) -> T:
         raise _unavailable(e) from None
 
 
-@router.post("/projects/{project}/compiles/{compile_id}/synctex/edit")
-def synctex_edit(project: str, compile_id: str, body: EditIn, user: SessionOrTokenUser, db: DB) -> dict:
-    """The source line at a point of the PDF: ``{path, line, column}``. x and y
-    are PDF points from the page's top left."""
+def _edit(db: DBSession, user: User, project: str, compile_id: str, body: EditIn) -> dict:
     p = project_for(db, user, project, "viewer")
     row = _with_pdf(_find(db, p, compile_id))
-    found = _synctex(compiler.synctex_edit, row, body.page, body.x, body.y)
+    found = _synctex(compiler.synctex_edit, db, row, body.page, body.x, body.y)
     if found is None:
         raise HTTPException(status_code=404, detail="SyncTeX knows no source line at that point")
     return found
 
 
-@router.post("/projects/{project}/compiles/{compile_id}/synctex/view")
-def synctex_view(project: str, compile_id: str, body: ViewIn, user: SessionOrTokenUser, db: DB) -> dict:
-    """Where a source line is in the PDF: ``{boxes: [{page, x, y, width, height}]}``."""
+def _view(db: DBSession, user: User, project: str, compile_id: str, body: ViewIn) -> dict:
     p = project_for(db, user, project, "viewer")
     row = _with_pdf(_find(db, p, compile_id))
-    return {"boxes": _synctex(compiler.synctex_view, row, body.path, body.line, body.column)}
+    return {"boxes": _synctex(compiler.synctex_view, db, row, body.path, body.line, body.column)}
+
+
+@router.post("/projects/{project}/compiles/{compile_id}/synctex/edit")
+async def synctex_edit(project: str, compile_id: str, body: EditIn, user: SessionOrTokenUser, db: DB) -> dict:
+    """The source line at a point of the PDF: ``{path, line, column}``. x and y
+    are PDF points from the page's top left."""
+    return await _in_thread(_edit, db, user, project, compile_id, body)
+
+
+@router.post("/projects/{project}/compiles/{compile_id}/synctex/view")
+async def synctex_view(project: str, compile_id: str, body: ViewIn, user: SessionOrTokenUser, db: DB) -> dict:
+    """Where a source line is in the PDF: ``{boxes: [{page, x, y, width, height}]}``."""
+    return await _in_thread(_view, db, user, project, compile_id, body)

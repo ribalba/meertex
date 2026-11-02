@@ -1485,8 +1485,12 @@ compile {id, kind, status, ref, commit, compiler, main_file, duration_ms,
 - `POST /api/projects/{ref}/compiles/{id}/synctex/edit {page, x, y}` returns
   `{path, line, column}`, 404 when SyncTeX knows nothing there.
   `/synctex/view {path, line, column}` returns
-  `{boxes: [{page, x, y, width, height}]}`. 410 when the compile service no
-  longer has the job.
+  `{boxes: [{page, x, y, width, height}]}`. When the compile service no
+  longer has the job, the same files are compiled again for a new job, which
+  every compile of those files gets. Requests that come together share that
+  compile, and the PDF stays the one the compile has. This answers 410 only
+  when the files cannot be had again, for a `live` compile the text has moved
+  on from or a `pdfdiff`.
 - `POST /api/projects/{ref}/pdfdiff {from, to}` returns a compile of kind
   `pdfdiff`, cached like any other.
 - Making a version compiles its commit in the background. The version gets
