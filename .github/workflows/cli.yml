@@ -36,7 +36,7 @@ jobs:
         run: python -m pip install ./cli pytest
       # The end-to-end tests skip themselves without MEERTEX_TEST_DB.
       - name: Test
-        run: python -m pytest -q cli/tests
+        run: python -m pytest cli/tests
 
   build:
     needs: test

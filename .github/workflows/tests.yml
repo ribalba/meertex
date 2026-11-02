@@ -84,8 +84,9 @@ jobs:
         run: |
           python -m pip install -r requirements.txt pytest
           python -m pip install -e ./cli
+      # pytest.ini adds -q. A second one would hide the line with the counts.
       - name: Test
-        run: python -m pytest -q -ra tests cli/tests
+        run: python -m pytest -ra tests cli/tests
 
   cli:
     runs-on: ubuntu-24.04
@@ -97,7 +98,7 @@ jobs:
       - name: Install the CLI and pytest
         run: python -m pip install ./cli pytest
       - name: Test
-        run: python -m pytest -q cli/tests
+        run: python -m pytest cli/tests
 
   editor:
     runs-on: ubuntu-24.04

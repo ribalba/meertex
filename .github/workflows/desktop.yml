@@ -4,6 +4,10 @@
 # (releases/latest/download/<file>), so its links never go stale. A merged
 # Dependabot pull request for Electron ships the same way.
 #
+# A pull request that changes it gets the same three builds without the
+# release, so an update of Electron or of an action shows on every system
+# before the merge, and not only after it in a failed release.
+#
 # The version is VERSION plus the run number (0.1.0.42), like the CLI's. The
 # app itself says VERSION, and the run number is its build number (macOS
 # CFBundleVersion, Windows FileVersion) and the release tag desktop-0.1.0.42.
@@ -23,15 +27,21 @@ on:
       - "electron/**"
       - "VERSION"
       - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "electron/**"
+      - "VERSION"
+      - ".github/workflows/desktop.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# One release at a time, in push order, so "latest" is always the newest.
+# One release at a time, in push order, so "latest" is always the newest. A
+# new push to a pull request cancels the build of the push before it.
 concurrency:
-  group: desktop
-  cancel-in-progress: false
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The files every release has. app/static/landing.html links to each of
@@ -86,8 +96,11 @@ jobs:
             electron/dist/meertex-linux-*.deb
             electron/dist/meertex-linux-*.rpm
           if-no-files-found: error
+          # A pull request's installers are only a check. 0 is the default.
+          retention-days: ${{ github.event_name == 'pull_request' && 1 || 0 }}
 
   release:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     permissions:

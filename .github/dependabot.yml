@@ -15,6 +15,9 @@
 # What a merge sets off. Coolify deploys every push to main, so a server or
 # image bump goes live. A CLI bump publishes a new version to PyPI (cli.yml),
 # and an Electron bump a new desktop download (desktop.yml).
+#
+# No labels are set. Dependabot only adds labels that exist in the repository,
+# so it uses its own (dependencies and the ecosystem) and creates them itself.
 
 version: 2
 
@@ -26,7 +29,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
-    labels: ["dependencies", "python"]
     commit-message:
       prefix: "deps"
     groups:
@@ -42,7 +44,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "python", "cli"]
     commit-message:
       prefix: "deps"
     groups:
@@ -57,7 +58,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "electron"]
     commit-message:
       prefix: "deps"
     groups:
@@ -75,7 +75,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "javascript", "editor"]
     commit-message:
       prefix: "deps"
     groups:
@@ -89,7 +88,6 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 2
-    labels: ["dependencies", "javascript"]
     commit-message:
       prefix: "deps"
 
@@ -102,7 +100,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "docker"]
     commit-message:
       prefix: "deps"
     groups:
@@ -120,7 +117,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "docker"]
     commit-message:
       prefix: "deps"
     ignore:
@@ -141,7 +137,6 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
-    labels: ["dependencies", "github-actions"]
     commit-message:
       prefix: "deps"
     groups:
