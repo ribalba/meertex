@@ -349,3 +349,65 @@ def test_keys_are_url_encoded(capsys, monkeypatch):
     assert run(capsys, "refs", "paper", "set", key, "year", "2020")[0] == 0
     assert fake.raw == [("POST", f"{R}/{encoded}/checked"), ("DELETE", f"{R}/{encoded}/checked"),
                         ("POST", f"{R}/{encoded}/fields")]
+
+
+# --- meertex refs <project> files ------------------------------------------------------------
+
+BIBS = [
+    {"path": "refs.bib", "entries": 6, "checked": True, "main": True,
+     "loaded_by": [{"path": "main.tex", "line": 40}, {"path": "main_diff.tex", "line": 44}]},
+    {"path": "submitted/refs.bib", "entries": 6, "checked": False, "main": False,
+     "loaded_by": [{"path": "submitted/paper.tex", "line": 40}]},
+    {"path": "notes.bib", "entries": 1, "checked": False, "main": False, "loaded_by": []},
+]
+
+
+def with_bibs(data: dict, mode: str = "main", bibs=None) -> dict:
+    bibs = BIBS if bibs is None else bibs
+    return {**data, "bib_mode": mode, "bibs": bibs, "files": [b["path"] for b in bibs if b["checked"]]}
+
+
+def test_files_shows_every_bib_file_and_what_loads_it(fake, capsys):
+    fake.routes[("GET", R)] = with_bibs(report(ENTRIES))
+    code, out, _ = run(capsys, "refs", "paper", "files")
+    assert code == 0
+    assert out.splitlines() == [
+        "The check reads the .bib files the main file loads. 2 .bib files are left out.",
+        "",
+        "  checked   refs.bib            6 entries  main.tex:40, main_diff.tex:44",
+        "  left out  submitted/refs.bib  6 entries  submitted/paper.tex:40",
+        "  left out  notes.bib           1 entry    no .tex file loads it",
+    ]
+    # The report says what it leaves out.
+    _code, out, _ = run(capsys, "refs", "paper")
+    assert out.splitlines()[1] == "Reads refs.bib. Left out: submitted/refs.bib, notes.bib."
+
+
+def test_files_chooses_what_the_check_reads(fake, capsys):
+    every = [{**b, "checked": True} for b in BIBS]
+    fake.routes[("PUT", f"{R}/files")] = with_bibs(report(ENTRIES), "all", every)
+    code, out, _ = run(capsys, "refs", "paper", "files", "--all")
+    assert code == 0
+    assert fake.calls[-1] == ("PUT", f"{R}/files", {}, {"mode": "all", "files": []})
+    assert out.splitlines()[0] == "The check reads every .bib file."
+
+    run(capsys, "refs", "paper", "files", "--main")
+    assert fake.calls[-1][3] == {"mode": "main", "files": []}
+    run(capsys, "refs", "paper", "files", "refs.bib", "notes.bib", "--json")
+    assert fake.calls[-1][3] == {"mode": "chosen", "files": ["refs.bib", "notes.bib"]}
+
+    calls = len(fake.calls)
+    code, _out, err = run(capsys, "refs", "paper", "files", "refs.bib", "--all")
+    assert code == 2 and "only one of them" in err
+    assert len(fake.calls) == calls
+
+
+def test_files_says_when_the_main_file_loads_nothing(fake, capsys):
+    loose = [{**b, "checked": True, "main": False, "loaded_by": []} for b in BIBS[:1]]
+    fake.routes[("GET", R)] = with_bibs(report([]), "main", loose)
+    _code, out, _ = run(capsys, "refs", "paper", "files")
+    assert out.splitlines()[0] == "The main file loads no .bib file, so the check reads every one."
+    gone = [{**b, "checked": False} for b in BIBS[:1]]
+    fake.routes[("GET", R)] = with_bibs(report([]), "chosen", gone)
+    _code, out, _ = run(capsys, "refs", "paper")
+    assert out.splitlines()[-1] == "No .bib file is checked. meertex refs <project> files chooses them."

@@ -43,6 +43,8 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "planned": "BOOLEAN NOT NULL DEFAULT false",
         "writing_days": "INTEGER",
         "example": "BOOLEAN NOT NULL DEFAULT false",
+        "bib_mode": "VARCHAR(10) NOT NULL DEFAULT 'main'",
+        "bib_files": "JSONB NOT NULL DEFAULT '[]'",
     },
     "versions": {"compile_id": "VARCHAR(36)"},
     "users": {

@@ -36,6 +36,11 @@ class FieldIn(BaseModel):
     value: str = Field(max_length=20_000)
 
 
+class FilesIn(BaseModel):
+    mode: str = Field(min_length=1, max_length=10)
+    files: list[str] = Field(default_factory=list, max_length=500)
+
+
 def _call(fn, *args):
     """A service call with its NotFound as 404, Refused as 422, Ambiguous as
     409 and Unavailable as 503."""
@@ -90,6 +95,13 @@ def start_check(project: str, user: SessionOrTokenUser, db: DB, body: CheckIn | 
     body = body or CheckIn()
     run, started = _call(lambda: service.start(db, p, user, want_claims=body.claims, refresh=body.refresh))
     return JSONResponse(run, status_code=202 if started else 200)
+
+
+@router.put("/{project}/references/files")
+def set_files(project: str, body: FilesIn, user: SessionOrTokenUser, db: DB) -> dict:
+    """Choose the .bib files the check reads and return the report."""
+    p = project_for(db, user, project, "editor")
+    return _call(service.set_files, db, p, body.mode, body.files)
 
 
 @router.post("/{project}/references")

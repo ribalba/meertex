@@ -181,7 +181,15 @@ meertex refs <project> check --claims         # also ask Claude whether the sour
 meertex refs <project> add 10.1145/3290605.3300857 --dry-run   # an entry from a DOI, arXiv id, ISBN or link
 meertex refs <project> set <key> pages 1--13  # take a value, usually a finding's "record"
 meertex refs <project> mark <key>             # the user checked this entry by hand
+meertex refs <project> files                  # every .bib file, the lines that load it, and whether it is read
+meertex refs <project> files --all            # read every .bib file (--main, or the paths to read)
 ```
+
+- The check reads only the `.bib` files the main file loads, unless the
+  project chose `--all` or some files by hand. The report's second line says
+  which files it leaves out. A copy of the paper in a folder (a submitted
+  version) is left out that way on purpose. Choosing the files changes what
+  every coauthor sees, so only do it when the user asks.
 
 - Reading the report and running `check` are fine whenever the user works on
   the references. `check --claims` costs money for every cited entry, so run

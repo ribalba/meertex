@@ -244,6 +244,9 @@ def test_duplicate_keys_are_409_on_writes():
         _me, pid = _setup(client)
         twice = BIB + "\n@misc{gmt, title = {Again}}\n@inproceedings{copy, title = {Other}, doi = {10.1145/3290605.3300857}}\n"
         client.put(f"/api/projects/{pid}/files/more.bib", content=twice.encode())
+        # main.tex loads only refs.bib, so more.bib counts with every file read.
+        r = client.put(f"/api/projects/{pid}/references/files", json={"mode": "all"})
+        assert r.status_code == 200, r.text
         entries = client.get(f"/api/projects/{pid}/references").json()["entries"]
         assert sum(1 for e in entries if e["key"] == "gmt") == 3
         assert any(f["code"] == "duplicate_key" for e in entries if e["key"] == "gmt" for f in e["findings"])
@@ -363,3 +366,114 @@ def test_claims(monkeypatch, fake):
         # The same question again is answered from the cache.
         _run(client, pid, claims=True)
         assert len(asked) == 1
+
+
+# --- The .bib files the check reads (§16, Files) ----------------------------------------
+
+SUBMITTED_TEX = r"""\documentclass{article}
+\begin{document}
+The submitted version cites \cite{roussou2019} and \cite{gone2020}.
+\bibliography{refs}
+\end{document}
+"""
+
+
+def _with_copy(client):
+    """The project of _setup plus a submitted version in a folder of its own,
+    with a copy of refs.bib, like a paper that keeps what it handed in."""
+    me, pid = _setup(client)
+    assert client.put(f"/api/projects/{pid}/files/submitted/paper.tex", content=SUBMITTED_TEX.encode()).status_code == 200
+    assert client.put(f"/api/projects/{pid}/files/submitted/refs.bib", content=BIB.encode()).status_code == 200
+    return me, pid
+
+
+def test_the_check_reads_the_files_the_main_file_loads():
+    with running_app() as client:
+        _me, pid = _with_copy(client)
+        data = client.get(f"/api/projects/{pid}/references").json()
+        assert data["bib_mode"] == "main"
+        assert data["files"] == ["refs.bib"]
+        assert data["bibs"] == [
+            {"path": "refs.bib", "entries": 4, "checked": True, "main": True,
+             "loaded_by": [{"path": "main.tex", "line": 6}]},
+            {"path": "submitted/refs.bib", "entries": 4, "checked": False, "main": False,
+             "loaded_by": [{"path": "submitted/paper.tex", "line": 4}]},
+        ]
+        # The copy makes no key twice, and its \cite keys neither count as uses
+        # nor go missing.
+        assert {e["path"] for e in data["entries"]} == {"refs.bib"}
+        assert not any(f["code"] == "duplicate_key" for e in data["entries"] for f in e["findings"])
+        assert data["missing"] == [{"key": "nothere", "path": "main.tex", "line": 4}]
+        roussou = next(e for e in data["entries"] if e["key"] == "roussou2019")
+        assert roussou["cites"] == [{"path": "main.tex", "line": 3}]
+        # Writes find the one entry in the files that are read.
+        assert client.post(f"/api/projects/{pid}/references/roussou2019/checked").status_code == 200
+        assert "meertex-checked" in client.get(f"/api/projects/{pid}/files/refs.bib").text
+        assert "meertex-checked" not in client.get(f"/api/projects/{pid}/files/submitted/refs.bib").text
+
+
+def test_choosing_all_or_some_files(fake):
+    with running_app() as client:
+        _me, pid = _with_copy(client)
+        url = f"/api/projects/{pid}/references/files"
+
+        r = client.put(url, json={"mode": "all"})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["bib_mode"] == "all"
+        assert data["files"] == ["refs.bib", "submitted/refs.bib"]
+        assert all(b["checked"] for b in data["bibs"])
+        assert any(f["code"] == "duplicate_key" for e in data["entries"] for f in e["findings"])
+        assert {"key": "gone2020", "path": "submitted/paper.tex", "line": 3} in data["missing"]
+        assert client.post(f"/api/projects/{pid}/references/roussou2019/checked").status_code == 409
+
+        r = client.put(url, json={"mode": "chosen", "files": ["submitted/refs.bib"]})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert (data["bib_mode"], data["files"]) == ("chosen", ["submitted/refs.bib"])
+        assert [b["checked"] for b in data["bibs"]] == [False, True]
+        # Only the submitted version cites now.
+        assert data["missing"] == [{"key": "gone2020", "path": "submitted/paper.tex", "line": 3}]
+        # A run looks up only what is read. Both files hold the same entries, so
+        # the results count for refs.bib too.
+        run = _run(client, pid)
+        assert run["total"] == 4
+        assert client.put(url, json={"mode": "main"}).json()["files"] == ["refs.bib"]
+        assert _run(client, pid)["total"] == 0
+
+        assert client.put(url, json={"mode": "chosen", "files": []}).status_code == 422
+        assert client.put(url, json={"mode": "chosen", "files": ["nope.bib"]}).status_code == 422
+        assert client.put(url, json={"mode": "some"}).status_code == 422
+        # A chosen file that is gone is no longer read.
+        client.put(url, json={"mode": "chosen", "files": ["submitted/refs.bib"]})
+        assert client.delete(f"/api/projects/{pid}/files/submitted/refs.bib").status_code in (200, 204)
+        data = client.get(f"/api/projects/{pid}/references").json()
+        assert (data["bib_mode"], data["files"], data["entries"]) == ("chosen", [], [])
+
+
+def test_a_main_file_that_loads_nothing_reads_every_file():
+    with running_app() as client:
+        _me, pid = _setup(client)
+        client.put(f"/api/projects/{pid}/files/main.tex", content=TEX.replace(r"\bibliography{refs}", "").encode())
+        client.put(f"/api/projects/{pid}/files/extra.bib", content=b"@misc{extra, title = {Extra}}\n")
+        data = client.get(f"/api/projects/{pid}/references").json()
+        assert data["bib_mode"] == "main"
+        assert data["files"] == ["extra.bib", "refs.bib"]
+        assert not any(b["main"] for b in data["bibs"])
+
+
+def test_only_editors_choose_the_files():
+    from app.database import SessionLocal
+    from app.models import Membership
+
+    with running_app() as client:
+        _me, pid = _with_copy(client)
+        viewer_id, _email, token = make_user()
+        with SessionLocal() as db:
+            db.add(Membership(project_id=pid, user_id=viewer_id, role="viewer"))
+            db.commit()
+        other = bare_client()
+        r = other.put(f"/api/projects/{pid}/references/files", json={"mode": "all"},
+                      headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 403
+        assert client.get(f"/api/projects/{pid}/references").json()["bib_mode"] == "main"

@@ -2052,6 +2052,21 @@ textarea.rv-textarea { min-height: 72px; }
 .rf-problem-row { display: flex; align-items: flex-start; gap: 8px; }
 .rf-problem-row > .icon { flex: none; margin-top: 2px; }
 
+/* The .bib files the check reads, with the lines that load them, and the
+   dialog that chooses them. */
+.rf-files { margin-bottom: 16px; }
+.rf-files-head { flex-wrap: wrap; }
+.rf-files-text { min-width: 0; }
+.rf-file { display: flex; align-items: flex-start; gap: 8px; }
+.rf-file > .icon { flex: none; margin-top: 2px; }
+.rf-file-main { flex: 1 1 auto; min-width: 0; }
+.rf-file-path { font-size: 12px; font-weight: 600; word-break: break-all; }
+.rf-file.is-left-out .rf-file-path { color: var(--fg-muted); }
+.rf-modes { margin-bottom: 16px; }
+.rf-files-list-head { margin: 0 0 4px; font-size: 14px; }
+.rf-file-picks { margin: 0 0 16px; padding: 0; list-style: none; }
+.rf-file-pick label { word-break: break-all; }
+
 .rf-dialog-message:not(:empty) { margin-bottom: 16px; }
 .rf-preview > p { margin-bottom: 8px; }
 .rf-bibtex {

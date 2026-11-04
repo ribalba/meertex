@@ -4,7 +4,8 @@ Checks a project's ``.bib`` entries against the publishers' records and the
 web, so wrong and made-up citations show up before a reviewer finds them.
 ``meertex refs <project>`` prints the report, ``check`` starts a run and
 follows it, ``add`` adds an entry from a DOI, an arXiv id, an ISBN or a link,
-``mark`` and ``unmark`` set the checked mark, and ``set`` sets one field.
+``mark`` and ``unmark`` set the checked mark, ``set`` sets one field, and
+``files`` shows and chooses the .bib files the check reads.
 
 The report lists every entry that needs a look (all of them with ``--all``)
 with its findings, so an agent can fix the ``.bib`` from it without another
@@ -174,11 +175,62 @@ def exit_code(report: dict) -> int:
     return 1 if bad or report.get("broken") else 0
 
 
+MODE_TEXTS = {
+    "main": "The check reads the .bib files the main file loads.",
+    "all": "The check reads every .bib file.",
+    "chosen": "The check reads the .bib files chosen for it.",
+}
+
+
+def mode_text(report: dict) -> str:
+    """What the check reads, in a sentence (DESIGN §16, Files)."""
+    bibs = report.get("bibs") or []
+    mode = report.get("bib_mode") or "main"
+    if mode == "main" and bibs and not any(b.get("main") for b in bibs):
+        return "The main file loads no .bib file, so the check reads every one."
+    if mode == "chosen" and bibs and not report.get("files"):
+        return "None of the chosen .bib files is in the project any more, so the check reads none."
+    return MODE_TEXTS.get(mode, f"The check reads the .bib files of mode {mode}.")
+
+
+def files_note(report: dict) -> str | None:
+    """One line for the report while a .bib file is left out, else None."""
+    left = [b.get("path") or "" for b in report.get("bibs") or [] if not b.get("checked")]
+    if not left:
+        return None
+    read = ", ".join(report.get("files") or []) or "no .bib file"
+    return f"Reads {read}. Left out: {', '.join(left)}."
+
+
+def loads_text(bib: dict) -> str:
+    loads = bib.get("loaded_by") or []
+    return ", ".join(_where(item) for item in loads) if loads else "no .tex file loads it"
+
+
+def print_files(report: dict) -> None:
+    bibs = report.get("bibs") or []
+    if not bibs:
+        print("The project has no .bib files.")
+        return
+    left = sum(1 for b in bibs if not b.get("checked"))
+    tail = "" if not left else " 1 .bib file is left out." if left == 1 else f" {left} .bib files are left out."
+    print(mode_text(report) + tail)
+    rows = []
+    for b in bibs:
+        state = paint("checked", output.GREEN) if b.get("checked") else paint("left out", output.DIM)
+        rows.append([state, b.get("path") or "", _entries(b.get("entries") or 0), loads_text(b)])
+    print()
+    print(table(rows, indent="  "))
+
+
 def print_report(report: dict, show_all: bool) -> None:
     entries = report.get("entries") or []
     missing = report.get("missing") or []
     broken = report.get("broken") or []
     print(header_text(entries, report.get("run")))
+    note = files_note(report)
+    if note:
+        print(paint(note, output.DIM))
     if report.get("network_enabled") is False:
         print(paint("This server does not look references up, so only the checks without network apply.",
                     output.DIM))
@@ -194,6 +246,9 @@ def print_report(report: dict, show_all: bool) -> None:
         print("\nMissing keys")
         print(table([[m.get("key") or "", _where(m)] for m in missing], indent="  "))
     print()
+    if not entries and not report.get("files") and report.get("bibs"):
+        print("No .bib file is checked. meertex refs <project> files chooses them.")
+        return
     print(summary_text(entries, missing, broken))
 
 
@@ -323,8 +378,25 @@ def cmd_set(args) -> int:
     return 0
 
 
+def cmd_files(args) -> int:
+    base = refs_path(cli.project_ref(args.project))
+    if sum((bool(args.paths), args.main, args.every)) > 1:
+        raise cli.UsageError("Give the .bib files to check, or --main, or --all, only one of them.")
+    mode = "chosen" if args.paths else "main" if args.main else "all" if args.every else None
+    with cli.api() as a:
+        if mode is None:
+            report = a.get(base)
+        else:
+            report = a.put(base + "/files", json={"mode": mode, "files": list(args.paths)})
+    if args.json:
+        print_json(report)
+    else:
+        print_files(report)
+    return 0
+
+
 ACTIONS = {None: cmd_show, "check": cmd_check, "add": cmd_add, "mark": cmd_mark, "unmark": cmd_unmark,
-           "set": cmd_set}
+           "set": cmd_set, "files": cmd_files}
 
 
 def cmd_refs(args) -> int:
@@ -342,13 +414,13 @@ def add_commands(cmd: Callable[..., argparse.ArgumentParser], common: argparse.A
         cmd_refs,
         "Check a project's .bib entries against the publishers' records and the web",
         # argparse shows an optional subcommand as if it were required.
-        usage="%(prog)s [-h] [--json] [--all] project [{check,add,mark,unmark,set} ...]",
+        usage="%(prog)s [-h] [--json] [--all] project [{check,add,mark,unmark,set,files} ...]",
         epilog="Without a subcommand it prints every entry that needs a look, the broken entries, the missing keys "
                "and the last run. It exits 1 when an entry is error or changed or cannot be parsed, else 0.",
     )
     p.add_argument("project", help="name, id, or a checkout folder such as '.'")
     p.add_argument("--all", action="store_true", help="list the verified and checked entries too")
-    sub = p.add_subparsers(dest="action", metavar="check|add|mark|unmark|set")
+    sub = p.add_subparsers(dest="action", metavar="check|add|mark|unmark|set|files")
 
     s = sub.add_parser("check", parents=[common], help="look every entry up, show the progress and print the report",
                        description="Look every entry up, show the progress and print the report.")
@@ -379,3 +451,13 @@ def add_commands(cmd: Callable[..., argparse.ArgumentParser], common: argparse.A
     s.add_argument("key")
     s.add_argument("field")
     s.add_argument("value", help="the new value, - to read it from stdin")
+
+    s = sub.add_parser(
+        "files", parents=[common], help="show or choose the .bib files the check reads",
+        description="Show every .bib file with the lines that load it and whether the check reads it. "
+                    "With paths, --main or --all it chooses what the check reads first.")
+    s.add_argument("paths", nargs="*", metavar="path", help="check only these .bib files")
+    s.add_argument("--main", action="store_true",
+                   help="check the .bib files the main file loads, the default for every paper")
+    # dest is not "all", which the parent's --all (list every entry) has.
+    s.add_argument("--all", dest="every", action="store_true", help="check every .bib file")

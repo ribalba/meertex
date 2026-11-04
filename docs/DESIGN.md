@@ -1618,8 +1618,9 @@ checked. The code is in `app/references/`.
 
 ### Entries
 
-- Every text file in the live document whose path ends in `.bib` (any case)
-  is read. The parser (`bibtex.py`) knows `@string` macros (and the month
+- The `.bib` files the project checks are read (see Files below). A `.bib`
+  file is a text file in the live document whose path ends in `.bib` (any
+  case). The parser (`bibtex.py`) knows `@string` macros (and the month
   macros `jan` to `dec`), `#` concatenation, braces and quotes as
   delimiters, and skips `@comment`, `@preamble` and text between entries.
   Field names are compared without case. Fields a `crossref` parent has and
@@ -1631,12 +1632,55 @@ checked. The code is in `app/references/`.
   and sorted. Values lose their outer delimiters, and every run of white
   space becomes one space. Reformatting, reordering fields or renaming the
   key keep the fingerprint. Changing a value does not.
-- `\cite` keys come from every `.tex` file. The commands are `\cite`,
+- `\cite` keys come from the `.tex` files that count (see Files). The commands are `\cite`,
   `\nocite` and the natbib and biblatex variants (`\citep`, `\citet`,
   `\citealp`, `\citeauthor`, `\citeyear`, `\parencite`, `\textcite`,
   `\autocite`, `\footcite`, `\smartcite`, `\supercite`), also starred and
   capitalised, with their optional arguments, outside comments.
   `\nocite{*}` cites every entry.
+
+### Files
+
+A project can hold more than one paper, most often the submitted version in
+a folder of its own with a copy of the `.bib` file. Read together, every key
+of the copy would be a `duplicate_key`. So the project chooses which `.bib`
+files the check reads. The code is in `scope.py`.
+
+- **Documents.** Every `.tex` file with `\documentclass` outside comments is
+  a document, and so is the main file (§4). A document reads the files it
+  includes with `\input` (also `\input name` without braces), `\include`,
+  `\subfile` and the import package's `\import`, `\subimport`,
+  `\inputfrom`, `\includefrom`, `\subinputfrom` and `\subincludefrom`. A
+  `.tex` file no document includes is a document of its own.
+- **Loading a `.bib` file.** `\bibliography{a,b}` and `\nobibliography`
+  (one name each, `.bib` added when missing), `\addbibresource`,
+  `\addglobalbib` and `\addsectionbib`, outside comments and verbatim text.
+  Names with a macro (`\jobname`) or a parameter (`#1`) name no file.
+- **Finding a name.** Relative to the document's folder, as bibtex, biber
+  and pdflatex find it, and to the folder of `\import` for the files under
+  it. When that has no such file, relative to the including file's own
+  folder and then to the project's root. Names outside the project are not
+  found. A `.bib` file is then known by the `{path, line}` of every command
+  that loads it.
+- **The choice** is the project's `bib_mode`, shared by everyone on it.
+  - `main`, the default, reads the `.bib` files the main file loads, itself
+    or through a file it includes. It follows the paper when the main file
+    or its `\bibliography` changes. When the main file loads none (or is
+    not there), every `.bib` file is read.
+  - `all` reads every `.bib` file.
+  - `chosen` reads the files in `bib_files` that are still there. A chosen
+    file that was deleted or moved is no longer read, and when none is left
+    nothing is read.
+- **The `.tex` files that count** for `\cite` keys (uses, missing keys and
+  claims) are those of the documents that load a `.bib` file that is read
+  or load none at all. With `all`, and when `main` reads every file because
+  the main file loads none, every `.tex` file counts. So the submitted
+  version's citations neither count as uses nor become missing keys.
+- A check run, the editor's problems, the counter and every write (a field,
+  the mark, a new entry) see only the files that are read. A key that a
+  left-out copy has as well is not `duplicate_key` and not a 409. A new
+  entry goes by default into the `.bib` file read that has the most entries.
+- A fork starts with `main`.
 
 ### The checked mark
 
@@ -1675,7 +1719,7 @@ files, so they are never stale.
 
 | Code | Level | When |
 | --- | --- | --- |
-| `duplicate_key` | error | Another entry in the project has the same key. |
+| `duplicate_key` | error | Another entry in the `.bib` files that are read has the same key. |
 | `duplicate` | warning | Another entry has the same DOI or almost the same title. |
 | `placeholder` | error | A field is or holds a placeholder: `XXXX`, `??`, `TODO`, `TBD`, `FIXME`, `Author Name`, `Lastname`, `[citation needed]`, `et al.` in `author`, or only `...`. |
 | `year` | error or warning | `year` (or the year of `date`) is not a year from 1450 on (warning), is later than this year (error), or is later than the project's `year` (warning). |
@@ -1830,8 +1874,10 @@ Rows:
 
 ```text
 references {run: run | null, claims_enabled, network_enabled, files: [path],
+            bib_mode: "main" | "all" | "chosen", bibs: [bib],
             counts: {<status>: n}, problems, missing: [{key, path, line}],
             broken: [{path, line, key, message}], entries: [entry]}
+bib        {path, entries, checked, main, loaded_by: [{path, line}]}
 entry      {key, type, path, line, end_line, fingerprint, fields: {name: value},
             bibtex, status, mark: {date, by, hash, valid} | null, record | null,
             checked_at, findings: [finding], claims_at, cites: [{path, line}]}
@@ -1842,7 +1888,10 @@ run        {id, status, claims, refresh, total, done, error, started_at,
 ```
 
 - `GET /api/projects/{ref}/references` returns the report. Entries are in
-  file order. `problems` is what the tab counts, the errors and the
+  file order. `files` are the `.bib` files that are read, and `bibs` every
+  `.bib` file of the project in path order: its number of entries, whether
+  it is read (`checked`), whether the main file loads it (`main`) and the
+  lines that load it. `problems` is what the tab counts, the errors and the
   warnings. These are the entries that are `error`, `changed` or `warning`,
   the broken ones and the missing keys. `bibtex` is the entry's text as
   the file has it, from its `@` to its closing brace. `missing` are `\cite`
@@ -1852,6 +1901,11 @@ run        {id, status, claims, refresh, total, done, error, started_at,
   checked, null when they were not. Viewers too.
 - `GET /api/projects/{ref}/references/summary` returns `{problems, total}`,
   for the tab's counter.
+- `PUT /api/projects/{ref}/references/files {mode, files?}` chooses what the
+  check reads and returns the report. `mode` is `main`, `all` or `chosen`.
+  `files` counts only for `chosen`, which needs at least one, and every one
+  must be a `.bib` file of the project (422 otherwise). Editors and the
+  owner.
 - `GET /api/projects/{ref}/references/problems` returns the errors and
   warnings as `[{level, path, line, message}]`, the shape of a compile's
   problems (§14), with the broken entries as errors, the missing keys as
@@ -1896,6 +1950,7 @@ The commands are in `cli/meertex/cmd_refs.py`.
 | `meertex refs <project> add <source> [--key K] [--path P] [--dry-run]` | Adds an entry and prints it. |
 | `meertex refs <project> mark <key>`, `unmark <key>` | The checked mark. |
 | `meertex refs <project> set <key> <field> <value>` | Sets one field. |
+| `meertex refs <project> files [path ...] [--main \| --all]` | Every `.bib` file with the lines that load it and whether it is read. With paths, `--main` or `--all` it chooses first. The report says which files it leaves out. |
 
 ### In the web app
 
@@ -1906,6 +1961,12 @@ The commands are in `cli/meertex/cmd_refs.py`.
   says that it costs money) and "Add a reference". Without
   `network_enabled` a note says so instead of the three buttons, because
   adding needs the lookups too.
+- With more than one `.bib` file, or when the one file is not read, a box
+  lists every `.bib` file with its entries, the lines that load it (links
+  into the editor) and "Left out" for the files that are not read. Its
+  header says what the check reads. "Choose files" (editors) opens a dialog
+  with the three modes and a tick per file. Ticking a file picks `chosen`,
+  and picking `main` or `all` ticks the files it reads.
 - A filter by status and a search box over keys, titles and authors. Its
   "Needs a look" shows the `error`, `changed` and `warning` entries.
 - One row per entry with its status, key, title, first authors, year and

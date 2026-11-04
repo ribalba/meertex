@@ -235,6 +235,10 @@ class Project(Base):
     # The example paper a new account starts with (§19). The instance
     # dashboard leaves it out.
     example: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    # The .bib files the reference check reads (§16, Files): "main" for the
+    # ones the main file loads, "all", or "chosen" for those in bib_files.
+    bib_mode: Mapped[str] = mapped_column(String(10), default="main", server_default="main", nullable=False)
+    bib_files: Mapped[list] = mapped_column(JSONType, default=list, server_default="[]", nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

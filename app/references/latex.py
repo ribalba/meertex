@@ -815,6 +815,111 @@ def cites(text: str, path: str = "") -> list[Cite]:
     return out
 
 
+# --- Commands that read other files ---------------------------------------------------
+
+
+@dataclass
+class Load:
+    """A command that reads another file, as written. ``kind`` is ``bib`` for
+    a bibliography and ``tex`` for a file that becomes part of the text.
+    ``folder`` is the folder of ``\\import`` and its kin, else empty, and
+    ``nested`` says that the folder is relative to the current one
+    (``\\subimport``) rather than to the main file's."""
+
+    kind: str
+    name: str
+    line: int
+    command: str
+    folder: str = ""
+    nested: bool = False
+
+
+BIB_COMMANDS = frozenset({"bibliography", "nobibliography", "addbibresource", "addglobalbib", "addsectionbib"})
+_INPUTS = frozenset({"input", "include", "subfile"})
+# The import package's commands, with whether their folder is relative to the
+# current one.
+_IMPORTS = {
+    "import": False,
+    "inputfrom": False,
+    "includefrom": False,
+    "subimport": True,
+    "subinputfrom": True,
+    "subincludefrom": True,
+}
+_BARE_NAME = re.compile(r"[^\s{}\\%]+")
+_DOCUMENTCLASS = re.compile(r"\\documentclass(?![A-Za-z])")
+
+
+def _argument(masked: str, i: int) -> tuple[str, int] | None:
+    """The braced argument at ``i`` after white space and up to two optional
+    arguments, and the position after it."""
+    n = len(masked)
+    j = _skip_ws(masked, i)
+    for _ in range(2):
+        if j < n and masked[j] == "[":
+            close = _bracket_end(masked, j)
+            if close < 0:
+                return None
+            j = _skip_ws(masked, close)
+    if j >= n or masked[j] != "{":
+        return None
+    close = _group_end(masked, j)
+    if close < 0:
+        return None
+    return masked[j + 1 : close - 1].strip(), close
+
+
+def _usable(name: str) -> bool:
+    """A file name that names one file. Macros and parameters do not."""
+    return bool(name) and "\\" not in name and "#" not in name
+
+
+def loads(text: str) -> list[Load]:
+    """Every command of a .tex text that reads a .bib or a .tex file, in
+    order, outside comments and verbatim text. ``\\bibliography{a,b}`` gives
+    one Load per name. ``\\input name`` without braces counts too, as in TeX."""
+    p = _prepare(text)
+    masked = p.masked
+    out: list[Load] = []
+    for m in _CONTROL_WORD.finditer(masked):
+        word = m.group(1)
+        if _escaped(masked, m.start()) or not (word in BIB_COMMANDS or word in _INPUTS or word in _IMPORTS):
+            continue
+        line = bisect_right(p.line_starts, m.start())
+        if word in BIB_COMMANDS:
+            arg = _argument(masked, m.end())
+            if arg is None:
+                continue
+            names = arg[0].split(",") if word in ("bibliography", "nobibliography") else [arg[0]]
+            out.extend(Load("bib", n.strip(), line, word) for n in names if _usable(n.strip()))
+        elif word in _INPUTS:
+            j = _skip_ws(masked, m.end())
+            if j < len(masked) and masked[j] == "{":
+                arg = _argument(masked, m.end())
+                name = arg[0] if arg else ""
+            elif word == "input" and m.group(2) == "":
+                bare = _BARE_NAME.match(masked, j)
+                name = bare.group() if bare else ""
+            else:
+                name = ""
+            if _usable(name):
+                out.append(Load("tex", name, line, word))
+        else:
+            first = _argument(masked, m.end())
+            second = _argument(masked, first[1]) if first else None
+            if first is None or second is None or not _usable(second[0]) or "\\" in first[0]:
+                continue
+            out.append(Load("tex", second[0], line, word, folder=first[0], nested=_IMPORTS[word]))
+    return out
+
+
+def is_document(text: str) -> bool:
+    """Whether a .tex text has a ``\\documentclass`` outside comments, so it
+    is compiled on its own."""
+    masked = _prepare(text).masked
+    return any(not _escaped(masked, m.start()) for m in _DOCUMENTCLASS.finditer(masked))
+
+
 _CITE_OPEN = "\ue000"
 _CITE_CLOSE = "\ue001"
 _ANCHOR = "\ue002"

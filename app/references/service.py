@@ -14,6 +14,9 @@ this process does not know was cut off by a restart.
 Writes (a new entry, a field, the checked mark) are CRDT edits through the
 project's room, made under its lock after reading the current text, so they
 never write over an edit that came in meanwhile.
+
+Everything reads only the .bib files the project checks (scope.py). The
+report also lists the others, with the lines that load them.
 """
 
 import logging
@@ -35,7 +38,10 @@ from ..live import rooms, ydoc
 from ..models import Project, ReferenceResult, ReferenceRun, User, utcnow
 from ..when import iso
 from . import bibtex, build, checks, claims, latex, sources
+from . import scope as scopes
 from .bibtex import MARK_FIELD, Entry
+from .scope import is_bib as _is_bib
+from .scope import is_tex as _is_tex
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -62,41 +68,56 @@ class Ambiguous(live.Refused):
 
 @dataclass
 class Parsed:
+    # The .bib files the check reads.
     files: list[str]
     entries: list[Entry]
     broken: list[bibtex.Problem]
     cites: list[latex.Cite]
     tex: dict[str, str] = field(default_factory=dict)
     bib: dict[str, str] = field(default_factory=dict)
+    scope: scopes.Scope | None = None
+    # The number of entries of every .bib file, also of those not read.
+    entry_counts: dict[str, int] = field(default_factory=dict)
 
 
-def _is_bib(path: str) -> bool:
-    return path.lower().endswith(".bib")
+Choice = tuple[str, str, list[str]]
 
 
-def _is_tex(path: str) -> bool:
-    return path.lower().endswith((".tex", ".ltx"))
+def choice(project: Project) -> Choice:
+    """What a project checks: its main file, ``bib_mode`` and ``bib_files``."""
+    return project.main_file or "main.tex", project.bib_mode or "main", list(project.bib_files or [])
 
 
-def parse_project(project_id: str) -> Parsed:
+def _texts(files: dict[str, ydoc.Entry]) -> dict[str, str]:
+    return {p: e.text or "" for p, e in files.items() if e.kind == "text" and (_is_bib(p) or _is_tex(p))}
+
+
+def parse_project(project: Project) -> Parsed:
+    return _parse_room(project.id, choice(project))
+
+
+def _parse_room(project_id: str, chosen: Choice) -> Parsed:
     with rooms.get(project_id).read() as doc:
-        files = ydoc.materialize(doc)
-        texts = {p: e.text or "" for p, e in files.items() if e.kind == "text" and (_is_bib(p) or _is_tex(p))}
-    return _parse(texts)
+        texts = _texts(ydoc.materialize(doc))
+    return _parse(texts, chosen)
 
 
-def _parse(texts: dict[str, str]) -> Parsed:
-    bibs = sorted(p for p in texts if _is_bib(p))
+def _parse(texts: dict[str, str], chosen: Choice | None = None) -> Parsed:
+    sc = scopes.scope(texts, *(chosen or ("main.tex", "main", [])))
+    read = set(sc.checked)
     entries: list[Entry] = []
     broken: list[bibtex.Problem] = []
-    for path in bibs:
+    counts: dict[str, int] = {}
+    for path in sorted(p for p in texts if _is_bib(p)):
         parsed = bibtex.parse(texts[path], path)
-        entries += parsed.entries
-        broken += parsed.problems
+        counts[path] = len(parsed.entries)
+        if path in read:
+            entries += parsed.entries
+            broken += parsed.problems
     bibtex.resolve_crossrefs(entries)
-    tex = {p: t for p, t in texts.items() if _is_tex(p)}
-    cites = [c for path in sorted(tex) for c in latex.cites(tex[path], path)]
-    return Parsed(bibs, entries, broken, cites, tex, {p: texts[p] for p in bibs})
+    tex = {p: texts[p] for p in sc.tex}
+    cites = [c for path in sc.tex for c in latex.cites(tex[path], path)]
+    return Parsed(sc.checked, entries, broken, cites, tex, {p: texts[p] for p in sc.checked}, sc, counts)
 
 
 # --- The report ---------------------------------------------------------------------
@@ -170,7 +191,7 @@ def report(db: DBSession, project: Project) -> dict:
 def _build(db: DBSession, project: Project) -> tuple[dict, list[Entry]]:
     """The report and the parsed entries in the same order."""
     settings = get_settings()
-    parsed = parse_project(project.id)
+    parsed = parse_project(project)
     today = _today()
     prints = [bibtex.fingerprint(e) for e in parsed.entries]
     rows = {}
@@ -261,6 +282,8 @@ def _build(db: DBSession, project: Project) -> tuple[dict, list[Entry]]:
         "claims_enabled": claims.enabled(),
         "network_enabled": settings.references_network,
         "files": parsed.files,
+        "bib_mode": parsed.scope.mode if parsed.scope else "main",
+        "bibs": _bibs_out(parsed),
         "counts": counts,
         "problems": sum(counts[s] for s in PROBLEM_STATES) + len(broken) + len(missing),
         "missing": missing,
@@ -270,8 +293,46 @@ def _build(db: DBSession, project: Project) -> tuple[dict, list[Entry]]:
     return data, parsed.entries
 
 
+def _bibs_out(parsed: Parsed) -> list[dict]:
+    """Every .bib file of the project, read or not, with the lines that load it."""
+    if parsed.scope is None:
+        return []
+    return [
+        {
+            "path": b.path,
+            "entries": parsed.entry_counts.get(b.path, 0),
+            "checked": b.checked,
+            "main": b.main,
+            "loaded_by": [{"path": p, "line": line} for p, line in b.loaded_by],
+        }
+        for b in parsed.scope.bibs
+    ]
+
+
 def _names(keys: list[str]) -> str:
     return keys[0] if len(keys) == 1 else ", ".join(keys[:-1]) + " and " + keys[-1]
+
+
+def set_files(db: DBSession, project: Project, mode: str, files: list[str] | None) -> dict:
+    """Choose what the check reads (§16, Files) and return the report.
+    ``chosen`` needs at least one .bib file, and every one must be there."""
+    if mode not in scopes.MODES:
+        raise live.Refused(f"{mode!r} is none of {', '.join(scopes.MODES)}")
+    chosen: list[str] = []
+    if mode == "chosen":
+        wanted = sorted({p.strip() for p in files or [] if p and p.strip()})
+        if not wanted:
+            raise live.Refused("Choose at least one .bib file")
+        with rooms.get(project.id).read() as doc:
+            bibs = {p for p, e in ydoc.materialize(doc).items() if e.kind == "text" and _is_bib(p)}
+        unknown = [p for p in wanted if p not in bibs]
+        if unknown:
+            raise live.Refused(f"There is no .bib file {unknown[0]}")
+        chosen = wanted
+    project.bib_mode = mode
+    project.bib_files = chosen
+    db.commit()
+    return report(db, project)
 
 
 def summary(db: DBSession, project: Project) -> dict:
@@ -435,7 +496,12 @@ def _run(project_id: str, run_id: str, want_claims: bool, refresh: bool) -> None
     src = None
     try:
         sources.prune_cache()
-        parsed = parse_project(project_id)
+        with SessionLocal() as db:
+            project = db.get(Project, project_id)
+            if project is None:
+                return
+            chosen = choice(project)
+        parsed = _parse_room(project_id, chosen)
         unique: dict[str, Entry] = {}
         for e in parsed.entries:
             unique.setdefault(bibtex.fingerprint(e), e)
@@ -526,17 +592,14 @@ def wait(project_id: str, timeout: float = 60.0) -> None:
 # --- Writes -------------------------------------------------------------------------
 
 
-def _find(doc, key: str) -> tuple[str, str, Entry]:
-    """``(path, text, entry)`` of the one entry with ``key``. Raises
-    live.NotFound and Ambiguous."""
-    files = ydoc.materialize(doc)
+def _find(doc, key: str, project: Project) -> tuple[str, str, Entry]:
+    """``(path, text, entry)`` of the one entry with ``key`` in the .bib files
+    the project checks. Raises live.NotFound and Ambiguous."""
+    texts = _texts(ydoc.materialize(doc))
     exact: list[tuple[str, str, Entry]] = []
     loose: list[tuple[str, str, Entry]] = []
-    for path in sorted(files):
-        f = files[path]
-        if f.kind != "text" or not _is_bib(path):
-            continue
-        text = f.text or ""
+    for path in scopes.scope(texts, *choice(project)).checked:
+        text = texts[path]
         for e in bibtex.parse(text, path).entries:
             if e.key == key:
                 exact.append((path, text, e))
@@ -571,7 +634,7 @@ def set_field(db: DBSession, project: Project, user: User, key: str, name: str, 
     if not bibtex.braces_balanced(value):
         raise live.Refused("The value's braces do not balance")
     with rooms.get(project.id).edit(user.email) as doc:
-        path, text, entry = _find(doc, key)
+        path, text, entry = _find(doc, key, project)
         ydoc.put_text(doc, path, bibtex.set_field(text, entry, name, value))
     return _entry_out(db, project, key)
 
@@ -583,7 +646,7 @@ def _who(user: User) -> str:
 
 def mark(db: DBSession, project: Project, user: User, key: str) -> dict:
     with rooms.get(project.id).edit(user.email) as doc:
-        path, text, entry = _find(doc, key)
+        path, text, entry = _find(doc, key, project)
         value = bibtex.mark_value(_today(), _who(user), bibtex.fingerprint(entry))
         if entry.field(MARK_FIELD) is not None:
             text = bibtex.remove_field(text, entry, MARK_FIELD)
@@ -594,7 +657,7 @@ def mark(db: DBSession, project: Project, user: User, key: str) -> dict:
 
 def unmark(db: DBSession, project: Project, user: User, key: str) -> dict:
     with rooms.get(project.id).edit(user.email) as doc:
-        path, text, entry = _find(doc, key)
+        path, text, entry = _find(doc, key, project)
         if entry.field(MARK_FIELD) is not None:
             ydoc.put_text(doc, path, bibtex.remove_field(text, entry, MARK_FIELD))
     return _entry_out(db, project, key)
@@ -701,16 +764,20 @@ def add(
         raise live.Refused("The record has nothing to make an entry of")
 
     def compose(files: dict[str, ydoc.Entry]) -> tuple[str, str, str, int, str]:
-        bibs = {p: (e.text or "") for p, e in files.items() if e.kind == "text" and _is_bib(p)}
-        parsed = {p: bibtex.parse(t, p) for p, t in bibs.items()}
+        # The keys of the checked files are taken, and those of the file it goes into.
+        texts = _texts(files)
+        checked = scopes.scope(texts, *choice(project)).checked
+        parsed = {p: bibtex.parse(texts[p], p) for p in checked}
+        target = path or (max(checked, key=lambda p: len(parsed[p].entries)) if checked else "refs.bib")
+        if target not in texts and target in files:
+            raise live.Refused(f"{target} is not a text file")
+        if target in texts and target not in parsed:
+            parsed[target] = bibtex.parse(texts[target], target)
         taken = {e.key for f in parsed.values() for e in f.entries}
         if key is not None and key.lower() in {k.lower() for k in taken}:
             raise live.Refused(f"There is an entry {key} already")
         new_key = key or build.make_key(record, taken)
-        target = path or (max(sorted(parsed), key=lambda p: len(parsed[p].entries)) if parsed else "refs.bib")
-        current = bibs.get(target, "")
-        if target not in bibs and target in files:
-            raise live.Refused(f"{target} is not a text file")
+        current = texts.get(target, "")
         entry_text = bibtex.format_entry(kind, new_key, fields)
         base = current.rstrip("\n")
         new_text = (base + "\n\n" if base else "") + entry_text

@@ -8,6 +8,10 @@
 // checked mark, a new entry) is an edit of them made by the server, and the
 // report is read again after it, because one change can change other entries
 // too (a duplicate, a key).
+//
+// A project with more than one .bib file gets a box that lists them with the
+// lines that load them and says which ones the check reads. "Choose files"
+// picks the files the main file loads, all of them, or some by hand.
 
 import { api, enc, projectUrl } from "../api.js";
 import { h, append, clear, debounce, nextId, plural } from "../dom.js";
@@ -248,7 +252,8 @@ function build(state) {
   el.filterBar = h("div", { class: "filter-bar rf-filter-bar" }, h("div", { class: "search" }, icon("search"), el.search), el.filter);
   el.list = h("div", { class: "rf-list" });
   el.sections = h("div");
-  el.root = h("div", { class: "rf-page" }, el.head, el.notes, el.filterBar, el.list, el.sections);
+  el.files = h("div");
+  el.root = h("div", { class: "rf-page" }, el.head, el.notes, el.files, el.filterBar, el.list, el.sections);
 }
 
 function paint(state) {
@@ -256,6 +261,7 @@ function paint(state) {
   const el = state.el;
   append(clear(el.head), [head(state)]);
   append(clear(el.notes), [notes(state)]);
+  append(clear(el.files), [filesBox(state)]);
   const empty = !report.entries.length;
   el.filterBar.hidden = empty;
   paintFilter(state);
@@ -350,6 +356,154 @@ function notes(state) {
       : "Nothing is checked yet. The findings below come from the .bib files alone.", "info"));
   }
   return out.length ? h("div", { class: "rf-notes" }, out) : null;
+}
+
+// --- The .bib files the check reads ---------------------------------------------------
+
+function mainFile(state) {
+  return state.ctx.project.main_file || "main.tex";
+}
+
+// "a.bib", "a.bib and b.bib", "a.bib, b.bib and c.bib".
+function joinNames(names) {
+  if (names.length < 2) return names[0] || "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+// What the check reads, in one sentence.
+function scopeText(state) {
+  const { report } = state;
+  const bibs = report.bibs || [];
+  const n = report.files.length;
+  const main = mainFile(state);
+  if (report.bib_mode === "all") return "Checks every .bib file.";
+  if (report.bib_mode === "chosen") {
+    if (!n) return "None of the chosen .bib files is in the project any more, so nothing is checked.";
+    return n === 1 ? "Checks the .bib file chosen here." : `Checks the ${n} .bib files chosen here.`;
+  }
+  if (!bibs.some((b) => b.main)) return `${main} loads no .bib file, so every .bib file is checked.`;
+  return n === 1 ? `Checks the .bib file ${main} loads.` : `Checks the ${n} .bib files ${main} loads.`;
+}
+
+function loadedBy(state, bib) {
+  const loads = bib.loaded_by || [];
+  if (!loads.length) return "No .tex file loads it.";
+  const base = state.ctx.base;
+  const shown = loads.slice(0, 4);
+  return ["Loaded by ",
+    shown.map((l, i) => [i ? ", " : "", h("a", { class: "text-mono", href: lineHref(base, l.path, l.line), text: where(l.path, l.line) })]),
+    loads.length > shown.length ? ` and ${loads.length - shown.length} more` : "", "."];
+}
+
+function chooseButton(state, cls = "btn btn-sm") {
+  if (!canWrite(state)) return null;
+  return h("button", { type: "button", class: cls, onclick: () => filesDialog(state) }, icon("gear"), "Choose files");
+}
+
+// One row per .bib file with the lines that load it. Only for more than one
+// file, or when the one file is left out.
+function filesBox(state) {
+  const bibs = state.report.bibs || [];
+  if (bibs.length < 2 && bibs.every((b) => b.checked)) return null;
+  const base = state.ctx.base;
+  const left = bibs.filter((b) => !b.checked).length;
+  const sentence = [scopeText(state), left ? ` ${left === 1 ? "1 .bib file is" : `${left} .bib files are`} left out.` : ""].join("");
+  return h("section", { class: "box rf-files", "aria-label": "The .bib files" },
+    h("div", { class: "box-header box-header-sm rf-files-head" },
+      icon("file-text", { size: 16, cls: "color-muted" }),
+      h("div", { class: "flex-1 text-small rf-files-text", text: sentence }),
+      chooseButton(state)),
+    h("ul", { class: "box-list" }, bibs.map((b) => h("li", { class: `box-row box-row-sm rf-file${b.checked ? "" : " is-left-out"}` },
+      b.checked
+        ? icon("check", { size: 16, cls: "color-success", label: "Checked" })
+        : icon("x", { size: 16, cls: "color-muted", label: "Left out" }),
+      h("div", { class: "rf-file-main" },
+        h("div", { class: "rf-line" },
+          h("a", { class: "rf-file-path text-mono", href: editorHref(base, b.path), text: b.path }),
+          h("span", { class: "text-small color-muted", text: plural(b.entries, "entry", "entries") }),
+          b.checked ? null : h("span", { class: "Label label-secondary", text: "Left out" })),
+        h("div", { class: "text-small color-muted" }, loadedBy(state, b)))))));
+}
+
+function filesDialog(state) {
+  const { report } = state;
+  const bibs = report.bibs || [];
+  const main = mainFile(state);
+  const mainBibs = bibs.filter((b) => b.main).map((b) => b.path);
+  const formId = nextId("rf-files");
+  const name = nextId("rf-mode");
+  const option = (value, title, text) => h("label", { class: "choice" },
+    h("input", { type: "radio", name, value, checked: report.bib_mode === value }),
+    h("div", {}, h("strong", { text: title }), h("span", { text })));
+  const options = h("div", { class: "rf-modes", role: "radiogroup", "aria-label": "Which files" },
+    option("main", `The files ${main} loads`, mainBibs.length
+      ? `${joinNames(mainBibs)}, also through the files ${main} includes. This follows the paper when it changes.`
+      : `${main} loads no .bib file now, so this checks every one.`),
+    option("all", "All .bib files", `All ${plural(bibs.length, "file")}, also copies such as a submitted version.`),
+    option("chosen", "Only the files ticked below", "Pick them by hand."));
+  const boxes = new Map();
+  const rows = bibs.map((b) => {
+    const box = h("input", { type: "checkbox", id: nextId("rf-bib"), value: b.path, checked: b.checked });
+    boxes.set(b.path, box);
+    return h("li", { class: "form-checkbox rf-file-pick" }, box,
+      h("div", {},
+        h("label", { for: box.id, class: "text-mono", text: b.path }),
+        h("div", { class: "form-hint" }, plural(b.entries, "entry", "entries"), ". ", loadedBy(state, b))));
+  });
+  const message = h("div", { class: "rf-dialog-message", role: "alert" });
+  const form = h("form", { id: formId, novalidate: true },
+    options,
+    h("h4", { class: "rf-files-list-head", text: "The .bib files" }),
+    h("ul", { class: "rf-file-picks" }, rows),
+    message);
+  const mode = () => form.querySelector(`input[name="${name}"]:checked`)?.value || "main";
+  // Picking the main file's or all files ticks what that reads. A tick is a
+  // choice by hand.
+  const show = () => {
+    const m = mode();
+    if (m === "chosen") return;
+    const read = m === "all" || !mainBibs.length ? bibs.map((b) => b.path) : mainBibs;
+    for (const [path, box] of boxes) box.checked = read.includes(path);
+  };
+  form.querySelectorAll(`input[name="${name}"]`).forEach((r) => r.addEventListener("change", show));
+  for (const box of boxes.values()) {
+    box.addEventListener("change", () => {
+      form.querySelector(`input[name="${name}"][value="chosen"]`).checked = true;
+    });
+  }
+  const submit = h("button", { type: "submit", class: "btn btn-primary", form: formId, text: "Save" });
+  const d = openDialog({
+    title: "Which .bib files to check",
+    wide: true,
+    body: form,
+    footer: [h("button", { type: "button", class: "btn", text: "Cancel", onclick: () => d.close() }), submit],
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clear(message);
+    const m = mode();
+    const files = m === "chosen" ? [...boxes].filter(([, box]) => box.checked).map(([path]) => path) : [];
+    if (m === "chosen" && !files.length) {
+      message.append(flashBox("Tick at least one .bib file.", "error"));
+      return;
+    }
+    let next;
+    try {
+      next = await busy(submit, () => api.put(projectUrl(state.ctx.ref, "/references/files"), { mode: m, files }));
+    } catch (err) {
+      if (err?.status === 401) return;
+      message.append(flashBox(err.message || String(err), "error"));
+      return;
+    }
+    d.close();
+    if (state.dead) return;
+    state.seq++;
+    state.report = next;
+    paint(state);
+    setProblemCount(state.ctx.project.id, next.problems);
+    watch(state);
+    flash(next.files.length ? `The check reads ${joinNames(next.files)} now.` : "The check reads no .bib file now.", "success");
+  });
 }
 
 // --- Runs -----------------------------------------------------------------------------
@@ -452,7 +606,15 @@ function paintList(state) {
   const list = state.el.list;
   clear(list);
   if (!report.entries.length) {
-    list.append(h("div", { class: "box" }, report.files.length
+    const unread = !report.files.length && report.bibs?.length;
+    list.append(h("div", { class: "box" }, unread
+      ? blankslate({
+        iconName: "file-text",
+        title: "No .bib file is checked",
+        text: "None of the chosen .bib files is in the project any more. Choose the files the check reads.",
+        action: chooseButton(state, "btn btn-primary"),
+      })
+      : report.files.length
       ? blankslate({
         iconName: "quote",
         title: "No entries yet",
