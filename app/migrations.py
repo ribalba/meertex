@@ -94,11 +94,27 @@ def _active_days_backfill(conn: Connection) -> bool:
     return result.rowcount > 0
 
 
+def _review_requests_commit_nullable(conn: Connection) -> bool:
+    """A review request without a commit asks for the live text as it reads
+    when the review starts. The requests made before keep their commit."""
+    nullable = conn.execute(
+        text(
+            "SELECT is_nullable FROM information_schema.columns"
+            " WHERE table_schema = current_schema() AND table_name = 'review_requests' AND column_name = 'commit'"
+        )
+    ).scalar()
+    if nullable != "NO":
+        return False
+    conn.execute(text('ALTER TABLE review_requests ALTER COLUMN "commit" DROP NOT NULL'))
+    return True
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
     ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
     ("0003_users_first_sign_in_backfill", _users_first_sign_in_backfill),
     ("0004_active_days_backfill", _active_days_backfill),
+    ("0005_review_requests_commit_nullable", _review_requests_commit_nullable),
 ]
 
 

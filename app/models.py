@@ -451,8 +451,9 @@ class ReviewRequest(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
     reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     requested_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    # The state to review, and the version it is, if it is one.
-    commit: Mapped[str] = mapped_column(String(64), nullable=False)
+    # The state to review, and the version it is, if it is one. No commit
+    # means the live text as it reads when the review starts.
+    commit: Mapped[str | None] = mapped_column(String(64))
     version_id: Mapped[str | None] = mapped_column(ForeignKey("versions.id", ondelete="SET NULL"))
     note: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # One of REQUEST_STATES. review_id is the review that answered it.

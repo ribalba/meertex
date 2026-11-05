@@ -180,23 +180,32 @@ function requestRow(rq, ctx, perms, pending) {
         h("strong", { text: mine ? "You" : who }),
         h("span", { class: "Label label-attention", text: "Review requested" })),
       h("div", { class: "text-small color-muted rv-review-meta" },
-        "on ", reviewBase(rq, ctx.base), " · asked by ", personName(rq.requested_by), " ", timeAgo(rq.created_at)),
+        rq.commit ? ["on ", reviewBase(rq, ctx.base)] : `on the text as it reads when ${mine ? "you start" : "they start"}`,
+        " · asked by ", personName(rq.requested_by), " ", timeAgo(rq.created_at)),
       rq.note ? h("p", { class: "rv-review-summary", text: rq.note.split("\n")[0] }) : null),
     h("div", { class: "rv-request-actions" }, start, withdraw));
 }
 
 // --- Starting a review ------------------------------------------------------------
 
+// The value of the choice that leaves the snapshot to the start of the review.
+// A request sends no ref for it.
+const AT_START = "at-start";
+
 // The choice of the state to review: the text as it is now, the last snapshot
-// or a version. `value()` is the ref of the one picked.
-function stateChoices(p, { preselect = null } = {}) {
+// or a version. A request also offers the text as it reads when the review
+// starts (`atStart`), first and picked. `value()` is the ref of the one picked.
+function stateChoices(p, { preselect = null, atStart = false } = {}) {
   const versions = [...(p.versions || [])].sort((a, b) => (b.number || 0) - (a.number || 0));
   const name = nextId("rv-state");
   const choice = (value, title, text, checked) => h("label", { class: "choice" },
     h("input", { type: "radio", name, value, checked }),
     h("div", {}, h("strong", { text: title }), h("span", { text })));
-  const first = preselect || (versions[0] ? versions[0].tag : "live");
+  const first = preselect || (atStart ? AT_START : versions[0] ? versions[0].tag : "live");
   const el = h("fieldset", { class: "form-group mb-0" }, h("legend", { class: "sr-only", text: "The state to review" }),
+    atStart ? choice(AT_START, "The text when they start",
+      "A snapshot of the live text, taken when they start their review. What you change until then is in it.",
+      first === AT_START) : null,
     choice("live", "The current state", "A snapshot of the live text, taken now.", first === "live"),
     choice("HEAD", "The last snapshot", "The newest commit in the history.", first === "HEAD"),
     versions.map((v) => choice(v.tag, v.label, `Version ${v.number}, tag ${v.tag}`, first === v.tag)));
@@ -264,7 +273,7 @@ async function requestReviewDialog(ctx, requests) {
       h("strong", { text: m.name || m.email }),
       h("span", { text: [m.name ? m.email : null, m.role, asked.has(m.user_id) ? "asked already, asking again mails them again" : null]
         .filter(Boolean).join(" · ") })));
-  const states = stateChoices(ctx.project);
+  const states = stateChoices(ctx.project, { atStart: true });
   const note = h("textarea", { class: "form-control input-block", rows: "3", id: nextId("rv-note"), placeholder: "What should they look at?" });
   const send = h("button", { type: "button", class: "btn btn-primary", text: "Ask for the review" });
   const error = h("div", { class: "form-error", role: "alert", hidden: true });
@@ -284,8 +293,9 @@ async function requestReviewDialog(ctx, requests) {
   send.addEventListener("click", async () => {
     const reviewer = d.el.querySelector(`input[name="${name}"]:checked`)?.value;
     const who = people.find((m) => m.user_id === reviewer);
+    const ref = states.value() === AT_START ? null : states.value();
     try {
-      await busy(send, () => api.post(projectUrl(ctx.ref, "/review-requests"), { reviewer, ref: states.value(), note: note.value }));
+      await busy(send, () => api.post(projectUrl(ctx.ref, "/review-requests"), { reviewer, ref, note: note.value }));
       d.close();
       flash(`Asked ${who.name || who.email} for a review. They got a mail with a link that starts it.`, "success");
       ctx.reload();

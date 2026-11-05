@@ -81,6 +81,51 @@ def test_a_request_mails_a_link_that_starts_the_review(mails):
             assert client.delete(f"/api/projects/{pid}/review-requests/{rq['id']}").status_code == 422
 
 
+def test_without_a_ref_the_snapshot_is_taken_when_the_review_starts(mails):
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        asked_at = snapshot(pid)
+        url = f"/api/projects/{pid}/review-requests"
+
+        r = client.post(url, json={"reviewer": REVIEWER, "note": "Once more, please."})
+        assert r.status_code == 201, r.text
+        rq = r.json()
+        assert (rq["commit"], rq["version"]) == (None, None)
+        assert client.get(url).json() == [rq]
+        [mail] = mails
+        assert 'asked you to review "Green LLMs".' in mail["body"]
+        assert "The link starts your review on the text as it reads when you open it." in mail["body"]
+
+        # The authors fix things after asking. The review starts on the fix.
+        put(client, pid, "main.tex", "The fixed text.\n")
+        with second_client(REVIEWER) as rita:
+            r = rita.post(f"{url}/{rq['id']}/start")
+            assert r.status_code == 201, r.text
+            review = r.json()
+            assert review["commit"] != asked_at
+            assert (review["version"], review["state"]) == (None, "pending")
+            text = client.get(f"/api/projects/{pid}/files/main.tex", params={"ref": review["commit"]}).text
+            assert text == "The fixed text.\n"
+            # The request keeps no commit, so starting again after a discard
+            # takes the text of that moment.
+            assert client.get(f"{url}/{rq['id']}").json()["commit"] is None
+            assert rita.delete(f"/api/projects/{pid}/reviews/{review['id']}").status_code == 200
+
+            put(client, pid, "main.tex", "Fixed again.\n")
+            version = client.post(f"/api/projects/{pid}/versions", json={"kind": "submission"}).json()
+            again = rita.post(f"{url}/{rq['id']}/start").json()
+            assert (again["commit"], again["version"]["tag"]) == (version["commit"], version["tag"])
+
+            # Asking again with a ref fixes the state at once.
+            put(client, pid, "main.tex", "Fixed once more.\n")
+            fixed = client.post(url, json={"reviewer": REVIEWER, "ref": "live"}).json()
+            assert fixed["id"] == rq["id"]
+            assert fixed["commit"] not in (None, version["commit"])
+            assert '"Green LLMs" as it reads now.' in mails[-1]["body"]
+
+
 def test_who_may_ask_and_who_may_be_asked(mails):
     with running_app() as client:
         me = sign_in(client)
@@ -99,9 +144,9 @@ def test_who_may_ask_and_who_may_be_asked(mails):
             # Reviewers review. Asking is for the authors.
             assert rita.post(url, json={"reviewer": EDITOR}).status_code == 403
 
-            # By user id, on HEAD when no ref is given.
+            # By user id, on HEAD.
             head = snapshot(pid)
-            rq = client.post(url, json={"reviewer": ids[EDITOR]}).json()
+            rq = client.post(url, json={"reviewer": ids[EDITOR], "ref": "HEAD"}).json()
             assert (rq["reviewer"]["email"], rq["commit"], rq["version"]) == (EDITOR, head, None)
             assert '"Green LLMs" as it reads now.' in mails[-1]["body"]
 

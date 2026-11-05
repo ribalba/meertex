@@ -197,16 +197,23 @@ def send_review_submitted(
 
 
 def send_review_request(
-    to: str, requester: str, project_title: str, version: str | None, note: str, link: str
+    to: str, requester: str, project_title: str, version: str | None, note: str, link: str,
+    *, at_start: bool = False,
 ) -> None:
-    """An author asks a member to review the paper, on a version (its label)
-    or on the text as it was then. The link starts the review there."""
-    what = f'the version "{version}" of "{project_title}"' if version else f'"{project_title}" as it reads now'
+    """An author asks a member to review the paper, on a version (its label),
+    on the text as it was then, or (``at_start``) on the text as it reads when
+    the review starts. The link starts the review."""
+    if at_start:
+        what, where = f'"{project_title}"', "on the text as it reads when you open it"
+    elif version:
+        what, where = f'the version "{version}" of "{project_title}"', "there"
+    else:
+        what, where = f'"{project_title}" as it reads now', "there"
     parts = [f"{requester} asked you to review {what}."]
     if note.strip():
         parts.append(note.strip())
     parts.append(
-        "The link starts your review there. Your comments stay pending, and only you see them,"
+        f"The link starts your review {where}. Your comments stay pending, and only you see them,"
         " until you finish the review."
     )
     parts.append(link)

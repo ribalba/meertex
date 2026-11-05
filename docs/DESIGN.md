@@ -1126,7 +1126,8 @@ request  {id, reviewer: person, requested_by: person, state, note, commit,
 - `review.state` is `pending` or `submitted`. `verdict` is null while
   pending, then `approve`, `comment` or `changes_requested`.
 - `request.state` is `open`, or `done` once the person asked submitted a
-  review. `review_id` is then that review (see Requests).
+  review. `review_id` is then that review (see Requests). `request.commit`
+  is null when the review is to start on the live text as it reads then.
 - `thread.state` is `open`, `resolved` or `accepted`. `pending` is true for a
   thread of a review that is not submitted yet. Only its reviewer sees it.
 - `comment.kind` is `comment`, or one of the events `resolved`, `accepted`,
@@ -1233,19 +1234,27 @@ The authors ask a coauthor for a review, like GitHub's requested reviewers.
 The person gets a mail with a link that starts the review on the state asked
 for.
 
-- **Asking.** An editor or the owner names a member (by user id or email) and
-  a state (`ref`: `HEAD` by default, a version's tag, a commit or `live`,
-  resolved to a commit at once as for a review), with an optional note.
-  Yourself is 422, a viewer is 422, somebody who is not a member is 404.
+- **Asking.** An editor or the owner names a member (by user id or email), a
+  state and an optional note. Without a `ref` (the default) the request has
+  no commit. The snapshot is taken when the person starts the review, so what
+  the authors fix after asking is in it. A `ref` (`HEAD`, a version's tag, a
+  commit or `live`) is resolved to a commit at once, as for a review, and
+  fixes the state at the time of asking. Yourself is 422, a viewer is 422,
+  somebody who is not a member is 404.
 - **One open request per person and project.** Asking again replaces the
   open one (its state, note, asker and time) and mails again. The person's
   membership row serialises two requests at the same moment.
 - **The mail** says who asks, for which version ("the version "Submission"
-  of ...") or for the text as it reads now, the note, and links to
+  of ..."), for the text as it reads now, or for the text as it reads when
+  they open the link (no `ref`), the note, and links to
   `<BASE_URL>/p/<name>/reviews/requests/<request id>`. It goes out whatever
   `mention_mails` says, because it is addressed to that person.
 - **The link.** The web app starts the review from the request
-  (`/review-requests/{id}/start`) and opens its Files view. A pending review
+  (`/review-requests/{id}/start`) and opens its Files view. A request without
+  a commit takes a snapshot of the live text then, and the review gets the
+  newest version at that commit, as a review started on `live` does. The
+  request stays without a commit, so a review started again after a discard
+  is on the text of that moment. A pending review
   of your own comes back instead, on whatever state it is (200), because there
   is one per person. A request that was answered opens the review that
   answered it, a withdrawn one the Reviews tab. Anybody else who follows the
@@ -1340,7 +1349,8 @@ mentioned gets a mail, unless they turned that off. The code is in
 - `GET /api/projects/{ref}/review-requests` lists the open requests, newest
   first. Every member sees them.
 - `POST /api/projects/{ref}/review-requests {reviewer, ref?, note?}` asks for a
-  review and returns the request. 201, or 200 when it replaced an open one.
+  review and returns the request. Without `ref` the snapshot is taken when
+  the review starts. 201, or 200 when it replaced an open one.
 - `GET /api/projects/{ref}/review-requests/{id}` returns one request, open or
   done. Request ids may be prefixes too.
 - `POST /api/projects/{ref}/review-requests/{id}/start` starts the review on
@@ -1371,7 +1381,9 @@ commands are in `cli/meertex/cmd_reviews.py`.
 - The **Reviews** tab lists reviews and open conversations, and starts a
   review (on the current state, `HEAD` or a version). Editors and the owner
   "Request a review" there. They pick a member who can review, the state and
-  a note. The open requests are listed above the reviews, with "Withdraw" for
+  a note. The state offers "The text when they start" first and picks it,
+  then the same choices as starting a review. The open requests are listed
+  above the reviews, with "Withdraw" for
   the authors and "Start your review" for the person asked (unless they have a
   pending review to continue). `/p/<name>/reviews/requests/<id>`, the mail's
   link, starts the review and opens its Files view with the note in a flash.

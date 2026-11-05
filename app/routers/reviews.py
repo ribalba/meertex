@@ -20,9 +20,9 @@ server never holds a request and a write that failed never mails anybody.
 Whoever a comment, a note or a summary @-mentions (app/mentions.py) is found
 when it is written and stored with it.
 
-A review request asks a member to review a fixed state. Its mail links to the
-web app, which starts the review there. Submitting any review answers the
-reviewer's open request.
+A review request asks a member to review a fixed state, or by default the live
+text as it reads when they start. Its mail links to the web app, which starts
+the review there. Submitting any review answers the reviewer's open request.
 """
 
 import re
@@ -100,7 +100,9 @@ class SubmitIn(BaseModel):
 class RequestIn(BaseModel):
     # The member to ask, by user id or email.
     reviewer: str = Field(min_length=1, max_length=320)
-    # What to review, as for a review. HEAD when omitted.
+    # What to review, as for a review (live is a snapshot now). Omitted, the
+    # snapshot is taken when they start the review, so it has the changes
+    # made until then.
     ref: str | None = Field(default=None, max_length=200)
     note: str | None = Field(default=None, max_length=MAX_BODY)
 
@@ -561,8 +563,9 @@ def list_requests(ref: str, db: DB, user: SessionOrTokenUser) -> list[dict]:
 def request_review(
     ref: str, body: RequestIn, response: Response, background: BackgroundTasks, db: DB, user: SessionOrTokenUser
 ) -> dict:
-    """Ask a member to review a fixed state, and mail them a link that starts
-    the review there. 201, or 200 when this replaces their open request."""
+    """Ask a member to review a fixed state, or the live text as it reads when
+    they start (no ``ref``), and mail them a link that starts the review. 201,
+    or 200 when this replaces their open request."""
     project, _ = resolve_project(db, user, ref, "editor")
     who = body.reviewer.strip().lower()
     row = (
@@ -578,9 +581,9 @@ def request_review(
         raise unprocessable("You cannot ask yourself for a review. Start one instead.")
     if not can(membership, "reviewer"):
         raise unprocessable(f"{_name(reviewer)} is a viewer and cannot review. Make them a reviewer first.")
-    at = (body.ref or "HEAD").strip()
-    commit = call_live(live.commit_of, project.id, at)
-    version = _version_for(db, project, at, commit)
+    at = (body.ref or "").strip()
+    commit = call_live(live.commit_of, project.id, at) if at else None
+    version = _version_for(db, project, at, commit) if commit else None
     # One open request per person and project. Their membership row
     # serialises two requests at the same moment.
     db.query(Membership).filter(
@@ -609,6 +612,7 @@ def request_review(
     background.add_task(
         emailer.send_review_request, reviewer.email, _name(user), project.title or project.name,
         (version.label or version.tag) if version else None, rq.note, _request_link(project, rq),
+        at_start=commit is None,
     )
     return _requests_out(db, [rq])[0]
 
@@ -624,16 +628,25 @@ def get_request(ref: str, request_id: str, db: DB, user: SessionOrTokenUser) -> 
 def start_requested_review(
     ref: str, request_id: str, response: Response, db: DB, user: SessionOrTokenUser
 ) -> dict:
-    """Start the review you were asked for, on the state of the request. 201
-    with the new pending review, or 200 with the one you have already,
-    whatever state that one is on."""
+    """Start the review you were asked for, on the state of the request, or on
+    a snapshot taken now when it names none. 201 with the new pending review,
+    or 200 with the one you have already, whatever state that one is on."""
     project, _ = resolve_project(db, user, ref, "reviewer")
     rq = _find_request(db, project, request_id)
     if rq.reviewer_id != user.id:
         raise forbidden("Only the person who was asked can start this review")
     if rq.state != "open":
         raise unprocessable("This request is answered already")
-    review, created = _start(db, project, user, rq.commit, rq.version_id)
+    review, created = _pending_review(db, project, user), False
+    if review is None:
+        commit, version_id = rq.commit, rq.version_id
+        if commit is None:
+            # The request stays without a commit, so a review started again
+            # after a discard gets the text of that moment too.
+            commit = call_live(live.commit_of, project.id, "live")
+            version = _version_for(db, project, "live", commit)
+            version_id = version.id if version else None
+        review, created = _start(db, project, user, commit, version_id)
     if not created:
         response.status_code = 200
     return _reviews_out(db, [review])[0]
