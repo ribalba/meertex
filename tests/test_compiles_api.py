@@ -58,6 +58,13 @@ def _compile(client, pid: str, ref: str | None = None) -> dict:
     return r.json()
 
 
+def _editor(client, pid: str, clean: bool = False) -> dict:
+    """A compile the way an open editor asks for it."""
+    r = client.post(f"/api/projects/{pid}/compile", json={"editor": True, "clean": clean})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
 def test_compile_live_and_read_it(service):
     with running_app() as client:
         sign_in(client)
@@ -379,6 +386,198 @@ def test_synctex(service):
         assert "Compile again" in r.json()["detail"]
         assert client.post(f"{base}/edit", json=point).status_code == 410
         assert client.post(f"{tagged_base}/edit", json=point).json()["line"] == 3
+
+
+def test_an_editor_compile_sends_only_what_changed(service, monkeypatch):
+    from app import compiler
+
+    sent: list[list[str]] = []
+    pack = compiler.pack
+
+    def spying(trees):
+        sent.append(sorted(path for tree in trees.values() for path in tree))
+        return pack(trees)
+
+    monkeypatch.setattr(compiler, "pack", spying)
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client, {"main.tex": HELLO, "sections/intro.tex": INTRO, "figure.bin": b"\0\1\2" * 1000})
+        first = _editor(client, pid)
+        assert first["status"] == "success"
+        assert (first["kind"], first["ref"], first["commit"]) == ("pdf", "live", None)
+        assert sent == [["figure.bin", "main.tex", "sections/intro.tex"]]
+
+        # The same text comes from the cache, without TeX.
+        assert _editor(client, pid)["id"] == first["id"]
+        assert len(sent) == 1
+
+        client.put(f"/api/projects/{pid}/files/sections/intro.tex", content=INTRO + b"More.\n")
+        second = _editor(client, pid)
+        assert second["id"] != first["id"]
+        assert sent[-1] == ["sections/intro.tex"]
+        assert client.get(second["pdf_url"]).content.startswith(b"%PDF-")
+
+        # SyncTeX finds its way in a PDF built in the workspace.
+        base = f"/api/projects/{pid}/compiles/{second['id']}/synctex"
+        boxes = client.post(f"{base}/view", json={"path": "sections/intro.tex", "line": 3}).json()["boxes"]
+        assert boxes
+        point = {"page": 1, "x": boxes[0]["x"] + 5, "y": boxes[0]["y"] + boxes[0]["height"] / 2}
+        assert client.post(f"{base}/edit", json=point).json()["path"] == "sections/intro.tex"
+
+        # When the service has forgotten the job, the same text is compiled again for it.
+        from app.database import SessionLocal
+        from app.models import Compile
+
+        with SessionLocal() as db:
+            db.get(Compile, second["id"]).job_id = uuid.uuid4().hex
+            db.commit()
+        before = service.job_count()
+        assert client.post(f"{base}/edit", json=point).json()["path"] == "sections/intro.tex"
+        assert service.job_count() == before + 1
+
+
+def test_deleting_a_paper_removes_its_workspace(service):
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client)
+        name = client.get(f"/api/projects/{pid}").json()["name"]
+        _editor(client, pid)
+        assert (service.jobs / "workspaces" / pid).is_dir()
+        assert client.delete(f"/api/projects/{pid}", params={"confirm": name}).status_code == 200
+        assert not (service.jobs / "workspaces" / pid).exists()
+
+
+def test_a_version_never_gets_an_editor_build(service):
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client)
+        live = _editor(client, pid)
+        before = service.job_count()
+        client.post(f"/api/projects/{pid}/versions", json={"kind": "submission"})
+        version = _wait_compiled(client, pid, "submission")
+        assert version["compiled"]["status"] == "success"
+        assert version["compiled"]["id"] != live["id"]
+        assert service.job_count() == before + 1
+        # The CLI asks for a clean build of the live text as well.
+        assert _compile(client, pid)["id"] != live["id"]
+
+
+def test_recompile_from_scratch(service):
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client)
+        first = _editor(client, pid)
+        before = service.job_count()
+        clean = _editor(client, pid, clean=True)
+        assert clean["id"] != first["id"]
+        assert clean["status"] == "success"
+        assert service.job_count() == before + 1
+        assert _editor(client, pid)["id"] == clean["id"]
+
+
+def test_a_newer_edit_stops_the_running_compile(service):
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client)
+        cancel = f"/api/projects/{pid}/compile/cancel"
+        assert client.post(cancel).json() == {"cancelled": False}
+
+        loop = b"\\documentclass{article}\n\\begin{document}\n\\def\\x{\\x}\\x\n\\end{document}\n"
+        client.put(f"/api/projects/{pid}/files/main.tex", content=loop)
+        answers: list = []
+
+        def ask() -> None:
+            answers.append(client.post(f"/api/projects/{pid}/compile", json={"editor": True}))
+
+        thread = threading.Thread(target=ask)
+        thread.start()
+        assert wait_for(lambda: client.post(cancel).json()["cancelled"], timeout=30)
+        thread.join(60)
+        assert not thread.is_alive()
+        assert answers[0].status_code == 409, answers[0].text
+        assert "newer edit" in answers[0].json()["detail"]
+        # A stopped compile leaves nothing behind.
+        assert client.get(f"/api/projects/{pid}/compiles/latest").json() is None
+
+        client.put(f"/api/projects/{pid}/files/main.tex", content=HELLO)
+        assert _editor(client, pid)["status"] == "success"
+
+
+def test_only_the_newest_live_pdfs_are_kept(service, monkeypatch):
+    from app.config import get_settings
+    from app.database import SessionLocal
+    from app.live import blobs
+    from app.models import Compile
+
+    monkeypatch.setattr(get_settings(), "compile_keep_live_pdfs", 2)
+
+    def sha_of(compile_id: str) -> str:
+        with SessionLocal() as db:
+            return db.get(Compile, compile_id).pdf_sha
+
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client)
+        rows, shas = [], []
+        for number in range(3):
+            client.put(f"/api/projects/{pid}/files/sections/intro.tex", content=INTRO + f"Edit {number}.\n".encode())
+            rows.append(_editor(client, pid))
+            shas.append(sha_of(rows[-1]["id"]))
+
+        old = client.get(f"/api/projects/{pid}/compiles/{rows[0]['id']}").json()
+        assert (old["status"], old["pdf_url"]) == ("success", None)
+        assert client.get(rows[0]["pdf_url"]).status_code == 404
+        assert client.get(rows[0]["log_url"]).text == ""
+        assert blobs.path(pid, shas[0]) is None
+        for row, sha in zip(rows[1:], shas[1:], strict=True):
+            assert client.get(row["pdf_url"]).status_code == 200
+            assert blobs.path(pid, sha) is not None
+
+        # The text of the compile that lost its PDF is simply compiled again.
+        client.put(f"/api/projects/{pid}/files/sections/intro.tex", content=INTRO + b"Edit 0.\n")
+        back = _editor(client, pid)
+        assert back["id"] != rows[0]["id"]
+        assert client.get(back["pdf_url"]).status_code == 200
+
+
+def test_a_kept_pdf_that_is_also_used_elsewhere_stays(service, monkeypatch):
+    from app.config import get_settings
+    from app.database import SessionLocal
+    from app.live import blobs
+    from app.models import Compile
+
+    monkeypatch.setattr(get_settings(), "compile_keep_live_pdfs", 1)
+
+    def sha_of(compile_id: str) -> str:
+        with SessionLocal() as db:
+            return db.get(Compile, compile_id).pdf_sha
+
+    def edit(client, pid: str, text: bytes) -> None:
+        client.put(f"/api/projects/{pid}/files/sections/intro.tex", content=INTRO + text)
+
+    with running_app() as client:
+        sign_in(client)
+        # Someone downloads the PDF and puts it into the paper.
+        pid = _project(client)
+        first = _compile(client, pid)
+        sha = sha_of(first["id"])
+        pdf = client.get(first["pdf_url"]).content
+        assert client.put(f"/api/projects/{pid}/files/submitted.pdf", content=pdf).status_code == 200
+        edit(client, pid, b"Next.\n")
+        _compile(client, pid)
+        assert client.get(first["pdf_url"]).status_code == 404
+        assert blobs.path(pid, sha) is not None
+        assert client.get(f"/api/projects/{pid}/files/submitted.pdf").content == pdf
+
+        # A version made from the same files shares the live compile's PDF.
+        other = _project(client)
+        live = _compile(client, other)
+        client.post(f"/api/projects/{other}/versions", json={"kind": "submission"})
+        version = _wait_compiled(client, other, "submission")
+        assert sha_of(version["compiled"]["id"]) == sha_of(live["id"])
+        edit(client, other, b"Next.\n")
+        _compile(client, other)
+        assert client.get(version["compiled"]["pdf_url"]).status_code == 200
 
 
 def test_roles(service):

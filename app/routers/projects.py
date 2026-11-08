@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
-from .. import live, naming, services, tree
+from .. import compiler, live, naming, services, tree
 from ..access import resolve_project
 from ..database import DB
 from ..models import OUTCOMES, Membership, Project, User, utcnow
@@ -262,6 +262,7 @@ def delete_project(ref: str, db: DB, user: SessionOrTokenUser, confirm: str | No
     db.query(Project).filter(Project.id == project_id).delete()
     db.commit()
     live.delete_project(project_id)
+    compiler.forget_workspace(project_id)
     return {"ok": True}
 
 

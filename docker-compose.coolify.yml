@@ -73,6 +73,7 @@ services:
       COMPILE_URL: http://compile:8000
       COMPILE_TOKEN: ${SERVICE_PASSWORD_64_COMPILE}
       COMPILE_TIMEOUT_SECONDS: ${COMPILE_TIMEOUT_SECONDS:-90}
+      COMPILE_KEEP_LIVE_PDFS: ${COMPILE_KEEP_LIVE_PDFS:-20}
 
       # The reference check (docs/DESIGN.md §16). The claim check needs a key.
       REFERENCES_NETWORK: ${REFERENCES_NETWORK:-true}
@@ -130,6 +131,7 @@ services:
       COMPILE_TOKEN: ${SERVICE_PASSWORD_64_COMPILE}
       COMPILE_TIMEOUT_SECONDS: ${COMPILE_TIMEOUT_SECONDS:-90}
       COMPILE_KEEP_JOBS: ${COMPILE_KEEP_JOBS:-30}
+      COMPILE_KEEP_WORKSPACES: ${COMPILE_KEEP_WORKSPACES:-20}
       COMPILE_WORKERS: ${COMPILE_WORKERS:-2}
     # A real init as PID 1 reaps what a killed job leaves behind.
     init: true

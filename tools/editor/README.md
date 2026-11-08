@@ -152,7 +152,8 @@ What the tests cover:
 With a compile service (`--compile`, which needs latexmk, synctex and
 latexdiff on the `PATH`) also:
 
-- The PDF pane compiles when the editor opens and two seconds after typing,
+- The PDF pane compiles when the editor opens and when typing pauses, stops a
+  compile a newer edit has overtaken, recompiles from scratch from its menu,
   shows the page count, and lists an error, whose `file:line` opens its line.
   On a phone the PDF takes the place of the text and goes back.
 - SyncTeX both ways: Ctrl+Shift+Enter marks the cursor's line in the PDF, and

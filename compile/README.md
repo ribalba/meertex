@@ -44,7 +44,8 @@ latexmk is missing.
 | `COMPILE_HOST`, `COMPILE_PORT` | `127.0.0.1`, `8000` | The image listens on `0.0.0.0:8000`. |
 | `COMPILE_JOBS_DIR` | `<temp>/meertex-compile-jobs` | One folder per job. `/jobs` in the image, a volume. |
 | `COMPILE_TIMEOUT_SECONDS` | 90 | Wall clock time per job, latexdiff included. |
-| `COMPILE_KEEP_JOBS` | 30 | The newest finished jobs are kept for SyncTeX, older ones are removed. |
+| `COMPILE_KEEP_JOBS` | 30 | The newest finished jobs are kept for SyncTeX, older ones are removed. Every workspace keeps that many of its own as well. |
+| `COMPILE_KEEP_WORKSPACES` | 20 | The workspaces used last are kept. A paper whose workspace was removed is sent whole the next time. |
 | `COMPILE_WORKERS` | 2 | Jobs that run at once. A job that finds no free worker within the timeout gets 503. |
 | `COMPILE_MAX_UPLOAD_BYTES` | 256 MB | The largest tar.gz. |
 | `COMPILE_MAX_TREE_BYTES` | 512 MB | The largest unpacked total. |
@@ -60,6 +61,10 @@ Errors are `{detail}`.
 | `GET /healthz` | `{ok: true}`, without a token. |
 | `POST /jobs?main_file=main.tex&compiler=pdflatex` | The body is a tar.gz of the project. Returns `{job_id, status, duration_ms, log}`. `status` is `success` (a PDF without errors), `errors` (a PDF, but TeX or latexmk reported errors), `failure` (no PDF) or `timeout`. 400 when the upload is refused, 503 when no worker became free. |
 | `POST /latexdiff?main_file=...&compiler=...` | The tar.gz holds two trees, `old/...` and `new/...`. `latexdiff --flatten` of the two main files replaces the new one, which is then compiled like a job. |
+| `POST /workspaces/{id}/prepare {files: {path: sha256}, clean?}` | Gets a paper's workspace ready and returns `{need: [path], token}`, the files that have to be uploaded. Everything that is not one of `files` is removed. `clean` forgets the build files. 400 for a path or hash it does not take. |
+| `POST /jobs?main_file=...&compiler=...&workspace=...&token=...` | Compiles in the workspace after `prepare`. The body is a tar.gz of the files in `need`. Also answers `status: cancelled` without a `job_id`. 409 when the token is gone, and the caller prepares again. |
+| `POST /workspaces/{id}/cancel` | Kills the job that runs in the workspace. Returns `{cancelled}`, false when none runs. |
+| `POST /workspaces/{id}/forget` | Removes the workspace and its jobs, for a paper that was deleted. Returns `{forgotten: true}`. |
 | `GET /jobs/{id}/output.pdf`, `GET /jobs/{id}/output.log` | 404 when the job is unknown, was removed, or made no PDF. |
 | `POST /jobs/{id}/synctex/edit {page, x, y}` | `{file, line, column}`, with `file` relative to the project. 422 when SyncTeX knows nothing there. |
 | `POST /jobs/{id}/synctex/view {file, line, column}` | `[{page, x, y, width, height}]`. |
@@ -70,6 +75,22 @@ SyncTeX does not know it, which is most of the time.
 The log is TeX's log of the main file, run with `max_print_line=10000` so no
 message or path is wrapped. When a job does not succeed, latexmk's last lines
 follow after the line `=== latexmk (the last lines of its output) ===`.
+
+## Workspaces
+
+An open editor compiles at every pause in typing, so its compiles run in the
+paper's workspace (`<jobs>/workspaces/<id>`) instead of a fresh folder. The
+paper's files stay in `tree/`, and only changed ones are sent. Before each
+compile everything else in the tree is removed, and the build files of the
+last run that reached its end come back from `seeds/`, outside TeX's reach. A
+small edit then usually takes one TeX pass instead of three, and a run that
+was killed halfway leaves nothing the next one could trip over. A run that
+used those files and made no PDF, or reported an error inside one of them,
+runs once more without them.
+
+All compiles of a workspace belong to one paper. A file a document changed is
+noticed by its size and time and uploaded again. Versions, diffs and the CLI
+always run in a fresh folder.
 
 ## How a job is boxed in
 

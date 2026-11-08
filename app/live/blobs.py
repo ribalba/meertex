@@ -49,6 +49,13 @@ def read(project_id: str, sha: str) -> bytes | None:
     return p.read_bytes() if p is not None else None
 
 
+def delete(project_id: str, sha: str) -> None:
+    """Remove a blob nothing refers to any more. The caller has checked that."""
+    p = path(project_id, sha)
+    if p is not None:
+        p.unlink(missing_ok=True)
+
+
 def copy_all(src_id: str, dst_id: str, shas: set[str]) -> None:
     """Copy the named blobs from one project to another (a fork)."""
     for sha in shas:

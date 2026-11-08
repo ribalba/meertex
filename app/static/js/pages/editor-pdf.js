@@ -1,14 +1,15 @@
 // The editor's PDF pane (docs/DESIGN.md §14, In the editor): the compiled PDF
-// of the live document, compiling on request and two seconds after the last
-// edit, the problems of the last compile, SyncTeX in both directions, and a
-// warning when the PDF is longer than the paper's page limit (pagelimit.js).
+// of the live document, compiling on request and at every pause in typing, the
+// problems of the last compile, SyncTeX in both directions, and a warning when
+// the PDF is longer than the paper's page limit (pagelimit.js).
 //
 // The server compiles and caches by content, so every open editor may ask
-// after every edit. Only one request runs here at a time. Edits meanwhile ask
-// once more when it is done. So does a request right after typing, because the
-// typing goes over the socket and the request over HTTP, and the server may
-// compile before the last keys are in. Asking again costs little, because the same
-// content comes back from the cache.
+// after every edit. Only one request runs here at a time. Edits meanwhile stop
+// it and ask again when it has answered, so the newest text is what gets
+// compiled. A request right after typing is followed by a quiet second look,
+// because the typing goes over the socket and the request over HTTP, and the
+// server may compile before the last keys are in. That look costs little,
+// because the same content comes back from the cache.
 
 import { api, projectUrl } from "../api.js";
 import { h, clear, plural } from "../dom.js";
@@ -18,10 +19,14 @@ import { createPdfView } from "../pdfview.js";
 import { dropdown, flashBox, spinner } from "../ui.js";
 
 const AUTO_KEY = "meertex.editor.autocompile";
-const AUTO_DELAY_MS = 2000;
+const AUTO_DELAY_MS = 400;
 const POLL_MS = 800;
 // A local edit this recent may not have reached the server when a compile starts.
 const IN_FLIGHT_MS = 1000;
+// A newer edit stops the compile that runs, unless the last result is already
+// this old. Without that, steady typing would stop every compile and the PDF
+// would never change.
+const MAX_RESULT_AGE_MS = 4000;
 const FINISHED = new Set(["success", "errors", "failure", "timeout"]);
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -53,9 +58,15 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   let shown = null; // the compile whose PDF is in the view
   let last = null; // the newest finished compile
   let running = null;
+  let runningSince = 0;
+  let stopping = false; // the server was asked to stop the compile that runs
   let again = false;
+  let cleanNext = false; // the next compile starts from nothing
   let timer = 0;
+  let settleTimer = 0; // the quiet second look after a compile right after typing
+  let lastEdit = 0; // the newest edit by anybody
   let lastLocalEdit = 0;
+  let resultAt = 0; // when the newest compile came back
   let dead = false;
   let problemsOpen = null; // null until the person opens or closes the list
   let refProblems = []; // the reference check's errors and warnings
@@ -72,6 +83,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     label: "Compile options",
     items: () => [
       { text: "Compile while you type", checked: auto, onClick: () => setAuto(!auto) },
+      { text: "Recompile from scratch", icon: "history", onClick: () => compile({ clean: true }) },
       last?.log_url ? "divider" : null,
       last?.log_url ? { text: "Open the log", icon: "file-text", href: last.log_url } : null,
     ],
@@ -161,7 +173,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     } catch {
       // The choice holds for this page.
     }
-    note(on ? "Compiles two seconds after the last edit" : "Compiles only on Recompile and Ctrl+Enter");
+    note(on ? "Compiles when you pause typing" : "Compiles only on Recompile and Ctrl+Enter");
   }
 
   function showMessage(node) {
@@ -299,26 +311,54 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     return c;
   }
 
-  // Compile the live document now. A compile that runs already gets one more after it.
-  function compile() {
+  // Ask the server to stop the compile that runs, when its text is out of date.
+  // It answers that compile's request with a 409, and the next one starts then.
+  function stopRunning() {
+    if (stopping) return;
+    const outdated = lastEdit > runningSince;
+    const resultIsOld = Date.now() - resultAt > MAX_RESULT_AGE_MS;
+    if (!cleanNext && (!outdated || resultIsOld)) return;
+    stopping = true;
+    api.post(url("/compile/cancel")).catch(() => {
+      // The compile just ends the normal way, and the next one follows it.
+    });
+  }
+
+  // Compile the live document now. A compile that runs already gets one more
+  // after it. `clean` starts from nothing instead of the last build's files.
+  // `quiet` is the second look after a compile right after typing, which
+  // usually finds nothing new, so the status stays as it is.
+  function compile({ clean = false, quiet = false } = {}) {
     clearTimeout(timer);
+    clearTimeout(settleTimer);
+    cleanNext ||= clean;
     if (running) {
       again = true;
+      stopRunning();
       return running;
     }
-    setStatus("running", "Compiling…");
-    recompile.disabled = true;
-    if (Date.now() - lastLocalEdit < IN_FLIGHT_MS) again = true;
+    if (!quiet) {
+      setStatus("running", "Compiling…");
+      recompile.disabled = true;
+    }
+    const settle = Date.now() - lastLocalEdit < IN_FLIGHT_MS;
+    const body = { ref: "live", editor: true, clean: cleanNext };
+    cleanNext = false;
+    runningSince = Date.now();
     running = (async () => {
       try {
-        const c = await finish(await api.post(url("/compile"), { ref: "live" }));
+        const c = await finish(await api.post(url("/compile"), body));
+        resultAt = Date.now();
         if (!dead) {
-          loadReferenceProblems();
+          if (c.id !== last?.id) loadReferenceProblems();
           await show(c);
         }
       } catch (err) {
         if (dead) return;
-        if (err.status === 503) {
+        if (err.status === 409) {
+          // A newer edit stopped it, here or in a coauthor's editor.
+          again = true;
+        } else if (err.status === 503) {
           setStatus("off", "Compiling is not set up on this server");
           if (!shown) showMessage(h("div", { class: "blankslate" }, icon("info", { size: 24 }), h("h3", { text: "No compiling here" }),
             h("p", { text: "This server has no compile service. Ask whoever runs it to set COMPILE_URL." })));
@@ -327,14 +367,13 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
         }
       } finally {
         running = null;
+        stopping = false;
         recompile.disabled = false;
         if (again && !dead) {
           again = false;
-          // Not before the last local edit is a second old, which also keeps
-          // this from asking again and again.
-          const wait = lastLocalEdit + IN_FLIGHT_MS - Date.now();
-          if (wait > 0) timer = setTimeout(() => compile(), wait);
-          else compile();
+          compile();
+        } else if (settle && !dead) {
+          settleTimer = setTimeout(() => compile({ quiet: true }), Math.max(0, lastLocalEdit + IN_FLIGHT_MS - Date.now()));
         }
       }
     })();
@@ -344,7 +383,9 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   // The live document changed, here (`local`) or elsewhere. With auto compile
   // on, compile when it rests.
   function edited(local = false) {
-    if (local) lastLocalEdit = Date.now();
+    lastEdit = Date.now();
+    if (local) lastLocalEdit = lastEdit;
+    clearTimeout(settleTimer);
     if (!auto || dead) return;
     clearTimeout(timer);
     timer = setTimeout(() => compile(), AUTO_DELAY_MS);
@@ -417,6 +458,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     destroy() {
       dead = true;
       clearTimeout(timer);
+      clearTimeout(settleTimer);
       view.destroy();
     },
   };

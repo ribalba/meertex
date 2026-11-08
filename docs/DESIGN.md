@@ -1433,12 +1433,34 @@ A container of its own compiles LaTeX. The server never runs TeX.
   holds Lua's `io.open` to the paranoid rules and luaotfload reads TeX Live's
   own files by absolute path. A job that runs longer than
   `COMPILE_TIMEOUT_SECONDS` (90) is killed with its process group. The newest
-  `COMPILE_KEEP_JOBS` (30) folders are kept for SyncTeX.
+  `COMPILE_KEEP_JOBS` (30) folders are kept for SyncTeX, and that many of
+  every workspace (below).
 - `POST /jobs?main_file=&compiler=` takes a tar.gz of the files as the body
   and returns `{job_id, status, duration_ms, log}`. `status` is `success` (a
   PDF without errors), `errors` (a PDF, but TeX or latexmk reported errors),
   `failure` (no PDF) or `timeout`. An upload with absolute paths, `..`, links
   or device files, or above the size caps, is refused with 400.
+- A compile from an open editor runs in the paper's **workspace** instead of
+  a fresh folder, named by the project's id. `POST /workspaces/{id}/prepare
+  {files: {path: sha256}, clean?}` removes everything that is not one of those
+  files and answers `{need: [path], token}`, the files it lacks or that are no
+  longer what it wrote (noticed by size and time). `POST /jobs` with
+  `&workspace=&token=` then takes a tar.gz of only those. A token that is gone
+  answers 409 and the server prepares again.
+  - The build files of the last run that reached its end (`success` or
+    `errors`) are kept outside the tree and put back before each run, so
+    latexmk usually needs one TeX pass. A run that was stopped halfway never
+    reaches the next one. They are tied to the main file and the compiler,
+    and `clean` forgets them.
+  - A run that used them and made no PDF, or reported an error inside a build
+    file, runs once more without them. An error in the text does not.
+  - A job keeps only its PDF and SyncTeX file. SyncTeX of an older job still
+    answers, because its paths name the workspace, which stays in place.
+  - `POST /workspaces/{id}/cancel` kills the job that runs there and answers
+    `{cancelled}`. The job answers `status: cancelled` without a `job_id`.
+  - The `COMPILE_KEEP_WORKSPACES` (20) workspaces used last stay. A paper
+    whose workspace went is sent whole the next time. Deleting a project
+    removes its workspace and its jobs (`POST /workspaces/{id}/forget`).
 - `GET /jobs/{id}/output.pdf`, `GET /jobs/{id}/output.log`. 404 for a job the
   service no longer has.
 - `POST /jobs/{id}/synctex/edit {page, x, y}` returns `{file, line, column}`,
@@ -1469,6 +1491,15 @@ A container of its own compiles LaTeX. The server never runs TeX.
   `ref` and `commit` stay right. One compile per project runs at a time, and
   a request for a hash that is being compiled waits for it. The request that
   compiles waits for TeX and gets the finished compile.
+- An editor's compile (`editor: true`) of `live` uses the paper's workspace.
+  Its hash differs from a clean compile's, so a version, a pdfdiff or the CLI
+  never gets a PDF that was built on an earlier build's files. Only these
+  compiles use a workspace or can be stopped.
+- Only the newest `COMPILE_KEEP_LIVE_PDFS` (20) live compiles of a paper keep
+  their PDF and log. Older rows stay, because the instance's activity counts
+  them, without `pdf_sha` and `log`, and are not reused any more. The PDF
+  leaves the blob store only when no other compile, version or file of the
+  paper has the same bytes.
 - Rows `compiles (id, project_id, kind, ref, commit, content_hash, compiler, main_file, status, duration_ms, log, problems, pdf_sha, job_id, created_at, created_by)`.
   `kind` is `pdf` or `pdfdiff`. `ref` is the ref as asked for (`from..to` for
   a pdfdiff). `commit` is null for `live`. The PDF is a project blob. `log`
@@ -1487,8 +1518,12 @@ compile {id, kind, status, ref, commit, compiler, main_file, duration_ms,
 
 `pdf_url` (null without a PDF) and `log_url` are paths on this server.
 
-- `POST /api/projects/{ref}/compile {ref?}` (default `live`). Viewers too,
-  because reviewers read the PDF.
+- `POST /api/projects/{ref}/compile {ref?, editor?, clean?}` (default `live`).
+  Viewers too, because reviewers read the PDF. `editor` is the open editor's
+  compile described above. `clean` makes it start from nothing and reuse no
+  finished compile. An editor's compile that a newer edit stopped answers 409.
+- `POST /api/projects/{ref}/compile/cancel` stops the editor's compile that
+  runs for the paper and answers `{cancelled}`, false when none was running.
 - `GET /api/projects/{ref}/compiles/latest?ref=live`, the newest compile of
   kind `pdf`, or `null` (200) when there is none yet, because the editor asks
   every time it opens a paper. A tag or a commit finds every compile of that
@@ -1523,9 +1558,13 @@ It exits 0 on `success` and 1 otherwise.
 - A PDF pane next to the text (PDF.js, vendored like the editor bundle),
   with zoom, page count and download. It keeps its scroll position when the
   PDF is replaced.
-- Compiling on Ctrl/Cmd-Enter, on the Recompile button, and on its own two
-  seconds after the last edit (a toggle, on by default, remembered per
-  browser).
+- Compiling on Ctrl/Cmd-Enter, on the Recompile button, and on its own 400 ms
+  after the last edit (a toggle, on by default, remembered per browser).
+- A newer edit stops the compile that runs on older text, and the next one
+  starts when it has answered. Not when the last result is more than four
+  seconds old, because steady typing would otherwise stop every compile and
+  the PDF would never change.
+- The compile menu has "Recompile from scratch", for a build that got stuck.
 - The problems of the last compile as a list. Clicking one opens the file at
   its line.
 - A compile that made no PDF shows which file LaTeX compiled, says when it

@@ -1,10 +1,14 @@
 """The compile service on its own (compile/service.py, docs/DESIGN.md §14),
 run natively with this machine's TeX Live."""
 
+import hashlib
 import os
+import re
 import subprocess
 import sys
 import tarfile
+import threading
+import time
 import uuid
 
 import httpx
@@ -336,3 +340,283 @@ def test_no_settings_reach_the_jobs(service):
     job = _ok(service, files)
     assert "(./probe-file.tex" in job["log"]
     assert f"(./{TOKEN}.tex" not in job["log"]
+
+
+# --- Workspaces, for the compiles of an open editor ------------------------------
+
+WITH_LABEL = rb"""\documentclass{article}
+\begin{document}
+\section{One}\label{one}
+See section \ref{one}.
+
+\input{sections/intro}
+\end{document}
+"""
+LOOP = b"\\documentclass{article}\n\\begin{document}\n\\def\\x{\\x}\\x\n\\end{document}\n"
+
+
+def _prepare(svc, key: str, files: dict[str, bytes], clean: bool = False) -> dict:
+    manifest = {path: hashlib.sha256(data).hexdigest() for path, data in files.items()}
+    r = httpx.post(f"{svc.url}/workspaces/{key}/prepare", json={"files": manifest, "clean": clean}, headers=AUTH, timeout=60)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _in_workspace(svc, key: str, files: dict[str, bytes], main: str = "main.tex", compiler: str = "pdflatex", clean: bool = False):
+    """``(the files it asked for, the job)``."""
+    plan = _prepare(svc, key, files, clean)
+    params = {"main_file": main, "compiler": compiler, "workspace": key, "token": plan["token"]}
+    r = httpx.post(svc.url + "/jobs", params=params, content=tgz({p: files[p] for p in plan["need"]}), headers=AUTH, timeout=60)
+    assert r.status_code == 200, r.text
+    return plan["need"], r.json()
+
+
+def _tex_runs(svc, job: dict) -> int:
+    return len(re.findall(r"Run number \d+ of rule '\w*latex'", (svc.jobs / job["job_id"] / "latexmk.out").read_text()))
+
+
+def _paper() -> dict[str, bytes]:
+    return {"main.tex": WITH_LABEL, "sections/intro.tex": INTRO}
+
+
+def _tree(svc, key: str):
+    return svc.jobs / "workspaces" / key / "tree"
+
+
+def test_a_workspace_gets_only_what_changed_and_reuses_the_build(service):
+    key = str(uuid.uuid4())
+    files = {**_paper(), "notes.txt": b"Some notes.\n"}
+    need, job = _in_workspace(service, key, files)
+    assert sorted(need) == sorted(files)
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) >= 2  # the \ref needs a second pass
+
+    files["sections/intro.tex"] = INTRO + b"More.\n"
+    del files["notes.txt"]
+    need, job = _in_workspace(service, key, files)
+    assert need == ["sections/intro.tex"]
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) == 1
+    assert not (_tree(service, key) / "notes.txt").exists()
+    pdf = httpx.get(f"{service.url}/jobs/{job['job_id']}/output.pdf", headers=AUTH)
+    assert pdf.content.startswith(b"%PDF-")
+    # A job holds its results and no copy of the paper.
+    assert not (service.jobs / job["job_id"] / "tree").exists()
+
+    # Nothing changed: nothing is sent.
+    assert _prepare(service, key, files)["need"] == []
+
+
+def test_a_workspace_notices_what_a_document_left_or_changed(service):
+    key = str(uuid.uuid4())
+    files = _paper()
+    _in_workspace(service, key, files)
+    tree = _tree(service, key)
+    (tree / "stray.tex").write_text("x")
+    (tree / "folder").mkdir()
+    (tree / "folder" / "stray.tex").write_text("x")
+    os.symlink("/etc", tree / "etc-link")
+    (tree / "sections" / "intro.tex").write_text("Rewritten by a run.")
+    (tree / "main.tex").unlink()
+    os.symlink("/etc/hostname", tree / "main.tex")
+
+    plan = _prepare(service, key, files)
+    assert sorted(plan["need"]) == ["main.tex", "sections/intro.tex"]
+    assert sorted(p.name for p in tree.iterdir() if p.name != "sections") == ["main.tex"]
+
+    need, job = _in_workspace(service, key, files)
+    assert sorted(need) == ["main.tex", "sections/intro.tex"]
+    assert job["status"] == "success", job["log"][-2000:]
+    assert (tree / "sections" / "intro.tex").read_bytes() == INTRO
+    assert not (tree / "main.tex").is_symlink()
+
+
+def test_a_build_file_that_breaks_the_next_run_is_dropped(service):
+    key = str(uuid.uuid4())
+    writes = (
+        b"\\documentclass{article}\n\\newcommand\\fromaux{}\n\\makeatletter\n"
+        b"\\AtEndDocument{\\immediate\\write\\@auxout{\\string\\fromaux}}\n\\makeatother\n"
+        b"\\begin{document}\nText.\n\\end{document}\n"
+    )
+    _need, job = _in_workspace(service, key, {"main.tex": writes})
+    assert job["status"] == "success", job["log"][-2000:]
+
+    # The old .aux calls a command that is gone. Only a run without it is right.
+    gone = b"\\documentclass{article}\n\\begin{document}\nText changed.\n\\end{document}\n"
+    _need, job = _in_workspace(service, key, {"main.tex": gone})
+    assert job["status"] == "success", job["log"][-2000:]
+    assert ".aux:" not in job["log"]
+
+
+def test_an_error_in_the_text_keeps_the_build(service):
+    key = str(uuid.uuid4())
+    files = _paper()
+    _in_workspace(service, key, files)
+    files["main.tex"] = WITH_LABEL.replace(b"See section", b"See \\undefinedmacro section")
+    _need, job = _in_workspace(service, key, files)
+    assert job["status"] == "errors"
+    assert _tex_runs(service, job) == 1
+    files["main.tex"] = WITH_LABEL.replace(b"See section", b"Read section")
+    _need, job = _in_workspace(service, key, files)
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) == 1
+
+
+def test_cancel_stops_the_run_and_keeps_the_last_good_build(service):
+    key = str(uuid.uuid4())
+    name = f"cancel-{uuid.uuid4().hex[:8]}"
+    main = f"{name}.tex"
+    files = {main: WITH_LABEL, "sections/intro.tex": INTRO}
+    assert httpx.post(f"{service.url}/workspaces/{key}/cancel", headers=AUTH).json() == {"cancelled": False}
+    _need, job = _in_workspace(service, key, files, main=main)
+    assert job["status"] == "success", job["log"][-2000:]
+
+    answer: dict = {}
+    looping = {**files, main: LOOP}
+    thread = threading.Thread(target=lambda: answer.update(_in_workspace(service, key, looping, main=main)[1]))
+    thread.start()
+
+    def tex_runs() -> bool:
+        return subprocess.run(["pgrep", "-f", f"pdflatex.*{name}"], capture_output=True, check=False).returncode == 0
+
+    deadline = time.monotonic() + 20
+    while not tex_runs() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert tex_runs()
+    r = httpx.post(f"{service.url}/workspaces/{key}/cancel", headers=AUTH)
+    assert r.json() == {"cancelled": True}
+    thread.join(30)
+    assert not thread.is_alive()
+    assert (answer["status"], answer["job_id"]) == ("cancelled", None)
+    assert not tex_runs()
+    assert httpx.post(f"{service.url}/workspaces/{key}/cancel", headers=AUTH).json() == {"cancelled": False}
+
+    # What the stopped run left is gone, and the good run's build is back.
+    files[main] = WITH_LABEL.replace(b"See section", b"Read section")
+    _need, job = _in_workspace(service, key, files, main=main)
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) == 1
+
+
+def test_synctex_of_a_workspace_job(service):
+    key = str(uuid.uuid4())
+    files = {"main.tex": HELLO, "sections/intro.tex": INTRO}
+    _need, first = _in_workspace(service, key, files)
+    files["main.tex"] = HELLO.replace(b"Hello world.", b"Hello there, world.")
+    _in_workspace(service, key, files)
+
+    # The older job still answers, for the PDF it made.
+    base = f"{service.url}/jobs/{first['job_id']}/synctex"
+    boxes = httpx.post(f"{base}/view", json={"file": "sections/intro.tex", "line": 3}, headers=AUTH).json()
+    assert boxes and boxes[0]["page"] == 1
+    point = {"page": 1, "x": boxes[0]["x"] + 5, "y": boxes[0]["y"] + boxes[0]["height"] / 2}
+    r = httpx.post(f"{base}/edit", json=point, headers=AUTH)
+    assert r.json() == {"file": "sections/intro.tex", "line": 3, "column": 0}
+    assert httpx.post(f"{base}/view", json={"file": "nope.tex", "line": 1}, headers=AUTH).status_code == 422
+    assert httpx.get(f"{service.url}/jobs/{first['job_id']}/output.pdf", headers=AUTH).status_code == 200
+
+
+def test_a_main_file_in_a_folder_in_a_workspace(service):
+    key = str(uuid.uuid4())
+    files = {"paper/main.tex": WITH_LABEL, "paper/sections/intro.tex": INTRO}
+    _need, job = _in_workspace(service, key, files, main="paper/main.tex")
+    assert job["status"] == "success", job["log"][-2000:]
+    files["paper/main.tex"] = WITH_LABEL.replace(b"See section", b"Read section")
+    _need, job = _in_workspace(service, key, files, main="paper/main.tex")
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) == 1
+    base = f"{service.url}/jobs/{job['job_id']}/synctex"
+    boxes = httpx.post(f"{base}/view", json={"file": "paper/sections/intro.tex", "line": 3}, headers=AUTH).json()
+    assert boxes
+
+
+def test_clean_and_another_compiler_start_from_nothing(service):
+    key = str(uuid.uuid4())
+    files = _paper()
+    _in_workspace(service, key, files)
+    need, job = _in_workspace(service, key, files, clean=True)
+    assert need == []
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) >= 2
+
+    _need, job = _in_workspace(service, key, files, compiler="xelatex")
+    assert job["status"] == "success", job["log"][-2000:]
+    assert _tex_runs(service, job) >= 2
+    assert job["log"].startswith("This is XeTeX")
+
+
+def test_forgetting_a_workspace_removes_its_files_and_jobs(service):
+    key = str(uuid.uuid4())
+    _need, job = _in_workspace(service, key, _paper())
+    assert _tree(service, key).is_dir()
+    assert (service.jobs / job["job_id"]).is_dir()
+    r = httpx.post(f"{service.url}/workspaces/{key}/forget", headers=AUTH, timeout=30)
+    assert r.json() == {"forgotten": True}
+    assert not (service.jobs / "workspaces" / key).exists()
+    assert not (service.jobs / job["job_id"]).exists()
+    # One that never existed is fine as well.
+    assert httpx.post(f"{service.url}/workspaces/{uuid.uuid4()}/forget", headers=AUTH, timeout=30).status_code == 200
+
+
+def test_workspace_requests_that_are_refused(service):
+    key = str(uuid.uuid4())
+    good = "0" * 64
+
+    def prepare(files) -> httpx.Response:
+        return httpx.post(f"{service.url}/workspaces/{key}/prepare", json={"files": files}, headers=AUTH)
+
+    assert prepare({"../main.tex": good}).status_code == 400
+    assert prepare({"/etc/passwd": good}).status_code == 400
+    assert prepare({"main.tex": "short"}).status_code == 400
+    assert prepare({"a": good, "a/b.tex": good}).status_code == 400
+    assert prepare("main.tex").status_code == 400
+
+    params = {"main_file": "main.tex", "compiler": "pdflatex"}
+    body = tgz({"main.tex": HELLO})
+    # A job needs its preparation.
+    r = httpx.post(f"{service.url}/jobs", params={**params, "workspace": key, "token": "nope"}, content=body, headers=AUTH)
+    assert r.status_code == 409
+    r = httpx.post(f"{service.url}/latexdiff", params={**params, "workspace": key}, content=body, headers=AUTH)
+    assert r.status_code == 400
+    r = httpx.post(f"{service.url}/jobs", params={**params, "workspace": "../up"}, content=body, headers=AUTH)
+    assert r.status_code == 400
+    assert httpx.post(f"{service.url}/workspaces/NOT-A-KEY/cancel", headers=AUTH).status_code == 404
+
+    for path in ("prepare", "cancel"):
+        assert httpx.post(f"{service.url}/workspaces/{key}/{path}", json={"files": {}}).status_code == 401
+
+
+def test_workspaces_and_their_jobs_are_limited(tmp_path):
+    with compile_service(tmp_path / "limits", COMPILE_KEEP_JOBS=2, COMPILE_KEEP_WORKSPACES=2, COMPILE_MAX_TREE_BYTES=100_000) as svc:
+        keys = [str(uuid.uuid4()) for _ in range(3)]
+        files = {"main.tex": HELLO, "sections/intro.tex": INTRO}
+        ids = []
+        for number in range(3):
+            changed = {**files, "main.tex": HELLO + b"% " + str(number).encode() + b"\n"}
+            ids.append(_in_workspace(svc, keys[0], changed)[1]["job_id"])
+        # Every paper keeps its own newest jobs, the older ones go.
+        assert httpx.get(f"{svc.url}/jobs/{ids[0]}/output.pdf", headers=AUTH).status_code == 404
+        assert httpx.get(f"{svc.url}/jobs/{ids[2]}/output.pdf", headers=AUTH).status_code == 200
+
+        _in_workspace(svc, keys[1], files)
+        time.sleep(0.05)
+        _in_workspace(svc, keys[2], files)
+        names = sorted(p.name for p in (svc.jobs / "workspaces").iterdir())
+        assert names == sorted(keys[1:]), "the workspace used longest ago goes"
+        # Its jobs still have their PDFs.
+        assert httpx.get(f"{svc.url}/jobs/{ids[2]}/output.pdf", headers=AUTH).status_code == 200
+        boxes = httpx.post(f"{svc.url}/jobs/{ids[2]}/synctex/view", json={"file": "sections/intro.tex", "line": 3}, headers=AUTH)
+        assert boxes.status_code == 200 and boxes.json()
+
+        # The cap on the paper's size counts the files that are already there.
+        key = str(uuid.uuid4())
+        big = {"main.tex": HELLO, "sections/intro.tex": INTRO, "a.bin": b"\1" * 60_000}
+        assert _in_workspace(svc, key, big)[1]["status"] == "success"
+        more = {**big, "b.bin": b"\2" * 60_000}
+        plan = _prepare(svc, key, more)
+        params = {"main_file": "main.tex", "compiler": "pdflatex", "workspace": key, "token": plan["token"]}
+        r = httpx.post(svc.url + "/jobs", params=params, content=tgz({"b.bin": more["b.bin"]}), headers=AUTH, timeout=60)
+        assert r.status_code == 400
+        assert "larger than 100000 bytes" in r.json()["detail"]
+        # After that the workspace asks for everything again.
+        assert sorted(_prepare(svc, key, big)["need"]) == sorted(big)

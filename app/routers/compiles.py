@@ -80,6 +80,10 @@ def _with_pdf(row: Compile) -> Compile:
 
 class CompileIn(BaseModel):
     ref: str = Field(default="live", min_length=1, max_length=200)
+    # An open editor's compile of the live text: quick, and a newer edit can
+    # stop it. `clean` makes it start from nothing.
+    editor: bool = False
+    clean: bool = False
 
 
 class DiffIn(BaseModel):
@@ -87,13 +91,23 @@ class DiffIn(BaseModel):
     to: str = Field(default="live", min_length=1, max_length=200)
 
 
-def _compile(db: DBSession, user: User, project: str, ref: str) -> dict:
+def _compile(db: DBSession, user: User, project: str, body: CompileIn) -> dict:
     p = project_for(db, user, project, "viewer")
     try:
-        row = call_live(compiler.compile_ref, db, p, user.id, ref)
+        row = call_live(compiler.compile_ref, db, p, user.id, body.ref, body.editor, body.clean)
     except compiler.Unavailable as e:
         raise _unavailable(e) from None
+    except compiler.Superseded as e:
+        raise HTTPException(status_code=409, detail=e.args[0]) from None
     return serialize.compile_dict(row)
+
+
+def _cancel(db: DBSession, user: User, project: str) -> dict:
+    p = project_for(db, user, project, "viewer")
+    try:
+        return {"cancelled": compiler.cancel_editor_compile(p.id)}
+    except compiler.Unavailable as e:
+        raise _unavailable(e) from None
 
 
 def _diff(db: DBSession, user: User, project: str, from_ref: str, to_ref: str) -> dict:
@@ -109,7 +123,14 @@ def _diff(db: DBSession, user: User, project: str, from_ref: str, to_ref: str) -
 async def compile_project(project: str, user: SessionOrTokenUser, db: DB, body: CompileIn | None = None) -> dict:
     """Compile the files at ``ref`` (``live`` by default) and return the
     finished compile. The same files compiled before give that compile back."""
-    return await _in_thread(_compile, db, user, project, body.ref if body else "live")
+    return await _in_thread(_compile, db, user, project, body or CompileIn())
+
+
+@router.post("/projects/{project}/compile/cancel")
+async def cancel_compile(project: str, user: SessionOrTokenUser, db: DB) -> dict:
+    """Stop the compile an open editor is running for this paper. Its request
+    answers 409. ``cancelled`` is false when none was running."""
+    return await _in_thread(_cancel, db, user, project)
 
 
 @router.post("/projects/{project}/pdfdiff")

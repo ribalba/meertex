@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     compile_url: str = ""
     compile_token: str = ""
     compile_timeout_seconds: int = 90
+    # The PDFs of the newest live compiles a paper keeps (docs/DESIGN.md §14).
+    compile_keep_live_pdfs: int = 20
 
     # --- References (docs/DESIGN.md §16) -----------------------------------------
     # The lookups at doi.org, Crossref, Semantic Scholar, DBLP, arXiv, Open

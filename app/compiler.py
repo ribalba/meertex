@@ -5,8 +5,8 @@ to the compile service (compile/) and keeps what comes back in a ``compiles``
 row: the status, the end of the log, the problems found in it, and the PDF as
 a project blob.
 
-The editor asks for a compile two seconds after every pause in typing, so
-three rules keep the work down:
+The editor asks for a compile at every pause in typing, so these rules keep
+the work down:
 
 * The files, the main file and the compiler are hashed. A finished compile
   with the same hash is reused instead of run again.
@@ -14,11 +14,16 @@ three rules keep the work down:
   project's lock, so one paper cannot take every TeX worker.
 * A request for a hash that is being compiled waits for that compile and
   gets its result.
+* A compile from an open editor runs in the paper's workspace on the compile
+  service, which is sent only the files that changed and reuses the last
+  build's files. A newer edit can stop it. Its hash differs from a clean
+  compile's, so a version never gets a PDF that was built this way.
+* Only the newest live PDFs of a paper are kept.
 
-The last two are held in this process, which is enough because the server is
-one process (§1). A compile is synchronous for the request that asks for it.
-Only a new version compiles in a thread of its own, started once the version
-is committed, so making a version never waits for TeX.
+The second and third are held in this process, which is enough because the
+server is one process (§1). A compile is synchronous for the request that asks
+for it. Only a new version compiles in a thread of its own, started once the
+version is committed, so making a version never waits for TeX.
 """
 
 import gzip
@@ -29,10 +34,11 @@ import tarfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass, field, replace
 
 import httpx
-from sqlalchemy import event
+from sqlalchemy import event, or_
 from sqlalchemy.orm import Session as DBSession
 
 from . import live, texlog
@@ -60,28 +66,73 @@ class Gone(Exception):
     and its files cannot be compiled again because they have changed since."""
 
 
+class Superseded(Exception):
+    """A newer edit stopped this compile while it ran. ``args[0]`` says so, for a 409."""
+
+
+class LiveFiles(Mapping[str, bytes]):
+    """The files of the live document. The text is in memory. Blobs stay on
+    disk until something reads them, because a paper's figures and data can be
+    hundreds of MB and an editor's compile usually sends none of them."""
+
+    def __init__(self, project_id: str, texts: dict[str, bytes], stored: dict[str, str]) -> None:
+        self._project_id = project_id
+        self._texts = texts
+        self._stored = stored  # {path: the blob's SHA-256}
+
+    def __getitem__(self, path: str) -> bytes:
+        if path in self._texts:
+            return self._texts[path]
+        data = blobs.read(self._project_id, self._stored[path])
+        if data is None:
+            raise KeyError(path)
+        return data
+
+    def __iter__(self) -> Iterator[str]:
+        yield from self._texts
+        yield from self._stored
+
+    def __len__(self) -> int:
+        return len(self._texts) + len(self._stored)
+
+    def digest(self, path: str) -> bytes:
+        if path in self._texts:
+            return hashlib.sha256(self._texts[path]).digest()
+        return bytes.fromhex(self._stored[path])
+
+
+def _digest(files: Mapping[str, bytes], path: str) -> bytes:
+    """A file's SHA-256. A blob of the live document knows its own without being read."""
+    return files.digest(path) if isinstance(files, LiveFiles) else hashlib.sha256(files[path]).digest()
+
+
 @dataclass
 class Source:
     """What one compile works on: the files of a ref, or two refs for a
-    pdfdiff (``old`` are the files of ``from``)."""
+    pdfdiff (``old`` are the files of ``from``). ``workspace`` names the
+    compile service's folder for a compile from an open editor."""
 
     kind: str
     ref: str
     commit: str | None
     main_file: str
     compiler: str
-    files: dict[str, bytes]
-    old: dict[str, bytes] | None = None
+    files: Mapping[str, bytes]
+    old: Mapping[str, bytes] | None = None
+    workspace: str | None = None
     content_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
         h = hashlib.sha256(_HASH_VERSION)
         for part in (self.kind, self.compiler, self.main_file):
             h.update(b"\0" + part.encode())
+        if self.workspace is not None:
+            # A PDF built on an earlier build's files is never handed out as a clean one.
+            h.update(b"\0editor")
         for label, tree in (("new", self.files), ("old", self.old or {})):
             for path in sorted(tree):
                 h.update(f"\0{label}\0{path}\0".encode())
-                h.update(hashlib.sha256(tree[path]).digest())
+                h.update(_digest(tree, path))
         self.content_hash = h.hexdigest()
 
 
@@ -97,7 +148,7 @@ def _require() -> None:
 # --- The files of a ref -------------------------------------------------------------
 
 
-def files_at(project_id: str, ref: str) -> tuple[str | None, dict[str, bytes]]:
+def files_at(project_id: str, ref: str) -> tuple[str | None, Mapping[str, bytes]]:
     """``(commit, {path: content})`` at ``ref``. ``live`` reads the room under
     its lock and the blob store, and has no commit. Anything else is read from
     git. Raises live.Refused and live.NotFound like the file routes."""
@@ -105,17 +156,19 @@ def files_at(project_id: str, ref: str) -> tuple[str | None, dict[str, bytes]]:
     if ref == "live":
         with rooms.get(project_id).read() as doc:
             entries = ydoc.materialize(doc)
-        files: dict[str, bytes] = {}
+        texts: dict[str, bytes] = {}
+        stored: dict[str, str] = {}
         for path, entry in entries.items():
             if entry.kind == "text":
-                files[path] = (entry.text or "").encode()
-            else:
+                texts[path] = (entry.text or "").encode()
+            elif blobs.path(project_id, entry.sha or "") is not None:
                 # Blobs are written once under their hash, so they are read
                 # outside the room's lock. One whose bytes never came is left out.
-                data = blobs.read(project_id, entry.sha or "")
-                if data is not None:
-                    files[path] = data
-        return None, _without_clashes(files)
+                stored[path] = entry.sha or ""
+        clashes = _clashes([*texts, *stored])
+        texts = {path: data for path, data in texts.items() if path not in clashes}
+        stored = {path: sha for path, sha in stored.items() if path not in clashes}
+        return None, LiveFiles(project_id, texts, stored)
     commit = git.resolve(project_id, ref)
     if commit is None:
         raise live.NotFound(f"Nothing is called {ref}")
@@ -124,14 +177,15 @@ def files_at(project_id: str, ref: str) -> tuple[str | None, dict[str, bytes]]:
     return commit, {f["path"]: contents[f["sha"]] for f in tree if f["sha"] in contents}
 
 
-def _without_clashes(files: dict[str, bytes]) -> dict[str, bytes]:
-    """A path that is a file and a folder at once cannot be unpacked. The
-    folder wins, as in a snapshot (live.snapshot)."""
-    folders = {path.rsplit("/", i)[0] for path in files for i in range(1, path.count("/") + 1)}
-    return {p: data for p, data in files.items() if p not in folders}
+def _clashes(paths: Iterable[str]) -> set[str]:
+    """The paths that are a file and a folder at once, which cannot be
+    unpacked. The folder wins, as in a snapshot (live.snapshot)."""
+    names = set(paths)
+    folders = {path.rsplit("/", i)[0] for path in names for i in range(1, path.count("/") + 1)}
+    return names & folders
 
 
-def pack(trees: dict[str, dict[str, bytes]]) -> bytes:
+def pack(trees: Mapping[str, Mapping[str, bytes]]) -> bytes:
     """A tar.gz of ``{prefix: {path: content}}``. The same files give the same bytes."""
     buf = io.BytesIO()
     with (
@@ -202,17 +256,41 @@ class _Result:
     pdf: bytes | None = None
 
 
-def _run_service(source: Source, with_pdf: bool = True) -> _Result:
+_GZIP = {"Content-Type": "application/gzip"}
+
+
+def _post_job(source: Source, clean: bool) -> httpx.Response:
+    """Hand ``source`` to the compile service. A workspace is told every
+    file's hash first and says which files it lacks, so only those are sent."""
+    params = {"main_file": source.main_file, "compiler": source.compiler}
+    if source.kind == "pdfdiff":
+        body = pack({"old/": source.old or {}, "new/": source.files})
+        return _service("POST", "/latexdiff", params=params, content=body, headers=_GZIP)
+    if source.workspace is None:
+        return _service("POST", "/jobs", params=params, content=pack({"": source.files}), headers=_GZIP)
+    manifest = {path: _digest(source.files, path).hex() for path in source.files}
+    resp: httpx.Response | None = None
+    # A 409 says the service lost its preparation (a restart). Once more is enough.
+    for _attempt in range(2):
+        plan = _service("POST", f"/workspaces/{source.workspace}/prepare", json={"files": manifest, "clean": clean})
+        if plan.status_code != 200:
+            return plan
+        needed = plan.json()
+        body = pack({"": {path: source.files[path] for path in needed["need"]}})
+        job = {**params, "workspace": source.workspace, "token": needed["token"]}
+        resp = _service("POST", "/jobs", params=job, content=body, headers=_GZIP)
+        if resp.status_code != 409:
+            break
+    assert resp is not None
+    return resp
+
+
+def _run_service(source: Source, with_pdf: bool = True, clean: bool = False) -> _Result:
     """Send ``source`` to the compile service and fetch the PDF, unless
     ``with_pdf`` is false. Raises Unavailable."""
-    if source.kind == "pdfdiff":
-        path, body = "/latexdiff", pack({"old/": source.old or {}, "new/": source.files})
-    else:
-        path, body = "/jobs", pack({"": source.files})
-    params = {"main_file": source.main_file, "compiler": source.compiler}
     started = time.monotonic()
     try:
-        resp = _service("POST", path, params=params, content=body, headers={"Content-Type": "application/gzip"})
+        resp = _post_job(source, clean)
     except httpx.ReadTimeout:
         waited = int(time.monotonic() - started)
         return _Result("timeout", f"The compile service did not answer within {waited} seconds.\n")
@@ -249,11 +327,11 @@ class _Flight:
     def __init__(self) -> None:
         self.done = threading.Event()
         self.compile_id: str | None = None
-        self.error: Unavailable | None = None
+        self.error: Unavailable | Superseded | None = None
 
 
 _guard = threading.Lock()
-_flights: dict[tuple[str, str], _Flight] = {}
+_flights: dict[tuple[str, str, bool], _Flight] = {}
 _project_locks: dict[str, threading.Lock] = {}
 
 
@@ -286,6 +364,8 @@ def _finished(db: DBSession, project_id: str, content_hash: str) -> Compile | No
             Compile.project_id == project_id,
             Compile.content_hash == content_hash,
             Compile.status.in_(REUSABLE),
+            # An old live compile whose PDF was let go of cannot be handed out.
+            or_(Compile.status == "failure", Compile.pdf_sha.isnot(None)),
         )
         .order_by(Compile.created_at.desc())
         .first()
@@ -331,11 +411,51 @@ def _store(project_id: str, compile_id: str, source: Source, result: _Result) ->
         row.problems = problems
         row.job_id = result.job_id
         db.commit()
+        if source.kind == "pdf" and source.commit is None:
+            _prune_live_pdfs(db, project_id)
 
 
-def _give_up(compile_id: str, error: Unavailable, keep: bool) -> None:
-    """The service could not compile. A request's own row goes (the request
-    answers 503), a version's row keeps the reason."""
+def _prune_live_pdfs(db: DBSession, project_id: str) -> None:
+    """Let go of the PDFs and logs of all but the newest live compiles. The
+    rows stay, because the instance's activity counts them. A PDF goes from
+    the blob store only when nothing else uses the same bytes: a version
+    that adopted the compile, or a copy someone put into the paper."""
+    old = (
+        db.query(Compile)
+        .filter(
+            Compile.project_id == project_id,
+            Compile.kind == "pdf",
+            Compile.commit.is_(None),
+            Compile.pdf_sha.isnot(None),
+        )
+        .order_by(Compile.created_at.desc(), Compile.id)
+        .offset(get_settings().compile_keep_live_pdfs)
+        .all()
+    )
+    if not old:
+        return
+    shas = {row.pdf_sha for row in old if row.pdf_sha}
+    for row in old:
+        row.pdf_sha = None
+        row.log = ""
+        row.problems = []
+        row.job_id = None
+    db.commit()
+    used = {sha for (sha,) in db.query(Compile.pdf_sha).filter(Compile.project_id == project_id, Compile.pdf_sha.in_(shas))}
+    used |= {sha for (sha,) in db.query(Version.pdf_sha).filter(Version.project_id == project_id, Version.pdf_sha.in_(shas))}
+    free = shas - used
+    if not free:
+        return
+    with rooms.get(project_id).read() as doc:
+        free -= {entry.sha for entry in ydoc.materialize(doc).values() if entry.kind != "text"}
+    for sha in free:
+        blobs.delete(project_id, sha)
+
+
+def _give_up(compile_id: str, error: Unavailable | Superseded, keep: bool) -> None:
+    """The service could not compile, or a newer edit stopped it. A request's
+    own row goes (the request answers 503 or 409), a version's row keeps the
+    reason."""
     with SessionLocal() as db:
         row = db.get(Compile, compile_id)
         if row is None:
@@ -348,10 +468,10 @@ def _give_up(compile_id: str, error: Unavailable, keep: bool) -> None:
         db.commit()
 
 
-def _compile_locked(project_id: str, source: Source, user_id: str | None, row_id: str | None) -> str:
+def _compile_locked(project_id: str, source: Source, user_id: str | None, row_id: str | None, clean: bool) -> str:
     with _project_lock(project_id):
         with SessionLocal() as db:
-            done = _finished(db, project_id, source.content_hash)
+            done = None if clean else _finished(db, project_id, source.content_hash)
             if done is not None:
                 return _adopt(db, done, project_id, source, user_id, row_id)
             created = row_id is None
@@ -362,9 +482,11 @@ def _compile_locked(project_id: str, source: Source, user_id: str | None, row_id
                 row_id = row.id
         assert row_id is not None
         try:
-            result = _run_service(source)
+            result = _run_service(source, clean=clean)
+            if result.status == "cancelled":
+                raise Superseded("A newer edit replaced this compile.")
             _store(project_id, row_id, source, result)
-        except Unavailable as e:
+        except (Unavailable, Superseded) as e:
             _give_up(row_id, e, keep=not created)
             raise
         except BaseException as e:
@@ -374,11 +496,12 @@ def _compile_locked(project_id: str, source: Source, user_id: str | None, row_id
         return row_id
 
 
-def obtain(project_id: str, source: Source, user_id: str | None, row_id: str | None = None) -> str:
+def obtain(project_id: str, source: Source, user_id: str | None, row_id: str | None = None, clean: bool = False) -> str:
     """The id of a finished compile of ``source``: one that is reused, one that
     another request is making, or a new one. ``row_id`` names a running row
-    to fill instead of making one. Raises Unavailable."""
-    key = (project_id, source.content_hash)
+    to fill instead of making one. ``clean`` starts from nothing and reuses
+    no finished compile. Raises Unavailable and Superseded."""
+    key = (project_id, source.content_hash, clean)
     while True:
         with _guard:
             flight = _flights.get(key)
@@ -398,9 +521,9 @@ def obtain(project_id: str, source: Source, user_id: str | None, row_id: str | N
         # The other compile ended without a result (an unexpected error, or
         # its project row went). Try again.
     try:
-        flight.compile_id = _compile_locked(project_id, source, user_id, row_id)
+        flight.compile_id = _compile_locked(project_id, source, user_id, row_id, clean)
         return flight.compile_id
-    except Unavailable as e:
+    except (Unavailable, Superseded) as e:
         flight.error = e
         raise
     finally:
@@ -417,16 +540,43 @@ def _load(db: DBSession, compile_id: str) -> Compile:
     return row
 
 
-def compile_ref(db: DBSession, project: Project, user_id: str, ref: str) -> Compile:
-    """Compile the files at ``ref`` and return the finished row. Raises
-    Unavailable, live.Refused and live.NotFound."""
+def compile_ref(db: DBSession, project: Project, user_id: str, ref: str, editor: bool = False, clean: bool = False) -> Compile:
+    """Compile the files at ``ref`` and return the finished row. ``editor``
+    is a compile of the live text from an open editor, which runs in the
+    paper's workspace and can be stopped by a newer edit. ``clean`` makes
+    that one start from nothing. Raises Unavailable, Superseded, live.Refused
+    and live.NotFound."""
     _require()
     project_id, main_file, compiler = project.id, project.main_file, project.compiler
     commit, files = files_at(project_id, ref)
-    source = Source("pdf", ref, commit, main_file, compiler, files)
+    workspace = project_id if editor and ref == "live" else None
+    source = Source("pdf", ref, commit, main_file, compiler, files, workspace=workspace)
     # Hand the request's database connection back while TeX runs.
     db.rollback()
-    return _load(db, obtain(project_id, source, user_id))
+    return _load(db, obtain(project_id, source, user_id, clean=clean and workspace is not None))
+
+
+def cancel_editor_compile(project_id: str) -> bool:
+    """Stop the editor compile that runs for this paper, if one does. Its
+    request answers 409. Raises Unavailable."""
+    _require()
+    try:
+        resp = _service("POST", f"/workspaces/{project_id}/cancel")
+    except httpx.ReadTimeout as e:
+        raise Unavailable("The compile service did not answer in time.") from e
+    return resp.status_code == 200 and bool(resp.json().get("cancelled"))
+
+
+def forget_workspace(project_id: str) -> None:
+    """A deleted paper's files leave the compile service too. A service that
+    cannot be reached does not keep the paper from being deleted. Its
+    workspace then goes when newer ones push it out."""
+    if not enabled():
+        return
+    try:
+        _service("POST", f"/workspaces/{project_id}/forget")
+    except (Unavailable, httpx.HTTPError) as e:
+        logger.warning("Removing the workspace of project %s: %s", project_id, e)
 
 
 def compile_diff(db: DBSession, project: Project, user_id: str, from_ref: str, to_ref: str) -> Compile:
@@ -545,7 +695,11 @@ def _rerun(db: DBSession, row: Compile) -> str | None:
                 return now.job_id  # another request ran it meanwhile
         commit, files = files_at(project_id, commit or "live")
         source = Source("pdf", ref, commit, main_file, compiler, files)
-        if source.content_hash != content_hash:
+        # A compile from the editor hashes differently. This one runs clean either way.
+        same = source.content_hash == content_hash
+        if not same and commit is None:
+            same = replace(source, workspace=project_id).content_hash == content_hash
+        if not same:
             return None
         result = _run_service(source, with_pdf=False)
         if result.status not in ("success", "errors") or not result.job_id:

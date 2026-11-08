@@ -26,6 +26,13 @@ run Lua, so every job is boxed in:
 
 The container adds the rest: an unprivileged user, a read-only root file
 system, and memory, CPU and process limits (docker-compose*.yml).
+
+A compile from an open editor has to be quick, so it runs in the paper's
+workspace instead of a fresh folder (``Workspace``). The paper's files stay
+there between compiles and only changed ones are sent. The build files of the
+last run that reached its end are put back, so a small edit usually needs one
+TeX pass instead of three. Nothing else survives from one compile to the next.
+Versions, diffs and the CLI never use a workspace.
 """
 
 import contextlib
@@ -43,6 +50,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -50,7 +58,7 @@ import tempfile
 import threading
 import time
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -67,6 +75,10 @@ JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 # spaces and a few safe signs, and starts with a letter or digit (never "-").
 MAIN_FILE_PART_RE = re.compile(r"^\w[\w .,+=@-]*$")
 JOB_PATH_RE = re.compile(r"^/jobs/([0-9a-f]{32})/(output\.pdf|output\.log|synctex/edit|synctex/view)$")
+# A workspace is named by the server, with the project's id.
+WORKSPACE_RE = re.compile(r"^[0-9a-f-]{1,64}$")
+WORKSPACE_PATH_RE = re.compile(r"^/workspaces/([0-9a-f-]{1,64})/(prepare|cancel|forget)$")
+SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 # The log of a job that did not succeed ends with latexmk's last lines after
 # this line. The server's problem parser stops reading the TeX log here.
 LATEXMK_MARK = "=== latexmk (the last lines of its output) ==="
@@ -76,6 +88,12 @@ GUARD_PREFIX = "meertex-compile: "
 # What a job's log may hold in a response. The start of a longer log is cut.
 MAX_LOG_CHARS = 4 * 1024 * 1024
 MAX_JSON_BODY = 64 * 1024
+# The list of a paper's files and their hashes.
+MAX_MANIFEST_BODY = 32 * 1024 * 1024
+# What one run may hand to the next. A run that writes more starts the next
+# one from nothing, which is only slower.
+MAX_SEED_BYTES = 64 * 1024 * 1024
+MAX_SEED_FILES = 2000
 SYNCTEX_SECONDS = 15
 # Arguments of \input and friends, checked before latexdiff --flatten reads
 # them, because latexdiff is Perl and kpathsea's rules do not bind it.
@@ -99,6 +117,7 @@ class Config:
     jobs_dir: Path
     timeout: int
     keep_jobs: int
+    keep_workspaces: int
     workers: int
     max_upload: int
     max_tree: int
@@ -118,6 +137,7 @@ class Config:
             jobs_dir=Path(jobs) if jobs else Path(tempfile.gettempdir()) / "meertex-compile-jobs",
             timeout=_env_int("COMPILE_TIMEOUT_SECONDS", 90),
             keep_jobs=_env_int("COMPILE_KEEP_JOBS", 30),
+            keep_workspaces=_env_int("COMPILE_KEEP_WORKSPACES", 20),
             workers=_env_int("COMPILE_WORKERS", 2),
             max_upload=_env_int("COMPILE_MAX_UPLOAD_BYTES", 256 * 1024 * 1024),
             max_tree=_env_int("COMPILE_MAX_TREE_BYTES", 512 * 1024 * 1024),
@@ -140,6 +160,11 @@ class UnknownJob(Exception):
 
 class NoPdf(Exception):
     """A job that made no PDF, so SyncTeX has nothing to work on."""
+
+
+class Stale(Exception):
+    """A workspace job whose preparation is gone, after a restart for example.
+    The caller prepares again."""
 
 
 # --- Paths and uploads ------------------------------------------------------------
@@ -358,10 +383,18 @@ class Runner:
         self.lock = threading.Lock()
 
     def run(
-        self, cmd: list[str], cwd: Path, env: dict[str, str], stdout: Path, stderr: Path | None, deadline: float
+        self,
+        cmd: list[str],
+        cwd: Path,
+        env: dict[str, str],
+        stdout: Path,
+        stderr: Path | None,
+        deadline: float,
+        on_start: Callable[[subprocess.Popen], None] | None = None,
     ) -> tuple[int | None, bool]:
         """``(exit code, timed out)``. Output goes to files, never to pipes, so
-        a chatty process cannot block on a full pipe."""
+        a chatty process cannot block on a full pipe. ``on_start`` gets the
+        process, so another thread can stop it."""
         with stdout.open("wb") as out, (stderr.open("wb") if stderr else contextlib.nullcontext()) as err:
             proc = subprocess.Popen(
                 cmd,
@@ -375,6 +408,8 @@ class Runner:
         _limit(proc.pid, self.max_file)
         with self.lock:
             self.running.add(proc)
+        if on_start is not None:
+            on_start(proc)
         try:
             try:
                 return proc.wait(timeout=max(0.1, deadline - time.monotonic())), False
@@ -411,6 +446,236 @@ def _tail_lines(text: str, n: int) -> str:
 
 
 _ERROR_RE = re.compile(r"^(?:! |\S[^\n]*?\.\w+:\d+: )", re.MULTILINE)
+# An error TeX reports inside a file an earlier run wrote (-file-line-error).
+_BUILD_FILE_ERROR_RE = re.compile(r"^[^\n:]+\.(?:aux|bbl|toc|lof|lot|out|nav|snm|vrb|ind|gls|acr|nls):\d+: ", re.MULTILINE)
+
+
+def _seeds_to_blame(status: str, log: str) -> bool:
+    """Whether a run that started from an earlier run's files should be done
+    again without them. Half typed text gives errors all the time, and those
+    are the text's own. A run that made no PDF, or an error inside a build
+    file, may come from what the earlier run left."""
+    return status == "failure" or (status == "errors" and _BUILD_FILE_ERROR_RE.search(log) is not None)
+
+
+# --- Workspaces -------------------------------------------------------------------
+
+
+@dataclass
+class _Pending:
+    """What a preparation found, for the job that comes next."""
+
+    token: str
+    files: dict[str, str]
+    need: list[str]
+
+
+class Workspace:
+    """The folder one paper's editor compiles share.
+
+    ``tree`` holds the paper's files, which stay so that only changed ones are
+    sent. Everything else in it is swept away before every compile. What the
+    compile should find again comes from ``seeds``, the build files of the last
+    run that reached its end. A run that was stopped halfway leaves a cut off
+    .aux behind, and none of that can reach the next run this way.
+
+    All compiles of a workspace belong to one paper, so its writers are the
+    same people the paper's text already trusts. A file a document changed is
+    noticed by its size and time and sent again."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+        self.tree = folder / "tree"
+        self.seeds = folder / "seeds"
+        self.state = folder / "state.json"
+        # One preparation or job at a time.
+        self.lock = threading.Lock()
+        self.pending: _Pending | None = None
+        # {path: {sha, size, mtime_ns}}, None until read from state.json.
+        self.files: dict[str, dict] | None = None
+        # The main file and compiler the seeds were made with.
+        self.seeds_for: dict[str, str] | None = None
+        # What cancel, from another thread, looks at.
+        self.guard = threading.Lock()
+        self.running = False
+        self.cancelled = False
+        self.proc: subprocess.Popen | None = None
+
+    # --- State ---
+
+    def load(self) -> None:
+        self.tree.mkdir(parents=True, exist_ok=True)
+        os.utime(self.folder)  # the workspaces used longest ago are removed first
+        if self.files is not None:
+            return
+        try:
+            saved = json.loads(self.state.read_text())
+            self.files, self.seeds_for = dict(saved["files"]), saved.get("seeds_for")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.files, self.seeds_for = {}, None
+
+    def save(self) -> None:
+        tmp = self.state.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"files": self.files, "seeds_for": self.seeds_for}))
+        os.replace(tmp, self.state)
+
+    def forget(self) -> None:
+        """After a failed upload nobody knows what the tree holds. The next
+        preparation asks for every file."""
+        self.files = {}
+        self.save()
+
+    # --- The paper's files ---
+
+    def sweep(self, keep: Iterable[str]) -> None:
+        """Remove everything in the tree that is not one of the files in
+        ``keep``, without following links."""
+        files = set(keep)
+        folders = {path.rsplit("/", i)[0] for path in files for i in range(1, path.count("/") + 1)}
+        for folder, dirs, names in os.walk(self.tree):
+            rel = os.path.relpath(folder, self.tree).replace(os.sep, "/")
+            prefix = "" if rel == "." else f"{rel}/"
+            for name in list(dirs):
+                full = os.path.join(folder, name)
+                if os.path.islink(full):
+                    os.unlink(full)
+                    dirs.remove(name)
+                elif prefix + name not in folders:
+                    shutil.rmtree(full, ignore_errors=True)
+                    dirs.remove(name)
+            for name in names:
+                if prefix + name not in files:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(os.path.join(folder, name))
+
+    def intact(self, path: str, sha: str) -> bool:
+        """Whether the tree holds the content ``sha`` at ``path``."""
+        known = (self.files or {}).get(path)
+        if known is None or known["sha"] != sha:
+            return False
+        try:
+            st = os.lstat(self.tree / path)
+        except OSError:
+            return False
+        return stat.S_ISREG(st.st_mode) and st.st_size == known["size"] and st.st_mtime_ns == known["mtime_ns"]
+
+    def apply(self, body: bytes, pending: _Pending, cfg: Config) -> None:
+        """Put the uploaded files in place and remember what the tree holds."""
+        try:
+            for path in pending.need:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(self.tree / path)
+            unpack(body, {"": self.tree}, cfg)
+            files: dict[str, dict] = {}
+            total = 0
+            for path, sha in pending.files.items():
+                try:
+                    st = os.lstat(self.tree / path)
+                except OSError:
+                    raise Refused(f"{path} did not come with the upload") from None
+                files[path] = {"sha": sha, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+                total += st.st_size
+            if total > cfg.max_tree:
+                raise Refused(f"The files are larger than {cfg.max_tree} bytes in all")
+        except Refused:
+            self.forget()
+            raise
+        self.files = files
+        self.save()
+
+    # --- What one run hands to the next ---
+
+    def restore_seeds(self, main_file: str, compiler: str) -> bool:
+        """Put the last good run's build files into the tree. A paper's own
+        file with the same name wins. False when there were none to use."""
+        if self.seeds_for != {"main_file": main_file, "compiler": compiler} or not self.seeds.is_dir():
+            return False
+        keep = set(self.files or {})
+        found = False
+        for folder, _dirs, names in os.walk(self.seeds):
+            for name in names:
+                source = Path(folder) / name
+                rel = source.relative_to(self.seeds).as_posix()
+                if rel in keep:
+                    continue
+                target = self.tree / rel
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                except OSError:
+                    continue  # a paper's file is where this one's folder would be
+                found = True
+        return found
+
+    def save_seeds(self, main_file: str, compiler: str, skip: set[str]) -> None:
+        """Keep what the run wrote, for the next one. Only a run that got to its end comes here."""
+        new = self.folder / "seeds.new"
+        shutil.rmtree(new, ignore_errors=True)
+        new.mkdir()
+        keep = set(self.files or {})
+        count, total = 0, 0
+        for folder, _dirs, names in os.walk(self.tree):
+            for name in names:
+                source = os.path.join(folder, name)
+                rel = os.path.relpath(source, self.tree).replace(os.sep, "/")
+                if rel in keep or rel in skip:
+                    continue
+                st = os.lstat(source)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                count, total = count + 1, total + st.st_size
+                if count > MAX_SEED_FILES or total > MAX_SEED_BYTES:
+                    shutil.rmtree(new, ignore_errors=True)
+                    self.drop_seeds()
+                    return
+                target = new / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        shutil.rmtree(self.seeds, ignore_errors=True)
+        os.replace(new, self.seeds)
+        self.seeds_for = {"main_file": main_file, "compiler": compiler}
+        self.save()
+
+    def drop_seeds(self) -> None:
+        shutil.rmtree(self.seeds, ignore_errors=True)
+        self.seeds_for = None
+        self.save()
+
+    # --- Stopping the job that runs ---
+
+    def begin(self) -> None:
+        with self.guard:
+            self.running, self.cancelled, self.proc = True, False, None
+
+    def end(self) -> None:
+        with self.guard:
+            self.running, self.cancelled, self.proc = False, False, None
+
+    def started(self, proc: subprocess.Popen) -> None:
+        with self.guard:
+            self.proc = proc
+            stop = self.cancelled
+        if stop:
+            Runner.kill(proc)
+
+    def ended(self) -> None:
+        with self.guard:
+            self.proc = None
+
+    def stopped(self) -> bool:
+        with self.guard:
+            return self.cancelled
+
+    def cancel(self) -> bool:
+        """Stop the job that runs here. False when there is none."""
+        with self.guard:
+            if not self.running:
+                return False
+            self.cancelled = True
+            proc = self.proc
+        if proc is not None and proc.poll() is None:
+            Runner.kill(proc)
+        return True
 
 
 # --- The service ------------------------------------------------------------------
@@ -426,7 +691,10 @@ class Service:
         self.lock = threading.Lock()
         # Jobs being made. Pruning leaves them alone.
         self.active: set[str] = set()
+        self.workspaces_dir = cfg.jobs_dir / "workspaces"
+        self.workspaces: dict[str, Workspace] = {}
         cfg.jobs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.workspaces_dir.mkdir(exist_ok=True, mode=0o700)
         # The font caches of LuaTeX and XeTeX live below HOME, which the
         # container puts on a tmpfs that starts empty.
         home = os.environ.get("HOME")
@@ -457,21 +725,174 @@ class Service:
             return None
 
     def prune(self) -> None:
-        """Keep the newest ``keep_jobs`` finished jobs. A folder without
+        """Keep the newest ``keep_jobs`` finished jobs, and that many of every
+        workspace, so one busy paper does not take another's SyncTeX away.
+        A workspace job holds only its PDF and SyncTeX file. A folder without
         job.json that is not being made was left by a crash."""
         with self.lock:
             active = set(self.active)
-        finished: list[tuple[float, Path]] = []
+        others: list[tuple[float, Path]] = []
+        of_workspace: dict[str, list[tuple[float, Path]]] = {}
         for folder in self.cfg.jobs_dir.iterdir():
             if not folder.is_dir() or not JOB_ID_RE.match(folder.name) or folder.name in active:
                 continue
             try:
-                finished.append(((folder / "job.json").stat().st_mtime, folder))
+                stamp = ((folder / "job.json").stat().st_mtime, folder)
             except FileNotFoundError:
                 shutil.rmtree(folder, ignore_errors=True)
-        finished.sort(reverse=True)
-        for _mtime, folder in finished[self.cfg.keep_jobs :]:
+                continue
+            found = self.job_meta(folder.name) if (folder / "out").is_dir() else None
+            key = found[1].get("workspace") if found else None
+            # The jobs of a workspace that was removed count like any others.
+            if key is not None and not (self.workspaces_dir / key).is_dir():
+                key = None
+            (others if key is None else of_workspace.setdefault(key, [])).append(stamp)
+        for group in (others, *of_workspace.values()):
+            group.sort(reverse=True)
+            for _mtime, folder in group[self.cfg.keep_jobs :]:
+                shutil.rmtree(folder, ignore_errors=True)
+
+    def prune_workspaces(self) -> None:
+        """Keep the ``keep_workspaces`` workspaces used last. A paper whose
+        workspace went is sent whole the next time."""
+
+        def used(folder: Path) -> float:
+            try:
+                return folder.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        folders = sorted((f for f in self.workspaces_dir.iterdir() if f.is_dir()), key=used, reverse=True)
+        for folder in folders[self.cfg.keep_workspaces :]:
+            with self.lock:
+                workspace = self.workspaces.get(folder.name)
+                if workspace is not None and workspace.lock.locked():
+                    continue
+                self.workspaces.pop(folder.name, None)
             shutil.rmtree(folder, ignore_errors=True)
+
+    def workspace(self, key: str) -> Workspace:
+        with self.lock:
+            found = self.workspaces.get(key)
+            if found is None:
+                found = self.workspaces[key] = Workspace(self.workspaces_dir / key)
+            return found
+
+    def _check_manifest(self, files: object) -> dict[str, str]:
+        if not isinstance(files, dict):
+            raise Refused("files must be an object of paths and their SHA-256")
+        if len(files) > self.cfg.max_files:
+            raise Refused(f"The upload has more than {self.cfg.max_files} entries")
+        for path, sha in files.items():
+            if clean_path(path) != path:
+                raise Refused(f"{path} is not a usable path. Absolute paths and '..' are refused.")
+            if not isinstance(sha, str) or not SHA_RE.match(sha):
+                raise Refused(f"The hash of {path} is not a SHA-256")
+        folders = {path.rsplit("/", i)[0] for path in files for i in range(1, path.count("/") + 1)}
+        for path in files:
+            if path in folders:
+                raise Refused(f"{path} is a file and a folder at once")
+        return files
+
+    def prepare(self, key: str, files: object, clean: bool) -> dict:
+        """Get a workspace ready for ``files`` ({path: sha256}) and say which
+        of them have to be uploaded. ``clean`` forgets the build files."""
+        manifest = self._check_manifest(files)
+        workspace = self.workspace(key)
+        if not workspace.lock.acquire(timeout=self.cfg.timeout):
+            raise Busy("This paper's workspace is busy. Try again in a moment.")
+        try:
+            workspace.load()
+            workspace.sweep(manifest)
+            if clean:
+                workspace.drop_seeds()
+            need = [path for path, sha in manifest.items() if not workspace.intact(path, sha)]
+            token = secrets.token_hex(16)
+            workspace.pending = _Pending(token, manifest, need)
+            return {"need": need, "token": token}
+        finally:
+            workspace.lock.release()
+
+    def cancel(self, key: str) -> bool:
+        with self.lock:
+            workspace = self.workspaces.get(key)
+        return workspace.cancel() if workspace is not None else False
+
+    def forget(self, key: str) -> None:
+        """The paper was deleted, so its files and its jobs go now."""
+        workspace = self.workspace(key)
+        workspace.cancel()
+        if not workspace.lock.acquire(timeout=self.cfg.timeout):
+            raise Busy("This paper's workspace is busy. Try again in a moment.")
+        try:
+            with self.lock:
+                self.workspaces.pop(key, None)
+            shutil.rmtree(workspace.folder, ignore_errors=True)
+            for folder in self.cfg.jobs_dir.iterdir():
+                if not JOB_ID_RE.match(folder.name) or not (folder / "out").is_dir():
+                    continue
+                found = self.job_meta(folder.name)
+                if found is not None and found[1].get("workspace") == key:
+                    shutil.rmtree(folder, ignore_errors=True)
+        finally:
+            workspace.lock.release()
+
+    def run_in_workspace(self, key: str, token: str, body: bytes, main_file: str, compiler: str) -> dict:
+        """Compile in a workspace, after ``prepare``. ``body`` is a tar.gz of
+        the files that said it needs. Returns what ``run_job`` returns, with
+        status ``cancelled`` and no ``job_id`` when a newer edit stopped it."""
+        workspace = self.workspace(key)
+        if not workspace.lock.acquire(timeout=self.cfg.timeout):
+            raise Busy("This paper's workspace is busy. Try again in a moment.")
+        try:
+            pending, workspace.pending = workspace.pending, None
+            if pending is None or not hmac.compare_digest(pending.token.encode(), token.encode()):
+                raise Stale("This compile was not prepared, or another one was prepared since.")
+            workspace.begin()
+            if not self.slots.acquire(timeout=self.cfg.timeout):
+                raise Busy("Every compile worker is busy. Try again in a moment.")
+            job_id = secrets.token_hex(16)
+            with self.lock:
+                self.active.add(job_id)
+            job = self.cfg.jobs_dir / job_id
+            try:
+                job.mkdir(mode=0o700)
+                try:
+                    workspace.apply(body, pending, self.cfg)
+                except Refused:
+                    shutil.rmtree(job, ignore_errors=True)
+                    raise
+                result = self._compile(job, workspace.tree, main_file, compiler, False, workspace)
+                if result["status"] == "cancelled":
+                    shutil.rmtree(job, ignore_errors=True)
+                    return {"job_id": None, **result}
+                self._finish_workspace_job(job, workspace, main_file, compiler, result)
+                return {"job_id": job_id, **result}
+            finally:
+                with self.lock:
+                    self.active.discard(job_id)
+                self.slots.release()
+                self.prune()
+                self.prune_workspaces()
+        finally:
+            workspace.end()
+            workspace.lock.release()
+
+    def _finish_workspace_job(self, job: Path, workspace: Workspace, main_file: str, compiler: str, result: dict) -> None:
+        """Move the PDF and the SyncTeX file to the job, where they stay when
+        the workspace moves on, and keep the build files of a run that ended."""
+        main = workspace.tree / main_file
+        (job / "out").mkdir()
+        for suffix in (".pdf", ".synctex.gz"):
+            with contextlib.suppress(FileNotFoundError):
+                os.replace(main.parent / f"{main.stem}{suffix}", job / "out" / f"{main.stem}{suffix}")
+        if result["status"] in ("success", "errors"):
+            log = main.parent / f"{main.stem}.log"
+            workspace.save_seeds(main_file, compiler, {log.relative_to(workspace.tree).as_posix()})
+        meta = {"main_file": main_file, "compiler": compiler, "kind": "pdf", "workspace": workspace.folder.name, **result}
+        meta.pop("log")
+        (job / "output.log").write_text(result["log"], encoding="utf-8")
+        (job / "job.json").write_text(json.dumps(meta))
 
     def run_job(self, body: bytes, main_file: str, compiler: str, diff: bool) -> dict:
         """Unpack, (latexdiff,) compile. Returns ``{job_id, status,
@@ -508,7 +929,7 @@ class Service:
             self.slots.release()
             self.prune()
 
-    def _compile(self, job: Path, tree: Path, main_file: str, compiler: str, diff: bool) -> dict:
+    def _compile(self, job: Path, tree: Path, main_file: str, compiler: str, diff: bool, workspace: Workspace | None = None) -> dict:
         started = time.monotonic()
         deadline = started + self.cfg.timeout
 
@@ -525,10 +946,27 @@ class Service:
             if problem is not None:
                 return done(*problem)
 
-        workdir, stem = main.parent, main.stem
-        # A PDF or log that came with the upload must not pass for the result.
+        self._clear_results(main)
+        seeded = workspace is not None and workspace.restore_seeds(main_file, compiler)
+        status, log = self._latexmk(job, main, compiler, deadline, workspace)
+        if seeded and workspace is not None and _seeds_to_blame(status, log):
+            workspace.drop_seeds()
+            workspace.sweep(workspace.files or {})
+            self._clear_results(main)
+            status, log = self._latexmk(job, main, compiler, deadline, workspace)
+        return done(status, log)
+
+    @staticmethod
+    def _clear_results(main: Path) -> None:
+        """A PDF or log that came with the upload must not pass for the result."""
         for suffix in (".pdf", ".log", ".synctex.gz", ".fdb_latexmk", ".fls"):
-            (workdir / f"{stem}{suffix}").unlink(missing_ok=True)
+            (main.parent / f"{main.stem}{suffix}").unlink(missing_ok=True)
+
+    def _latexmk(self, job: Path, main: Path, compiler: str, deadline: float, workspace: Workspace | None) -> tuple[str, str]:
+        """Run latexmk on ``main``. ``(status, log)``."""
+        if workspace is not None and workspace.stopped():
+            return "cancelled", ""
+        workdir, stem = main.parent, main.stem
         cmd = [
             "latexmk",
             "-norc",
@@ -541,7 +979,12 @@ class Service:
             "-no-shell-escape",
             main.name,
         ]
-        rc, timed_out = self.runner.run(cmd, workdir, self.env, job / "latexmk.out", None, deadline)
+        on_start = workspace.started if workspace is not None else None
+        rc, timed_out = self.runner.run(cmd, workdir, self.env, job / "latexmk.out", None, deadline, on_start)
+        if workspace is not None:
+            workspace.ended()
+            if workspace.stopped():
+                return "cancelled", ""
 
         tex_log = _read_text(workdir / f"{stem}.log")
         pdf = workdir / f"{stem}.pdf"
@@ -562,7 +1005,7 @@ class Service:
             # What the guards said (biber_guard) stays, however early it came.
             ours = [line for line in output.splitlines() if line.startswith(GUARD_PREFIX) and line not in tail]
             log += f"\n{LATEXMK_MARK}\n" + "".join(f"{line}\n" for line in ours) + f"{tail}\n"
-        return done(status, log)
+        return status, log
 
     def _latexdiff(self, job: Path, tree: Path, main_file: str, deadline: float) -> tuple[str, str] | None:
         """Replace the main file in ``tree`` with ``latexdiff --flatten`` of
@@ -594,11 +1037,17 @@ class Service:
         if found is None:
             raise UnknownJob(job_id)
         folder, meta = found
-        main = folder / "tree" / meta["main_file"]
-        pdf = main.parent / f"{main.stem}.pdf"
+        if meta.get("workspace"):
+            # TeX ran in the workspace, so its SyncTeX file names paths there.
+            tree = self.workspaces_dir / meta["workspace"] / "tree"
+            pdf = folder / "out" / f"{Path(meta['main_file']).stem}.pdf"
+        else:
+            tree = folder / "tree"
+            main = tree / meta["main_file"]
+            pdf = main.parent / f"{main.stem}.pdf"
         if meta.get("status") not in ("success", "errors") or not pdf.is_file():
             raise NoPdf(job_id)
-        return folder / "tree", pdf
+        return tree, pdf
 
     def _synctex(self, args: list[str], cwd: Path) -> list[dict[str, str]]:
         out = subprocess.run(
@@ -639,7 +1088,8 @@ class Service:
         ``[{page, x, y, width, height}]`` in PDF points from the top left."""
         tree, pdf = self.pdf_of(job_id)
         rel = clean_path(file)
-        if rel is None or not (tree / rel).is_file():
+        # A workspace that was removed since no longer says which files it had.
+        if rel is None or (tree.is_dir() and not (tree / rel).is_file()):
             raise Refused(f"{file} is not a file of this compile")
         boxes: list[dict] = []
         for record in self._synctex(["view", "-i", f"{line}:{column}:{tree / rel}", "-o", str(pdf)], pdf.parent):
@@ -739,8 +1189,8 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return data
 
-    def _json_body(self) -> dict | None:
-        data = self._body(MAX_JSON_BODY)
+    def _json_body(self, limit: int = MAX_JSON_BODY) -> dict | None:
+        data = self._body(limit)
         if data is None:
             return None
         try:
@@ -807,10 +1257,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return
         service = self.server.service
+        workspace_route = WORKSPACE_PATH_RE.match(url.path)
+        if workspace_route is not None:
+            self._workspace_route(workspace_route[1], workspace_route[2])
+            return
         if url.path in ("/jobs", "/latexdiff"):
             query = parse_qs(url.query)
             main_file = clean_path(query.get("main_file", ["main.tex"])[0])
             compiler = query.get("compiler", ["pdflatex"])[0]
+            workspace = query.get("workspace", [""])[0]
+            token = query.get("token", [""])[0]
+            if workspace and (url.path != "/jobs" or not WORKSPACE_RE.match(workspace)):
+                self._error(400, "workspace is the id of a paper, and only for /jobs")
+                return
             if main_file is None:
                 self._error(400, "main_file must be a relative path inside the project")
                 return
@@ -828,9 +1287,15 @@ class Handler(BaseHTTPRequestHandler):
             if body is None:
                 return
             try:
-                result = service.run_job(body, main_file, compiler, diff=url.path == "/latexdiff")
+                if workspace:
+                    result = service.run_in_workspace(workspace, token, body, main_file, compiler)
+                else:
+                    result = service.run_job(body, main_file, compiler, diff=url.path == "/latexdiff")
             except Refused as e:
                 self._error(400, str(e))
+                return
+            except Stale as e:
+                self._error(409, str(e))
                 return
             except Busy as e:
                 self._error(503, str(e))
@@ -869,6 +1334,29 @@ class Handler(BaseHTTPRequestHandler):
             self._error(422, str(e))
         except subprocess.TimeoutExpired:
             self._error(504, "SyncTeX took too long")
+
+    def _workspace_route(self, key: str, action: str) -> None:
+        service = self.server.service
+        if action == "cancel":
+            self._json(200, {"cancelled": service.cancel(key)})
+            return
+        if action == "forget":
+            try:
+                service.forget(key)
+            except Busy as e:
+                self._error(503, str(e))
+                return
+            self._json(200, {"forgotten": True})
+            return
+        body = self._json_body(MAX_MANIFEST_BODY)
+        if body is None:
+            return
+        try:
+            self._json(200, service.prepare(key, body.get("files"), bool(body.get("clean"))))
+        except Refused as e:
+            self._error(400, str(e))
+        except Busy as e:
+            self._error(503, str(e))
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(f"{self.log_date_time_string()} {fmt % args}\n")

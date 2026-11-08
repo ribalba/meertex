@@ -1214,16 +1214,55 @@ def pdf_pane(env, browser):
     expect(page.locator(".pdfview-page")).to_have_count(1)
     expect(page.locator(".pdf-pages")).to_have_text("1 / 1")
 
-    # Typing compiles on its own, two seconds after the last key.
+    # Typing compiles on its own, a moment after the last key.
     posts = []
-    page.on("request", lambda r: r.method == "POST" and r.url.endswith("/compile") and posts.append(time.monotonic()))
+    bodies = []
+
+    def on_request(r):
+        if r.method == "POST" and r.url.endswith("/compile"):
+            posts.append(time.monotonic())
+            bodies.append(r.post_data_json)
+
+    page.on("request", on_request)
     put_cursor_at_end_of(page, "growing concern.")
     page.keyboard.type(" \\newpage Second page.")
     typed = time.monotonic()
     expect(page.locator(".pdfview-page")).to_have_count(2, timeout=60000)
-    assert posts and posts[0] - typed > 1.5, f"compiled {posts[0] - typed:.1f} s after the last key"
+    assert posts and 0.25 < posts[0] - typed < 1.8, f"compiled {posts[0] - typed:.1f} s after the last key"
+    assert bodies[0]["editor"] is True and not bodies[0]["clean"]
     expect(page.locator(".pdf-pages")).to_contain_text("/ 2")
     env.shot(page, "pdf-1280")
+
+    # A newer edit stops the compile that still runs on the older text. The
+    # first request is held back here, so it is still running for the page.
+    expect(status).to_have_text(re.compile(r"^Compiled in"), timeout=60000)
+    held = []
+    cancels = []
+
+    def seen(found):
+        """Playwright hands over its events only while it runs, so give it a moment."""
+        page.wait_for_timeout(20)
+        return found
+
+    page.route(re.compile(r"/compile$"), lambda route: held.append(route))
+    page.on("request", lambda r: r.method == "POST" and r.url.endswith("/compile/cancel") and cancels.append(r.url))
+    put_cursor_at_end_of(page, "Second page.")
+    page.keyboard.type(" One")
+    wait_until(lambda: seen(held), what="the compile of the first edit")
+    page.keyboard.type(" more")
+    wait_until(lambda: seen(cancels), what="the first compile being stopped")
+    held[0].continue_()
+    page.unroute(re.compile(r"/compile$"))
+    expect(status).to_have_text(re.compile(r"^Compiled in"), timeout=60000)
+
+    # Recompile from scratch asks for a clean build.
+    bodies.clear()
+    page.get_by_label("Compile options").click()
+    page.get_by_role("menuitem", name="Recompile from scratch").click()
+    wait_until(lambda: seen(bodies), what="the clean compile")
+    assert bodies[0]["clean"] is True
+    expect(status).to_have_text(re.compile(r"^Compiled in"), timeout=60000)
+    page.remove_listener("request", on_request)
 
     # An error goes to the problems list, and clicking it opens its line.
     put_cursor_at_end_of(page, "has a box to show.")
