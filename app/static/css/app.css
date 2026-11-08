@@ -1265,7 +1265,10 @@ code.cmd {
 .pdf-split { display: inline-flex; margin-right: 4px; }
 .pdf-split .pdf-recompile { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .pdf-split .pdf-recompile-more { margin-left: -1px; padding: 0 4px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.pdf-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--fg-muted); }
+/* The status takes the room that is left. Its basis is fixed, about as wide as
+   "Compiled in 3.0 s", so which buttons wrap to a second row does not depend on
+   its text and the PDF under the toolbar stays put during a compile. */
+.pdf-status { display: inline-flex; flex: 1 1 112px; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--fg-muted); }
 .pdf-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pdf-status .dot { background: var(--fg-subtle); }
 .pdf-status.is-ok .dot { background: var(--success-emph); }

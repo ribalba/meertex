@@ -1233,6 +1233,26 @@ def pdf_pane(env, browser):
     expect(page.locator(".pdf-pages")).to_contain_text("/ 2")
     env.shot(page, "pdf-1280")
 
+    # The status's text never moves the PDF: at any width of the pane the
+    # toolbar is as high while compiling as after it.
+    jumps = page.evaluate("""() => {
+        const bar = document.querySelector('.pdf-toolbar');
+        const text = document.querySelector('.pdf-status-text');
+        const column = document.querySelector('.editor-pdf');
+        const saved = [text.textContent, column.style.flexBasis];
+        const found = [];
+        for (let width = 280; width <= 560; width += 4) {
+            column.style.flexBasis = `${width}px`;
+            text.textContent = 'Compiled in 3.0 s';
+            const resting = bar.offsetHeight;
+            text.textContent = 'Compiling…';
+            if (bar.offsetHeight !== resting) found.push(width);
+        }
+        [text.textContent, column.style.flexBasis] = saved;
+        return found;
+    }""")
+    assert not jumps, f"the PDF's toolbar changes its height during a compile at these widths: {jumps}"
+
     # A newer edit stops the compile that still runs on the older text. The
     # first request is held back here, so it is still running for the page.
     expect(status).to_have_text(re.compile(r"^Compiled in"), timeout=60000)

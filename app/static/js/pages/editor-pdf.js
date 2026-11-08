@@ -121,7 +121,6 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   const toolbar = h("div", { class: "pdf-toolbar" },
     h("div", { class: "pdf-split" }, recompile, autoMenu),
     status,
-    h("span", { class: "flex-1" }),
     showButton, zoomOut, zoomMenu, zoomIn, pageCount, download,
     h("button", { type: "button", class: "btn-octicon pdf-hide", "aria-label": "Back to the text", onclick: () => onHide?.() }, icon("x")));
   const viewHost = h("div", { class: "pdf-view" });
