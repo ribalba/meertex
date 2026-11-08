@@ -32,7 +32,8 @@ MAX_TOTAL_BYTES = 200 * 1024 * 1024
 JUNK_PARTS = {"__MACOSX", ".git", ".svn", ".DS_Store", "Thumbs.db", "desktop.ini"}
 JUNK_SUFFIXES = (
     ".aux", ".bcf", ".blg", ".dvi", ".fdb_latexmk", ".fls", ".lof", ".log", ".lot",
-    ".nav", ".out", ".run.xml", ".snm", ".synctex.gz", ".toc", ".vrb", ".xdv",
+    ".nav", ".out", ".run.xml", ".snm", ".synctex", ".synctex.gz", ".synctex(busy)", ".synctex.gz(busy)",
+    ".toc", ".vrb", ".xdv",
 )
 
 _DOCUMENTCLASS = re.compile(r"^[ \t]*\\documentclass\b", re.MULTILINE)

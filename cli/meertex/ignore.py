@@ -18,7 +18,9 @@ DEFAULT_RULES = [
     ".meertex/", ".git/", ".claude/", ".venv/", "venv/", "node_modules/", "__pycache__/",
     ".DS_Store", "*~", "*.swp", ".#*",
     "*.aux", "*.bbl", "*.bcf", "*.blg", "*.dvi", "*.fdb_latexmk", "*.fls", "*.lof", "*.log",
-    "*.lot", "*.nav", "*.out", "*.run.xml", "*.snm", "*.synctex.gz", "*.toc", "*.vrb", "*.xdv",
+    "*.lot", "*.nav", "*.out", "*.run.xml", "*.snm", "*.synctex", "*.synctex.gz", "*.toc", "*.vrb", "*.xdv",
+    # What TeX writes SyncTeX to while it runs, renamed when the run ends.
+    "*.synctex(busy)", "*.synctex.gz(busy)",
 ]
 
 

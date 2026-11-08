@@ -768,7 +768,8 @@ server address. `MEERTEX_SERVER` and `MEERTEX_TOKEN` override both.
 .meertex/  .git/  .claude/  .venv/  venv/  node_modules/  __pycache__/
 .DS_Store  *~  *.swp  .#*
 *.aux *.bbl *.bcf *.blg *.dvi *.fdb_latexmk *.fls *.lof *.log *.lot *.nav
-*.out *.run.xml *.snm *.synctex.gz *.toc *.vrb *.xdv
+*.out *.run.xml *.snm *.synctex *.synctex.gz *.synctex(busy) *.synctex.gz(busy)
+*.toc *.vrb *.xdv
 /<main_file stem>.pdf      (only at the root, so a figure sub/main.pdf syncs)
 ```
 
