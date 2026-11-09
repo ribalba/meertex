@@ -386,7 +386,8 @@ def pending_threads_are_invisible_to_others(env, browser):
         assert c.get(env.url(f"/reviews/{env.review}")).status_code == 404
     ctx = env.context(browser, "bob")
     page = env.go(env.page(ctx, "bob"), "/reviews")
-    expect(page.get_by_text("No reviews yet")).to_be_visible()
+    # Bob sees that the review is under way, and nothing of what it says.
+    expect(page.locator(".rv-review-row", has_text="Rita Reviewer").locator(".Label")).to_have_text("Review in progress")
     expect(page.get_by_text("No open conversations")).to_be_visible()
     expect(page.locator(".underline-nav-item .rv-open-count")).to_have_text("0")
     env.go(page, f"/reviews/{env.review}")
@@ -1071,6 +1072,166 @@ def pdf_click_finds_the_word(env, browser):
     page.mouse.click(point["x"], point["y"])
     wait_until(lambda: selection(page)["text"] == 'na\\"ive', timeout=10, what="the accented word selected")
     assert selection(page)["line"] == 5
+    ctx.close()
+
+
+@test
+def reviews_in_progress_are_listed(env, browser):
+    paper = paper_with(env, f"Under way {env.run}", {"main.tex": PAPER}, members={"bob": "editor", "rita": "reviewer"})
+    with env.api("rita") as c:
+        review = c.post(f"/api/projects/{paper['id']}/reviews", json={"ref": "live"})
+        review.raise_for_status()
+        c.post(f"/api/projects/{paper['id']}/threads", json={
+            "path": "main.tex", "line_start": 4, "body": "A private remark.", "review_id": review.json()["id"],
+        }).raise_for_status()
+
+    ctx = env.context(browser, "alice")
+    page = env.page(ctx, "alice")
+    page.goto(f"{env.base}/p/{paper['name']}/reviews")
+    row = page.locator(".rv-review-row", has_text="Rita Reviewer")
+    expect(row.locator(".Label")).to_have_text("Review in progress")
+    expect(row).to_contain_text("1 comment so far, not submitted")
+    expect(page.locator("body")).not_to_contain_text("A private remark.")
+    env.shot(page, "reviews-in-progress-1280")
+
+    # The comments in the editor say it too.
+    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    page.locator(".editor-comments-btn").click()
+    expect(page.locator(".editor-comments-progress")).to_contain_text("Rita Reviewer has a review in progress, 1 comment so far")
+    expect(page.locator(".editor-comments")).not_to_contain_text("A private remark.")
+    env.shot(page, "editor-review-in-progress-1280")
+    ctx.close()
+
+    # The reviewer has their own row and the button to go on with it.
+    ctx = env.context(browser, "rita")
+    page = env.page(ctx, "rita")
+    page.goto(f"{env.base}/p/{paper['name']}/reviews")
+    expect(page.get_by_role("link", name="Continue your review")).to_be_visible()
+    expect(page.get_by_text("Review in progress")).to_have_count(0)
+    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    page.locator(".editor-comments-btn").click()
+    expect(page.locator(".editor-comments .rv-thread").first).to_contain_text("A private remark.")
+    expect(page.locator(".editor-comments-progress")).to_have_count(0)
+    ctx.close()
+
+
+def typing_in(page):
+    """The box the cursor is in, and where in it."""
+    return page.evaluate("""() => {
+        const el = document.activeElement;
+        return { label: el.getAttribute('aria-label'), value: el.value, at: el.selectionStart };
+    }""")
+
+
+def comments_read_again(page):
+    """What the panel does every minute and a few seconds after every edit."""
+    with page.expect_response(lambda r: "/threads?state=all" in r.url):
+        page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+    page.wait_for_timeout(300)
+
+
+@test
+def comment_boxes_keep_the_cursor(env, browser):
+    paper = paper_with(env, f"Cursor {env.run}", {"main.tex": PAPER})
+    threads = f"/api/projects/{paper['id']}/threads"
+    with env.api("alice") as c:
+        c.post(threads, json={"path": "main.tex", "line_start": 6, "body": "First remark."}).raise_for_status()
+    ctx = env.context(browser, "alice")
+    page = env.page(ctx, "alice")
+    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    expect(page.locator(".editor-status")).to_have_text("Connected", timeout=10000)
+    page.locator(".editor-comments-btn").click()
+    panel = page.locator(".editor-comments")
+    panel.get_by_role("button", name="Reply…").click()
+    reply = panel.get_by_label("Reply")
+    page.keyboard.type("Hello there")
+    page.keyboard.press("ArrowLeft")
+
+    # The panel is read again, also when somebody adds a comment above this one.
+    comments_read_again(page)
+    with env.api("alice") as c:
+        c.post(threads, json={"path": "main.tex", "line_start": 4, "body": "Written meanwhile."}).raise_for_status()
+    comments_read_again(page)
+    expect(panel.locator(".editor-comments-list > .rv-thread")).to_have_count(2)
+    now = typing_in(page)
+    assert now["label"] == "Reply" and now["at"] == 10, now
+    page.keyboard.type("!")
+    expect(reply).to_have_value("Hello ther!e")
+    panel.get_by_role("button", name="Cancel").click()
+
+    # The box for a new comment.
+    cm_select(page, "results are good")
+    page.locator(".editor-comment-float").click()
+    compose = page.locator(".editor-compose").get_by_label("Comment")
+    page.keyboard.type("Which ")
+    comments_read_again(page)
+    assert typing_in(page)["label"] == "Comment", typing_in(page)
+    page.keyboard.type("results?")
+    expect(compose).to_have_value("Which results?")
+    ctx.close()
+
+
+LONG = (
+    "\\documentclass{article}\n\\begin{document}\n"
+    + "\n\n".join(f"\\section{{Part {i}}}\n" + " ".join(["This sentence only fills the page."] * 60) for i in range(1, 25))
+    + "\n\\end{document}\n"
+)
+
+
+def pdf_place(page, number):
+    """Where page `number` of the editor's PDF is against the top of its pane, and how wide it is."""
+    return page.evaluate(
+        """(number) => {
+            const scroller = document.querySelector('.editor-pdf .pdfview');
+            const r = document.querySelector(`.editor-pdf .pdfview-page[data-page="${number}"]`).getBoundingClientRect();
+            return { top: Math.round(r.top - scroller.getBoundingClientRect().top), width: Math.round(r.width) };
+        }""",
+        number,
+    )
+
+
+def toggle_comments(page, pause=400):
+    page.locator(".editor-comments-btn").click()
+    page.wait_for_timeout(pause)
+
+
+@test
+def pdf_keeps_its_place_behind_the_comments(env, browser):
+    if not env.compiling:
+        return "skipped, needs --compile or --compile-url"
+    paper = paper_with(env, f"Place {env.run}", {"main.tex": LONG})
+    ctx = env.context(browser, "alice")
+    page = env.page(ctx, "alice")
+    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    expect(page.locator('.editor-pdf .pdfview-page[data-page="4"]')).to_be_attached(timeout=120000)
+    page.wait_for_timeout(1000)
+    page.locator(".editor-pdf .pdfview").evaluate(
+        """el => { el.scrollTop = el.querySelector('.pdfview-page[data-page="4"]').offsetTop + 200; }""")
+    page.wait_for_timeout(300)
+    before = pdf_place(page, 4)
+    assert abs(before["top"] + 200) <= 2, before
+
+    # The comments take the PDF's column, and closing them gives it back as it was.
+    toggle_comments(page)
+    expect(page.locator(".editor-comments")).to_be_visible()
+    toggle_comments(page)
+    expect(page.locator(".editor-pdf .pdfview")).to_be_visible()
+    page.wait_for_timeout(300)
+    after = pdf_place(page, 4)
+    assert abs(after["top"] - before["top"]) <= 2 and after["width"] == before["width"], ("after the comments", before, after)
+
+    # A compile that ends while the comments are open changes nothing about that.
+    download = page.locator(".editor-pdf a[download]")
+    shown = download.get_attribute("href")
+    toggle_comments(page)
+    with env.api("alice") as c:
+        c.put(f"/api/projects/{paper['id']}/files/main.tex", content=LONG.replace("Part 24", "Part XXIV").encode()).raise_for_status()
+    wait_until(lambda: download.get_attribute("href") != shown, timeout=60, what="the new PDF")
+    page.wait_for_timeout(300)
+    toggle_comments(page)
+    page.wait_for_timeout(300)
+    after = pdf_place(page, 4)
+    assert abs(after["top"] - before["top"]) <= 2 and after["width"] == before["width"], ("after a compile", before, after)
     ctx.close()
 
 

@@ -140,6 +140,61 @@ def test_discard_and_one_pending_review_each():
         assert client.post(f"/api/projects/{pid}/reviews", json={"ref": "--all"}).status_code == 422
 
 
+def test_reviews_in_progress_say_who_and_how_many_but_not_what():
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        url = f"/api/projects/{pid}/reviews-in-progress"
+        assert client.get(url).json() == []
+
+        with second_client(REVIEWER) as rita:
+            review = rita.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).json()
+            [started] = client.get(url).json()
+            assert set(started) == {"reviewer", "comments", "started_at", "last_comment_at"}
+            assert started["reviewer"]["email"] == REVIEWER
+            assert started["comments"] == 0 and started["started_at"] and started["last_comment_at"] is None
+
+            thread(rita, pid, "Energie", body="A private remark.", review_id=review["id"])
+            thread(rita, pid, "Köln", review_id=review["id"])
+            response = client.get(url)
+            [going] = response.json()
+            assert going["comments"] == 2 and going["last_comment_at"]
+            assert "private" not in response.text
+
+            # The comments themselves stay hers, and her own review is not news to her.
+            assert client.get(f"/api/projects/{pid}/threads", params={"state": "all"}).json() == []
+            assert rita.get(url).json() == []
+            with second_client(VIEWER) as vera:
+                assert len(vera.get(url).json()) == 1
+
+            assert rita.post(f"{url.replace('-in-progress', '')}/{review['id']}/submit", json={"verdict": "comment"}).status_code == 200
+            assert client.get(url).json() == []
+
+
+def test_a_review_nobody_can_finish_is_not_in_progress():
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        url = f"/api/projects/{pid}/reviews-in-progress"
+        with second_client(REVIEWER) as rita:
+            assert rita.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).status_code == 201
+        members = f"/api/projects/{pid}/members"
+        rita_id = next(m["user_id"] for m in client.get(members).json() if m["email"] == REVIEWER)
+        assert len(client.get(url).json()) == 1
+
+        assert client.patch(f"{members}/{rita_id}", json={"role": "viewer"}).status_code == 200
+        assert client.get(url).json() == []
+        assert client.patch(f"{members}/{rita_id}", json={"role": "reviewer"}).status_code == 200
+        assert len(client.get(url).json()) == 1
+
+        assert client.delete(f"{members}/{rita_id}").status_code == 200
+        assert client.get(url).json() == []
+        with second_client(REVIEWER) as gone:
+            assert gone.get(url).status_code == 404
+
+
 def test_roles():
     with running_app() as client:
         sign_in(client)

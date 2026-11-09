@@ -1268,6 +1268,20 @@ for.
 - The list leaves out requests to people who left the paper or are viewers
   now, because they cannot answer them.
 
+### Reviews in progress
+
+Everybody on the paper sees that somebody has started a review and not
+submitted it yet, so nobody wonders where the comments are. They see who it
+is, how many comments it has so far, when it started and when it was last
+commented on. What the comments say stays with the reviewer until they submit.
+
+```
+in progress  {reviewer: person, comments, started_at, last_comment_at | null}
+```
+
+The list leaves out your own review, and the reviews of people who left the
+paper or are viewers now, because they cannot finish them.
+
 ### Mentions
 
 A comment, a reply, the note of a resolve, an accept or a reopen, and a
@@ -1311,6 +1325,9 @@ mentioned gets a mail, unless they turned that off. The code is in
 
 ### Routes
 
+- `GET /api/projects/{ref}/reviews-in-progress` lists who else has a pending
+  review, newest first, without its comments (see Reviews in progress). Every
+  member sees it.
 - `GET /api/projects/{ref}/reviews` lists the submitted reviews and your own
   pending one, newest first.
 - `POST /api/projects/{ref}/reviews {ref?}` starts a review. `ref` is `HEAD`
@@ -1388,6 +1405,8 @@ commands are in `cli/meertex/cmd_reviews.py`.
   the authors and "Start your review" for the person asked (unless they have a
   pending review to continue). `/p/<name>/reviews/requests/<id>`, the mail's
   link, starts the review and opens its Files view with the note in a flash.
+  Reviews in progress are listed after the requests, with who, how many
+  comments so far and when.
 - A **review page** has three views. *Conversation*: every thread with its
   snippet, comments, suggestions, resolution diff and the buttons for the
   next step. *Files*: the source at the review's commit with line numbers and
@@ -1406,7 +1425,8 @@ commands are in `cli/meertex/cmd_reviews.py`.
 - The **editor** shows open threads as highlighted spans in the text (from
   `start16`/`end16`, moved along with every edit and read again from the
   server a few seconds after edits settle) and in a Comments panel, where
-  authors reply, resolve and apply suggestions. Selecting text shows a
+  authors reply, resolve and apply suggestions. The panel also says who has a
+  review in progress and how many comments it has so far. Selecting text shows a
   floating "Comment" button (also Ctrl+Alt+M), so selecting to copy does not
   open anything. In the review's *Files* view, clicking a line number (shift
   for a range) opens the comment box at once. That view also shows single

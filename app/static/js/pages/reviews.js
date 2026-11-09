@@ -42,9 +42,10 @@ export async function render(ctx) {
   const perms = permissions(p);
   const state = FILTERS.some(([k]) => k === ctx.query.get("state")) ? ctx.query.get("state") : "open";
 
-  const [reviews, requests, threads] = await Promise.all([
+  const [reviews, requests, inProgress, threads] = await Promise.all([
     api.get(projectUrl(ctx.ref, "/reviews")),
     api.get(projectUrl(ctx.ref, "/review-requests")),
+    api.get(projectUrl(ctx.ref, "/reviews-in-progress")),
     api.get(projectUrl(ctx.ref, "/threads"), { query: { state } }),
   ]);
   if (!ctx.alive()) return;
@@ -85,7 +86,11 @@ export async function render(ctx) {
     : null;
 
   const head = h("div", { class: "subhead" }, h("h2", {}, "Reviews ", counter(reviews.length)), ask, action);
-  const rows = [...requests.map((rq) => requestRow(rq, ctx, perms, mine)), ...reviews.map((r) => reviewRow(r, ctx))];
+  const rows = [
+    ...requests.map((rq) => requestRow(rq, ctx, perms, mine)),
+    ...inProgress.map(inProgressRow),
+    ...reviews.map((r) => reviewRow(r, ctx)),
+  ];
   const intro = rows.length ? null : h("div", { class: "box mb-4" }, blankslate({
     iconName: "comment",
     title: "No reviews yet",
@@ -146,6 +151,23 @@ function reviewRow(r, ctx) {
       h("span", { class: c.open ? "color-fg" : "color-muted" }, icon("comment", { size: 14 }), ` ${c.open || 0} open`),
       h("span", { class: "color-muted" }, `${c.resolved || 0} resolved`),
       h("span", { class: "color-muted" }, `${c.accepted || 0} accepted`)));
+}
+
+// Somebody else's review that is not submitted yet, so the others know that
+// comments are coming. The server says who and how many, not what they say.
+function inProgressRow(r) {
+  return h("li", { class: "box-row rv-review-row" },
+    h("span", { class: "rv-review-icon" }, icon("clock", { cls: "color-attention", label: "In progress" })),
+    h("div", { class: "flex-1" },
+      h("div", { class: "rv-review-title" },
+        avatar(r.reviewer, 20),
+        h("strong", { text: personName(r.reviewer) }),
+        h("span", { class: "Label label-attention", text: "Review in progress" })),
+      h("div", { class: "text-small color-muted rv-review-meta" },
+        r.comments ? `${plural(r.comments, "comment")} so far` : "No comments yet",
+        ", not submitted · started ", timeAgo(r.started_at),
+        r.last_comment_at ? [" · last comment ", timeAgo(r.last_comment_at)] : null),
+      h("p", { class: "rv-review-summary", text: "Only they can read these comments until they submit the review." })));
 }
 
 // An open request, above the reviews. The person asked starts it here too,

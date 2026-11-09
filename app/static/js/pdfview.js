@@ -174,11 +174,16 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
   let lastPage = 0;
   let destroyed = false;
   let selected = false;
+  let hidden = false; // the pane went away (display: none) and has not come back yet
+  let seen = null; // where the view was the last time it was on the screen, as anchor() says
 
   const cssScale = () => zoom * PX_PER_POINT;
+  // A pane with display: none, as the PDF is behind the editor's comments, has
+  // no size and no scroll position, so nothing can be measured or fitted.
+  const onScreen = () => scroller.clientWidth > 0;
 
   function fitWidth(list = pages) {
-    if (!list.length) return zoom;
+    if (!list.length || !onScreen()) return zoom;
     const widest = Math.max(...list.map((p) => p.base.width));
     const room = Math.max(120, scroller.clientWidth - 2 * PADDING);
     return Math.min(4, Math.max(0.25, room / (widest * PX_PER_POINT)));
@@ -282,7 +287,8 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
   // Draw what is near the view, let go of what is far from it.
   function update() {
     frame = 0;
-    if (destroyed || !pages.length) return;
+    if (destroyed || !pages.length || !onScreen()) return;
+    seen = anchor();
     const top = scroller.scrollTop;
     const bottom = top + scroller.clientHeight;
     const middle = (top + bottom) / 2;
@@ -311,6 +317,7 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
   // Where the view is, as a page and a fraction of it, to come back to after a change.
   function anchor() {
     if (!pages.length) return null;
+    if (!onScreen()) return seen;
     const top = scroller.scrollTop;
     for (const [i, p] of pages.entries()) {
       if (p.el.offsetTop + p.el.offsetHeight + GAP > top) {
@@ -561,10 +568,18 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
     if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "=")) { e.preventDefault(); step(1); }
     if ((e.ctrlKey || e.metaKey) && e.key === "-") { e.preventDefault(); step(-1); }
   });
-  // A wider or narrower pane changes the zoom that fits the width.
+  // A wider or narrower pane changes the zoom that fits the width. A pane that
+  // goes away keeps its zoom, and comes back at the place it was.
   const resized = new ResizeObserver(() => {
+    if (!onScreen()) {
+      hidden = true;
+      return;
+    }
+    const back = hidden ? seen : null;
+    hidden = false;
     if (mode === "width" && pages.length) setZoom("width");
-    else schedule();
+    restore(back);
+    schedule();
   });
   resized.observe(scroller);
 

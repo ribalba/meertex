@@ -209,7 +209,7 @@ function renderConversation(ctx) {
     const finish = h("button", { type: "button", class: "btn btn-sm", text: "Finish your review", onclick: () => finishDialog(ctx, review) });
     parts.push(flashBox(h("div", {},
       h("p", { class: "mb-2" }, h("strong", { text: "This review is pending." }), " ",
-        `Only you see it and its ${plural(threads.length, "comment")} until you finish it.`),
+        `Only you can read its ${plural(threads.length, "comment")} until you finish it. The others on the paper see that it is in progress and how many comments it has.`),
       h("div", { class: "flash-actions mt-0" }, finish,
         h("a", { class: "btn btn-sm", href: `${ctx.rbase}/files` }, icon("file-text"), "Comment on the files"))), "warn", { iconName: "clock" }));
   } else if (review.state === "pending") {

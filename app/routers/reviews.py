@@ -8,7 +8,8 @@ request (app/anchors.py), so no stored offset has to follow the edits.
 
 A pending review and its threads exist only for their reviewer. Every lookup
 below filters on that, so for anybody else they are 404, and they never make a
-thread id prefix ambiguous.
+thread id prefix ambiguous. The one thing the others learn is that a review is
+under way and how many comments it has so far (reviews_in_progress).
 
 State changes lock the thread's row, so two people resolving at once cannot
 both win. Snapshots store the live document through their own database
@@ -65,6 +66,7 @@ from ..models import (
 )
 from ..review_serialize import (
     People,
+    in_progress_dict,
     request_dict,
     review_dict,
     thread_dict,
@@ -411,6 +413,37 @@ def list_reviews(ref: str, db: DB, user: SessionOrTokenUser) -> list[dict]:
     reviews = db.query(Review).filter(Review.project_id == project.id, _review_visible(user)).all()
     reviews.sort(key=lambda r: r.submitted_at or r.created_at, reverse=True)
     return _reviews_out(db, reviews)
+
+
+@router.get("/projects/{ref}/reviews-in-progress")
+def reviews_in_progress(ref: str, db: DB, user: SessionOrTokenUser) -> list[dict]:
+    """Who else has started a review and not submitted it yet, newest first,
+    so the others know that comments are coming. A review of somebody who left
+    or is a viewer now is left out, because they cannot finish it."""
+    project, _ = resolve_project(db, user, ref)
+    reviews = (
+        db.query(Review)
+        .join(Membership, (Membership.project_id == Review.project_id) & (Membership.user_id == Review.reviewer_id))
+        .filter(
+            Review.project_id == project.id,
+            Review.state == "pending",
+            Review.reviewer_id != user.id,
+            Membership.role != "viewer",
+        )
+        .order_by(Review.created_at.desc())
+        .all()
+    )
+    if not reviews:
+        return []
+    written = {
+        review_id: (comments, last)
+        for review_id, comments, last in db.query(Thread.review_id, func.count(), func.max(Thread.updated_at))
+        .filter(Thread.review_id.in_([r.id for r in reviews]))
+        .group_by(Thread.review_id)
+        .all()
+    }
+    people = People(db, (r.reviewer_id for r in reviews))
+    return [in_progress_dict(r, people, *written.get(r.id, (0, None))) for r in reviews]
 
 
 def _start(db: DBSession, project: Project, user: User, commit: str, version_id: str | None) -> tuple[Review, bool]:

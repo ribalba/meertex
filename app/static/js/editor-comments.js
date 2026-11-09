@@ -20,7 +20,7 @@ import { api, enc, projectUrl, request } from "./api.js";
 import { h, clear, plural } from "./dom.js";
 import { icon } from "./icons.js";
 import { session } from "./session.js";
-import { counter, flash } from "./ui.js";
+import { counter, flash, personName } from "./ui.js";
 import {
   commentForm, linesText, permissions, refreshOpenCounts, threadCard, toCodePoints,
 } from "./threads.js";
@@ -35,6 +35,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
   const url = (rest) => projectUrl(project.id, rest);
   let threads = [];
   let reviews = [];
+  let inProgress = []; // the reviews others have started and not submitted
   let field = null;
   let setSpans = null;
   let selected = null;
@@ -78,7 +79,9 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
 
   const list = h("div", { class: "editor-comments-list" });
   const composeHost = h("div");
-  const body = h("div", { class: "editor-comments-body" }, composeHost, list);
+  const progressHost = h("div", { hidden: true });
+  const more = h("details", { class: "editor-comments-more" }, h("summary"));
+  const body = h("div", { class: "editor-comments-body" }, composeHost, progressHost, list);
   const el = h("section", { class: "editor-comments", "aria-label": "Comments" },
     h("div", { class: "editor-comments-head" },
       icon("comment", { cls: "color-muted" }),
@@ -105,6 +108,31 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     return card;
   }
 
+  // `parent`'s children become `nodes`. Whatever stays where it is stays in the
+  // page, because a box taken out of it loses the cursor of whoever writes there.
+  function settle(parent, nodes) {
+    const wanted = new Set(nodes);
+    for (const child of [...parent.childNodes]) if (!wanted.has(child)) child.remove();
+    let at = parent.firstChild;
+    for (const node of nodes) {
+      if (node === at) at = at.nextSibling;
+      else parent.insertBefore(node, at);
+    }
+  }
+
+  // Who else has a review under way, so nobody wonders where their comments
+  // are. What the comments say stays with them until they submit.
+  function paintProgress() {
+    progressHost.hidden = !inProgress.length;
+    clear(progressHost).append(...inProgress.map((r) => h("p", { class: "editor-comments-progress" },
+      icon("clock", { size: 14, cls: "color-attention" }),
+      h("span", {},
+        h("strong", { text: personName(r.reviewer) }),
+        r.comments
+          ? ` has a review in progress, ${plural(r.comments, "comment")} so far, not submitted. Only they can read them until they submit.`
+          : " has started a review and not commented yet."))));
+  }
+
   function paint() {
     const here = threads.filter(inFile);
     const open = here.filter((t) => t.state === "open").length;
@@ -112,37 +140,39 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     count.hidden = !open;
     button.title = open ? `${plural(open, "open comment")} on this file` : "Show the comments on this file";
     if (!shownNow) return;
-    clear(list);
+    paintProgress();
     if (!path()) {
-      list.append(h("p", { class: "editor-comments-empty", text: "Comments are on the text of a file. Open one." }));
+      clear(list).append(h("p", { class: "editor-comments-empty", text: "Comments are on the text of a file. Open one." }));
       return;
     }
     if (!loaded) {
-      list.append(h("p", { class: "editor-comments-empty", text: "Loading the comments…" }));
+      clear(list).append(h("p", { class: "editor-comments-empty", text: "Loading the comments…" }));
       return;
     }
     const active = here.filter((t) => t.state !== "accepted");
     const accepted = here.filter((t) => t.state === "accepted");
+    const nodes = [];
     if (!active.length && !compose) {
-      list.append(h("p", { class: "editor-comments-empty", text: perms.comment
+      nodes.push(h("p", { class: "editor-comments-empty", text: perms.comment
         ? "No open comments on this file. Select text and click Comment to start one."
         : "No open comments on this file." }));
     }
-    list.append(...active.map(cardFor));
+    nodes.push(...active.map(cardFor));
     if (accepted.length) {
-      list.append(h("details", { class: "editor-comments-more" },
-        h("summary", {}, `${plural(accepted.length, "accepted comment")}`),
-        accepted.map(cardFor)));
+      more.firstChild.textContent = plural(accepted.length, "accepted comment");
+      settle(more, [more.firstChild, ...accepted.map(cardFor)]);
+      nodes.push(more);
     }
     const others = new Map();
     for (const t of threads) if (!inFile(t) && t.state === "open") others.set(t.path, (others.get(t.path) || 0) + 1);
     if (others.size) {
-      list.append(h("div", { class: "editor-comments-others" },
+      nodes.push(h("div", { class: "editor-comments-others" },
         h("h3", { text: "Open comments on other files" }),
         h("ul", {}, [...others].sort((a, b) => a[0].localeCompare(b[0])).map(([p, n]) => h("li", {},
           h("button", { type: "button", class: "btn-link text-mono", text: p, onclick: () => openFile(p, firstLine(p)) }),
           h("span", { class: "color-muted", text: ` · ${n}` }))))));
     }
+    settle(list, nodes);
     if (selected) cards.get(selected)?.classList.add("is-selected");
   }
 
@@ -397,13 +427,15 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     if (loading) return loading;
     loading = (async () => {
       try {
-        const [list, revs] = await Promise.all([
+        const [list, revs, underWay] = await Promise.all([
           api.get(url("/threads"), { query: { state: "all" } }),
           api.get(url("/reviews")),
+          api.get(url("/reviews-in-progress")),
         ]);
         if (dead) return;
         threads = list;
         reviews = revs;
+        inProgress = underWay;
         env.reviews = new Map(revs.map((r) => [r.id, r]));
         // Cards of threads that changed are drawn again, unless something is being written in them.
         for (const t of threads) {
