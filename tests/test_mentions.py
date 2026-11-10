@@ -1,4 +1,4 @@
-"""@-mentions in comments, notes and review summaries (DESIGN §13, Mentions):
+"""@-mentions in comments, review comments and notes (DESIGN §13, Mentions):
 what counts as one, what is stored and who is mailed."""
 
 import pytest
@@ -180,7 +180,7 @@ def test_a_note_mentions_too(mails):
 
 
 @needs_db
-def test_a_pending_review_tells_its_mentions_when_it_is_submitted(mails):
+def test_a_review_comment_mails_whom_it_mentions_at_once(mails):
     with running_app() as client:
         sign_in(client)
         pid = project_with(client)["id"]
@@ -188,23 +188,30 @@ def test_a_pending_review_tells_its_mentions_when_it_is_submitted(mails):
         mails.clear()
         with second_client(REVIEWER) as rita:
             review = rita.post(f"/api/projects/{pid}/reviews").json()
-            t = thread(rita, pid, "The end.", body="@Vera Viewer knows this.", review_id=review["id"])
-            rita.post(f"/api/projects/{pid}/threads/{t['id']}/comments", json={"body": "And @Rita Reviewer."})
-            assert t["pending"] and mails == []
-            r = rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit",
-                          json={"verdict": "changes_requested", "summary": "Thanks, @Eddi."})
-            assert r.status_code == 200, r.text
-            assert [p["email"] for p in r.json()["mentions"]] == [EDITOR]
-        assert _to(mails) == {
-            OWNER: "Rita Reviewer reviewed Green LLMs",
-            EDITOR: "Rita Reviewer reviewed Green LLMs",
-            VIEWER: "Rita Reviewer mentioned you in a review of Green LLMs",
-        }
-        body = {m["to"]: m["body"] for m in mails}
-        assert "It mentions you." in body[EDITOR] and "It mentions you." not in body[OWNER]
-        assert body[VIEWER].startswith('Rita Reviewer reviewed "Green LLMs", asked for changes and mentioned you.')
-        assert f"http://testserver/p/paper/reviews/{review['id']}" in body[VIEWER]
-        assert "settings#mentions" in body[VIEWER]
+            t = thread(rita, pid, "The end.", body="@Vera Viewer knows this. @Rita Reviewer", review_id=review["id"])
+            # The review's first comment: the authors hear it started, the viewer that she is mentioned.
+            assert _to(mails) == {
+                OWNER: "Rita Reviewer started a review of Green LLMs",
+                EDITOR: "Rita Reviewer started a review of Green LLMs",
+                VIEWER: "Rita Reviewer mentioned you on Green LLMs",
+            }
+            vera = next(m for m in mails if m["to"] == VIEWER)["body"]
+            assert vera.startswith('Rita Reviewer mentioned you in a comment on "Green LLMs".')
+            assert f"http://testserver/p/paper/reviews/{review['id']}#thread-{t['id']}" in vera
+            assert "settings#mentions" in vera
+            mails.clear()
+
+            # A later comment of the same sitting mails nobody but whom it mentions, and them at once.
+            thread(rita, pid, "Köln", body="Which city?", review_id=review["id"])
+            assert mails == []
+            later = thread(rita, pid, "Energie", body="@Eddi and @Didi Hoffmann, is this right?",
+                           review_id=review["id"])
+            assert [p["email"] for p in later["comments"][0]["mentions"]] == [EDITOR, OWNER]
+            assert _to(mails) == {
+                EDITOR: "Rita Reviewer mentioned you on Green LLMs",
+                OWNER: "Rita Reviewer mentioned you on Green LLMs",
+            }
+            assert all("mentioned you in a comment" in m["body"] for m in mails)
 
 
 @needs_db

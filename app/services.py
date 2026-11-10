@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from . import compiler, lifecycle, live, naming, serialize, tree, when
@@ -25,7 +25,6 @@ from .models import (
     Membership,
     Project,
     ProjectDate,
-    Review,
     Thread,
     User,
     Version,
@@ -464,17 +463,14 @@ def _folder_path(paths: dict[str, str], membership: Membership) -> str:
     return paths.get(membership.folder_id, "") if membership.folder_id else ""
 
 
-def open_threads(db: DBSession, user: User, project_ids: list[str]) -> dict[str, int]:
-    """Open review threads per project that ``user`` can see: single comments,
-    threads of submitted reviews, and the threads of their own pending review
+def open_threads(db: DBSession, project_ids: list[str]) -> dict[str, int]:
+    """Open review threads per project, single comments and those of reviews
     (DESIGN §13). Counted without anchoring, which costs a diff per thread."""
     if not project_ids:
         return {}
-    visible = or_(Thread.review_id.is_(None), Review.state == "submitted", Review.reviewer_id == user.id)
     rows = (
         db.query(Thread.project_id, func.count(Thread.id))
-        .outerjoin(Review, Review.id == Thread.review_id)
-        .filter(Thread.project_id.in_(project_ids), Thread.state == "open", visible)
+        .filter(Thread.project_id.in_(project_ids), Thread.state == "open")
         .group_by(Thread.project_id)
         .all()
     )
@@ -485,7 +481,7 @@ def summaries(db: DBSession, user: User, rows: list[tuple[Project, Membership]],
     ids = [p.id for p, _ in rows]
     dates = dates_by_project(db, ids)
     submitted = submitted_projects(db, ids)
-    threads = open_threads(db, user, ids)
+    threads = open_threads(db, ids)
     paths = tree.paths(tree.load(db, user.id))
     return [
         serialize.summary(
@@ -517,7 +513,7 @@ def detail(db: DBSession, user: User, project: Project, membership: Membership) 
     paths = tree.paths(tree.load(db, user.id))
     out = serialize.summary(
         project, membership, _folder_path(paths, membership), dates, has_submission, now,
-        writing_days=user.writing_days, open_threads=open_threads(db, user, [project.id]).get(project.id, 0),
+        writing_days=user.writing_days, open_threads=open_threads(db, [project.id]).get(project.id, 0),
     )
     out.update(serialize.detail_fields(project))
     out["owner"] = serialize.person(users.get(project.owner_id))

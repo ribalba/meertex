@@ -1896,13 +1896,6 @@ textarea.rv-textarea { min-height: 72px; }
 .editor-comments-list .rv-resolution { margin: 0 12px 12px; }
 .editor-comments-list .rv-comment { gap: 8px; }
 .editor-comments-empty { margin: 4px; font-size: 12px; color: var(--fg-muted); }
-.editor-comments-progress {
-  display: flex; gap: 6px; margin: 0; padding: 8px; font-size: 12px; color: var(--fg-muted);
-  background: var(--attention-bg); border-radius: var(--radius);
-}
-.editor-comments-progress + .editor-comments-progress { margin-top: 4px; }
-.editor-comments-progress .icon { flex: none; margin-top: 1px; }
-.editor-comments-progress strong { color: var(--fg); }
 .editor-comments-more > summary { padding: 4px; font-size: 12px; color: var(--fg-muted); cursor: pointer; }
 .editor-comments-more[open] > summary { margin-bottom: 8px; }
 .editor-comments-more > .rv-thread + .rv-thread { margin-top: 8px; }
@@ -1913,7 +1906,6 @@ textarea.rv-textarea { min-height: 72px; }
 .editor-comment-float { position: absolute; z-index: 6; box-shadow: var(--shadow-overlay); }
 .cm-rv-thread { background-color: #fff8c5; border-bottom: 2px solid #d4a72c; }
 .cm-rv-thread.is-resolved { background-color: #f6efff; border-bottom-color: #c297ff; }
-.cm-rv-thread.is-pending { border-bottom-style: dashed; }
 .cm-rv-thread.is-selected { background-color: #ffe58f; }
 
 /* The last compile's problems in the editor's text (editor-problems.js): the

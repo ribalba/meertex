@@ -1,6 +1,6 @@
 """Review requests (DESIGN §13, Requests): asking a member for a review, the
-mail with its link, starting the review on the state asked for, answering by
-submitting, asking again, withdrawing, and who may do what."""
+mail with its link, starting the review on the state asked for, answering with
+the first comment in a review, asking again, withdrawing, and who may do what."""
 
 import pytest
 from helpers import needs_db, running_app, second_client, sign_in
@@ -52,6 +52,8 @@ def test_a_request_mails_a_link_that_starts_the_review(mails):
         assert mail["subject"] == f"{OWNER} asked you to review Green LLMs"
         assert f'review the version "{version["label"]}" of "Green LLMs".' in mail["body"]
         assert "The intro, please." in mail["body"]
+        assert "Everybody on the paper sees your comments as soon as you write them." in mail["body"]
+        assert "pending" not in mail["body"]
         assert f"http://testserver/p/paper/reviews/requests/{rq['id']}" in mail["body"]
         assert client.get(f"/api/projects/{pid}/review-requests").json() == [rq]
 
@@ -63,15 +65,19 @@ def test_a_request_mails_a_link_that_starts_the_review(mails):
             r = rita.post(f"/api/projects/{pid}/review-requests/{rq['id']}/start")
             assert r.status_code == 201, r.text
             review = r.json()
-            assert (review["state"], review["commit"], review["version"]["tag"]) == ("pending", version["commit"],
+            assert (review["state"], review["commit"], review["version"]["tag"]) == ("open", version["commit"],
                                                                                       version["tag"])
             again = rita.post(f"/api/projects/{pid}/review-requests/{rq['id']}/start")
             assert (again.status_code, again.json()["id"]) == (200, review["id"])
             # Starting it does not answer it yet.
             assert [x["id"] for x in client.get(f"/api/projects/{pid}/review-requests").json()] == [rq["id"]]
 
-            r = rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit", json={"verdict": "approve"})
-            assert r.status_code == 200, r.text
+            # Her first comment in the review does.
+            r = rita.post(f"/api/projects/{pid}/threads", json={
+                "path": "main.tex", "ref": review["commit"], "line_start": 2, "body": "Which energy?",
+                "review_id": review["id"]})
+            assert r.status_code == 201, r.text
+            comment = r.json()["comments"][0]["id"]
 
             assert client.get(f"/api/projects/{pid}/review-requests").json() == []
             done = client.get(f"/api/projects/{pid}/review-requests/{rq['id']}").json()
@@ -79,6 +85,11 @@ def test_a_request_mails_a_link_that_starts_the_review(mails):
             assert done["done_at"]
             assert rita.post(f"/api/projects/{pid}/review-requests/{rq['id']}/start").status_code == 422
             assert client.delete(f"/api/projects/{pid}/review-requests/{rq['id']}").status_code == 422
+
+            # It stays answered when she deletes the comment and discards the review.
+            assert rita.delete(f"/api/projects/{pid}/comments/{comment}").status_code == 200
+            assert rita.delete(f"/api/projects/{pid}/reviews/{review['id']}").json() == {"ok": True}
+            assert client.get(f"/api/projects/{pid}/review-requests/{rq['id']}").json()["state"] == "done"
 
 
 def test_without_a_ref_the_snapshot_is_taken_when_the_review_starts(mails):
@@ -105,7 +116,7 @@ def test_without_a_ref_the_snapshot_is_taken_when_the_review_starts(mails):
             assert r.status_code == 201, r.text
             review = r.json()
             assert review["commit"] != asked_at
-            assert (review["version"], review["state"]) == (None, "pending")
+            assert (review["version"], review["state"]) == (None, "open")
             text = client.get(f"/api/projects/{pid}/files/main.tex", params={"ref": review["commit"]}).text
             assert text == "The fixed text.\n"
             # The request keeps no commit, so starting again after a discard
@@ -170,20 +181,44 @@ def test_who_may_ask_and_who_may_be_asked(mails):
             assert client.get(url).json() == []
 
 
-def test_any_review_answers_the_request(mails):
+def test_the_first_comment_in_any_of_her_reviews_answers_the_request(mails):
     with running_app() as client:
         sign_in(client)
         pid = project_with(client)["id"]
         _team(client, pid)
-        with second_client(REVIEWER) as rita:
-            # A review that was started before the request is the one the request opens.
-            mine = rita.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).json()
-            put(client, pid, "main.tex", "Newer text.\n")
-            rq = client.post(f"/api/projects/{pid}/review-requests", json={"reviewer": REVIEWER, "ref": "live"}).json()
-            assert rq["commit"] != mine["commit"]
-            r = rita.post(f"/api/projects/{pid}/review-requests/{rq['id']}/start")
-            assert (r.status_code, r.json()["id"], r.json()["commit"]) == (200, mine["id"], mine["commit"])
+        url = f"/api/projects/{pid}"
+        with second_client(REVIEWER) as rita, second_client(EDITOR) as eddi:
+            # Her review of the state asked for, started before the request, is the one it opens.
+            mine = rita.post(f"{url}/reviews", json={"ref": "live"}).json()
+            rq = client.post(f"{url}/review-requests", json={"reviewer": REVIEWER, "ref": "live"}).json()
+            assert rq["commit"] == mine["commit"]
+            r = rita.post(f"{url}/review-requests/{rq['id']}/start")
+            assert (r.status_code, r.json()["id"]) == (200, mine["id"])
 
-            rita.post(f"/api/projects/{pid}/reviews/{mine['id']}/submit", json={"verdict": "comment"})
-            done = client.get(f"/api/projects/{pid}/review-requests/{rq['id']}").json()
+            # Asked again for a newer state, starting gives a review of its own.
+            put(client, pid, "main.tex", "Newer text.\n")
+            r = client.post(f"{url}/review-requests", json={"reviewer": REVIEWER, "ref": "live"})
+            assert (r.status_code, r.json()["id"]) == (200, rq["id"])
+            rq = r.json()
+            assert rq["commit"] != mine["commit"]
+            r = rita.post(f"{url}/review-requests/{rq['id']}/start")
+            assert r.status_code == 201, r.text
+            newer = r.json()
+            assert (newer["commit"], newer["state"]) == (rq["commit"], "open")
+            assert newer["id"] != mine["id"]
+
+            # Neither starting, nor a single comment, nor somebody else's review comment answers it.
+            single = {"path": "main.tex", "line_start": 1, "body": "Just a note."}
+            assert rita.post(f"{url}/threads", json=single).status_code == 201
+            theirs = eddi.post(f"{url}/reviews").json()
+            assert eddi.post(f"{url}/threads", json={**single, "review_id": theirs["id"]}).status_code == 201
+            assert client.get(f"{url}/review-requests/{rq['id']}").json()["state"] == "open"
+
+            # Her first comment in any of her reviews does, here the older one.
+            r = rita.post(f"{url}/threads", json={
+                "path": "main.tex", "ref": mine["commit"], "line_start": 1, "body": "Still true?",
+                "review_id": mine["id"]})
+            assert r.status_code == 201, r.text
+            done = client.get(f"{url}/review-requests/{rq['id']}").json()
             assert (done["state"], done["review_id"]) == ("done", mine["id"])
+            assert done["done_at"]

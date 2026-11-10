@@ -13,11 +13,12 @@
  *   MEERTEX_SPELLCHECK_LANGS=en-GB,fr npm start
  *
  * The editor's agent panel, which runs the local `claude` command in the
- * paper's checkout, is in agent.js.
+ * paper's checkout, is in agent.js. Find in page (Ctrl+F) is in find.js.
  */
 const { app, BrowserWindow, Menu, dialog, session, shell } = require("electron");
 const path = require("path");
 const agent = require("./agent");
+const find = require("./find");
 
 const APP_URL = (process.env.MEERTEX_URL || "https://meertex.com").replace(/\/+$/, "");
 const APP_ORIGIN = new URL(APP_URL).origin;
@@ -304,14 +305,32 @@ function goForward() {
 
 /* The page sees a key before the menu does, and a menu accelerator fires only
  * when the page did not handle the key (tested on Linux with Electron 44, not
- * on macOS). So Ctrl+Z stays the editor's own undo, and Alt+Left keeps its
- * editor meaning while the cursor is in the text, as in a browser. */
+ * on macOS). So Ctrl+Z stays the editor's own undo, Ctrl+F the editor's own
+ * search in its text, and Alt+Left keeps its editor meaning while the cursor is
+ * in the text, as in a browser.
+ *
+ * The Edit menu is Electron's own (role "editMenu") with the find items added,
+ * since a role menu takes no items of ours. */
 function buildMenu() {
   const isMac = process.platform === "darwin";
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     ...(isMac ? [{ role: "appMenu" }] : []),
     { role: "fileMenu" },
-    { role: "editMenu" },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" }, { role: "redo" }, { type: "separator" },
+        { role: "cut" }, { role: "copy" }, { role: "paste" },
+        ...(isMac
+          ? [{ role: "pasteAndMatchStyle" }, { role: "delete" }, { role: "selectAll" }]
+          : [{ role: "delete" }, { type: "separator" }, { role: "selectAll" }]),
+        { type: "separator" },
+        ...find.menuItems(isMac),
+        ...(isMac
+          ? [{ type: "separator" }, { label: "Speech", submenu: [{ role: "startSpeaking" }, { role: "stopSpeaking" }] }]
+          : []),
+      ],
+    },
     {
       label: "View",
       submenu: [
@@ -364,6 +383,7 @@ if (!app.requestSingleInstanceLock()) {
     registerProtocol();
     setPermissions();
     agent.setup(session.fromPartition(PARTITION), APP_ORIGIN);
+    find.setup();
     setSpellCheckLanguages();
     buildMenu();
     createWindow();

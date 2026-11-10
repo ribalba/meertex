@@ -8,7 +8,6 @@ in, because finding it needs the live document.
 """
 
 from collections.abc import Iterable
-from datetime import datetime
 
 from sqlalchemy.orm import Session as DBSession
 
@@ -62,7 +61,6 @@ def thread_dict(
     span: Span,
     comments: list[Comment],
     people: People,
-    review: Review | None,
     project: Project | None = None,
 ) -> dict:
     """``project`` is given for the list across projects, which names it."""
@@ -82,7 +80,6 @@ def thread_dict(
         "id": t.id,
         "review_id": t.review_id,
         "state": t.state,
-        "pending": review is not None and review.state == "pending",
         "created_by": people.get(t.created_by),
         "created_at": iso(t.created_at),
         "updated_at": iso(t.updated_at),
@@ -131,17 +128,6 @@ def request_dict(rq: ReviewRequest, people: People, version: Version | None) -> 
         "review_id": rq.review_id,
         "created_at": iso(rq.created_at),
         "done_at": iso(rq.done_at),
-    }
-
-
-def in_progress_dict(r: Review, people: People, comments: int, last_comment: datetime | None) -> dict:
-    """A pending review as the others on the paper see it (§13, Reviews in
-    progress): whose it is and how far it got, never what its comments say."""
-    return {
-        "reviewer": people.get(r.reviewer_id),
-        "comments": comments,
-        "started_at": iso(r.created_at),
-        "last_comment_at": iso(last_comment),
     }
 
 

@@ -42,10 +42,9 @@ export async function render(ctx) {
   const perms = permissions(p);
   const state = FILTERS.some(([k]) => k === ctx.query.get("state")) ? ctx.query.get("state") : "open";
 
-  const [reviews, requests, inProgress, threads] = await Promise.all([
+  const [reviews, requests, threads] = await Promise.all([
     api.get(projectUrl(ctx.ref, "/reviews")),
     api.get(projectUrl(ctx.ref, "/review-requests")),
-    api.get(projectUrl(ctx.ref, "/reviews-in-progress")),
     api.get(projectUrl(ctx.ref, "/threads"), { query: { state } }),
   ]);
   if (!ctx.alive()) return;
@@ -58,12 +57,13 @@ export async function render(ctx) {
       linked = await api.get(projectUrl(ctx.ref, `/threads/${enc(wanted[1])}`));
     } catch (err) {
       if (err.status !== 404) throw err;
-      flash("That conversation is gone, or it is part of a review that is not submitted yet.", "warn");
+      flash("That conversation is gone. Its comments were deleted.", "warn");
     }
     if (!ctx.alive()) return;
   }
 
-  const mine = reviews.find((r) => r.state === "pending" && r.reviewer?.id === session.me?.id) || null;
+  // Your newest open review, to continue.
+  const mine = reviews.find((r) => r.state === "open" && r.reviewer?.id === session.me?.id) || null;
   const env = {
     project: p,
     base: ctx.base,
@@ -73,22 +73,24 @@ export async function render(ctx) {
     onChange: () => refreshOpenCounts(p.id),
   };
 
+  // Starting another review is for another state, so with a review of your
+  // own, continuing it is the main button.
   let action = null;
-  if (mine) {
-    action = h("a", { class: "btn btn-primary", href: `${ctx.base}/reviews/${enc(mine.id)}/files` }, icon("comment"), "Continue your review");
-  } else if (perms.comment) {
-    action = h("button", { type: "button", class: "btn btn-primary" }, icon("comment"), "Start a review");
+  if (perms.comment) {
+    action = h("button", { type: "button", class: mine ? "btn" : "btn btn-primary" }, icon("comment"), "Start a review");
     action.addEventListener("click", () => startReviewDialog(ctx));
   }
+  const resume = mine
+    ? h("a", { class: "btn btn-primary", href: `${ctx.base}/reviews/${enc(mine.id)}/files` }, icon("comment"), "Continue your review")
+    : null;
 
   const ask = perms.resolve
     ? h("button", { type: "button", class: "btn", onclick: () => requestReviewDialog(ctx, requests) }, icon("person"), "Request a review")
     : null;
 
-  const head = h("div", { class: "subhead" }, h("h2", {}, "Reviews ", counter(reviews.length)), ask, action);
+  const head = h("div", { class: "subhead" }, h("h2", {}, "Reviews ", counter(reviews.length)), ask, action, resume);
   const rows = [
-    ...requests.map((rq) => requestRow(rq, ctx, perms, mine)),
-    ...inProgress.map(inProgressRow),
+    ...requests.map((rq) => requestRow(rq, ctx, perms)),
     ...reviews.map((r) => reviewRow(r, ctx)),
   ];
   const intro = rows.length ? null : h("div", { class: "box mb-4" }, blankslate({
@@ -97,7 +99,7 @@ export async function render(ctx) {
     text: perms.comment
       ? "A review comments on a fixed state of the paper, a version or the text as it is now. The authors reply, change the text and resolve each comment. You see how it changed and accept it."
       : "Reviewers, editors and the owner can review the paper. Their reviews show up here.",
-    action: action && !mine ? h("button", { type: "button", class: "btn btn-primary", text: "Start the first review", onclick: () => startReviewDialog(ctx) }) : null,
+    action: action ? h("button", { type: "button", class: "btn btn-primary", text: "Start the first review", onclick: () => startReviewDialog(ctx) }) : null,
   }));
   const list = rows.length ? h("ul", { class: "box box-list mb-4 rv-review-list", "aria-label": "Reviews" }, rows) : null;
 
@@ -153,30 +155,12 @@ function reviewRow(r, ctx) {
       h("span", { class: "color-muted" }, `${c.accepted || 0} accepted`)));
 }
 
-// Somebody else's review that is not submitted yet, so the others know that
-// comments are coming. The server says who and how many, not what they say.
-function inProgressRow(r) {
-  return h("li", { class: "box-row rv-review-row" },
-    h("span", { class: "rv-review-icon" }, icon("clock", { cls: "color-attention", label: "In progress" })),
-    h("div", { class: "flex-1" },
-      h("div", { class: "rv-review-title" },
-        avatar(r.reviewer, 20),
-        h("strong", { text: personName(r.reviewer) }),
-        h("span", { class: "Label label-attention", text: "Review in progress" })),
-      h("div", { class: "text-small color-muted rv-review-meta" },
-        r.comments ? `${plural(r.comments, "comment")} so far` : "No comments yet",
-        ", not submitted · started ", timeAgo(r.started_at),
-        r.last_comment_at ? [" · last comment ", timeAgo(r.last_comment_at)] : null),
-      h("p", { class: "rv-review-summary", text: "Only they can read these comments until they submit the review." })));
-}
-
 // An open request, above the reviews. The person asked starts it here too,
-// unless they have a pending review to continue (`pending`), and the authors
-// withdraw it.
-function requestRow(rq, ctx, perms, pending) {
+// and the authors withdraw it. Their first review comment answers it.
+function requestRow(rq, ctx, perms) {
   const who = personName(rq.reviewer);
   const mine = rq.reviewer?.id === session.me?.id;
-  const start = mine && !pending ? h("button", { type: "button", class: "btn btn-sm btn-primary", text: "Start your review" }) : null;
+  const start = mine ? h("button", { type: "button", class: "btn btn-sm btn-primary", text: "Start your review" }) : null;
   start?.addEventListener("click", () => busy(start, () => startRequested(ctx, rq)).catch(flashError));
   const withdraw = perms.resolve ? h("button", { type: "button", class: "btn btn-sm", text: "Withdraw" }) : null;
   withdraw?.addEventListener("click", async () => {
@@ -241,7 +225,7 @@ export function startReviewDialog(ctx, { preselect = null } = {}) {
   const d = openDialog({
     title: "Start a review",
     body: [
-      h("p", { text: "Comments are made on one fixed state of the paper. Pick it here. Your comments stay pending, and only you see them, until you finish the review." }),
+      h("p", { text: "Comments are made on one fixed state of the paper. Pick it here. Everybody on the paper sees each comment as soon as you add it. There is nothing to submit at the end." }),
       states.el,
     ],
     footer: [h("button", { type: "button", class: "btn", text: "Cancel", onclick: () => d.close() }), start],
@@ -252,7 +236,7 @@ export function startReviewDialog(ctx, { preselect = null } = {}) {
       const res = await busy(start, () => request("POST", projectUrl(ctx.ref, "/reviews"), { body: { ref }, raw: true }));
       const review = await res.json();
       d.close();
-      if (res.status === 200) queueFlash("You have a pending review already. Here it is. Finish or discard it to start another one.", "info");
+      if (res.status === 200) queueFlash("You have a review of this state already. Here it is.", "info");
       navigate(`${ctx.base}/reviews/${enc(review.id)}/files`);
     } catch (err) {
       flashError(err);
@@ -303,7 +287,7 @@ async function requestReviewDialog(ctx, requests) {
     title: "Request a review",
     wide: true,
     body: [
-      h("p", { text: "They get a mail with a link that starts their review on the state you pick. Their comments stay pending until they finish it." }),
+      h("p", { text: "They get a mail with a link that starts their review on the state you pick. You see their comments as soon as they write them." }),
       h("fieldset", { class: "form-group" }, h("legend", { text: "Who" }), people.map(personChoice)),
       h("div", { class: "form-group" }, h("div", { class: "form-label", text: "What" }), states.el),
       h("label", { class: "form-label", for: note.id }, "Note", h("span", { class: "optional", text: " (optional)" })),
@@ -329,16 +313,18 @@ async function requestReviewDialog(ctx, requests) {
   d.el.querySelector(`input[name="${name}"]:checked`)?.focus();
 }
 
-// Starts the review a request asks for and opens its Files view. A pending
-// review of your own comes back instead, on whatever state it is.
+// Starts the review a request asks for and opens its Files view. Your open
+// review of the same state comes back instead.
 async function startRequested(ctx, rq, { replace = false } = {}) {
   const res = await request("POST", projectUrl(ctx.ref, `/review-requests/${enc(rq.id)}/start`), { raw: true });
   const review = await res.json();
   const who = personName(rq.requested_by);
-  queueFlash(res.status === 200
-    ? `${who} asked you for a review. You have a pending review already, so here it is. Finishing it answers the request.`
-    : [h("strong", { text: `${who} asked you for this review.` }), rq.note ? ` ${rq.note}` : " Comment on the files, then finish it."],
-  "info");
+  queueFlash([
+    h("strong", { text: `${who} asked you for this review.` }),
+    rq.note ? ` ${rq.note}` : null,
+    res.status === 200 ? " You have a review of this state already, so here it is." : null,
+    " Select text and comment. Everybody on the paper sees each comment as soon as you add it, so there is nothing to submit.",
+  ], "info");
   navigate(`${ctx.base}/reviews/${enc(review.id)}/files`, { replace });
 }
 
@@ -360,6 +346,10 @@ async function openRequest(ctx) {
   if (!rq) {
     queueFlash("That review request was withdrawn.", "warn");
     navigate(`${ctx.base}/reviews`, { replace: true });
+  } else if (rq.state !== "open" && rq.review_id && rq.reviewer?.id === session.me?.id) {
+    // The person asked follows the mail's link again, back to their review.
+    queueFlash("This is the review you started for that request. Your comments are on it already.", "info");
+    navigate(`${ctx.base}/reviews/${enc(rq.review_id)}/files`, { replace: true });
   } else if (rq.state !== "open") {
     queueFlash("That request is answered already. This is the review that answered it.", "info");
     navigate(rq.review_id ? `${ctx.base}/reviews/${enc(rq.review_id)}` : `${ctx.base}/reviews`, { replace: true });

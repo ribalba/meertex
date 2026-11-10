@@ -8,8 +8,9 @@
 //
 // Selecting text shows a "Comment" button, and a click on a line number (a
 // shift-click for a range) opens the comment box at once. The box can add a
-// single comment, start a review or add to the pending one, and suggest new
-// text. Next to the source is the PDF of the commit. A double-click there
+// single comment, start a review or add to your open one on this commit, and
+// suggest new text. Everybody sees a comment as soon as it is added. Next to
+// the source is the PDF of the commit. A double-click there
 // asks SyncTeX for the source line and opens the comment box at it, and
 // picking a thread marks its lines in the PDF. Text selected in the PDF is
 // marked in the source, with a "Comment" button next to the selection.
@@ -173,7 +174,9 @@ export async function renderFiles(ctx) {
   if (!ctx.alive()) return;
 
   const textFiles = files.filter((f) => f.kind === "text").sort((a, b) => a.path.localeCompare(b.path));
-  const myPending = reviews.find((r) => r.state === "pending" && r.reviewer?.id === session.me?.id) || null;
+  // Your open review of this commit, when this page is not it.
+  const myOpen = ctx.mine ? null
+    : reviews.find((r) => r.state === "open" && r.commit === commit && r.reviewer?.id === session.me?.id) || null;
 
   // Every thread this view knows: those placed on this commit, and this review's own.
   const known = new Map();
@@ -436,19 +439,15 @@ export async function renderFiles(ctx) {
       ? state.lines.slice(c.line_start - 1, c.line_end).join("\n")
       : state.text.slice(c.s16, c.e16);
     let buttons;
-    let note = null;
     const single = { text: "Add single comment", onClick: (v) => create(c, v, null) };
-    if (ctx.finishing) {
+    if (ctx.mine) {
       buttons = [{ text: "Add review comment", primary: true, onClick: (v) => create(c, v, review.id) }, single];
-    } else if (!myPending) {
-      buttons = [{ text: "Start a review", primary: true, onClick: (v) => startAndCreate(c, v) }, single];
-    } else if (myPending.commit === commit) {
-      buttons = [{ text: "Add to your review", primary: true, onClick: (v) => create(c, v, myPending.id) }, single];
+    } else if (myOpen) {
+      buttons = [{ text: "Add to your review", primary: true, onClick: (v) => create(c, v, myOpen.id) }, single];
     } else {
-      buttons = [{ ...single, primary: true }];
-      note = h("p", { class: "text-small color-muted mb-2" }, "Your pending review is on another state, so this can only be a single comment here. ",
-        h("a", { href: `${ctx.base}/reviews/${enc(myPending.id)}/files`, text: "Open your review" }), ".");
+      buttons = [{ text: "Start a review", primary: true, onClick: (v) => startAndCreate(c, v) }, single];
     }
+    const note = h("p", { class: "text-small color-muted mb-2", text: "Everybody on the paper sees your comment as soon as you add it." });
     const form = commentForm({ prefill: quote, buttons, onCancel: closeCompose, placeholder: "Leave a comment", label: "Comment", projectId: ctx.project.id });
     c.quote = quote;
     c.el = h("div", { class: "box rv-compose" },
@@ -492,7 +491,7 @@ export async function renderFiles(ctx) {
   async function startAndCreate(c, v) {
     const r = await api.post(projectUrl(ctx.ref, "/reviews"), { ref: commit });
     await create(c, v, r.id);
-    queueFlash("Started your review. Your comments stay pending, and only you see them, until you finish it.", "success");
+    queueFlash("Started your review with this comment. Everybody on the paper sees your comments as soon as you add them. There is nothing to submit.", "success");
     navigate(`${ctx.base}/reviews/${enc(r.id)}/files?path=${enc(state.path)}`);
   }
 

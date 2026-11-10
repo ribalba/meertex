@@ -105,7 +105,7 @@ AOE_FIX = (
 PULL = "After the submission, Amara reviewed it like a pull request."
 PULL_FIX = (
     "After the submission, Amara reviewed it. A review is a reading of one fixed\n"
-    "state of the text that ends with a verdict."
+    "state of the text, and everybody sees its comments as soon as they are written."
 )
 VERSIONS = (
     "The Versions tab compiles a\nPDF for each of them and compares any two, as a word diff or as a PDF that\n"
@@ -116,10 +116,6 @@ VERSIONS_SUGGESTION = (
     "PDF that marks every change."
 )
 CAPTION = "The mistakes in this paper's bibliography."
-SUMMARY = (
-    "A clear tour of a paper's life. I have four small requests. The one about the time zone "
-    "matters most, because people miss AoE deadlines every year."
-)
 
 
 def create_for(db: DBSession, user: User) -> Project | None:
@@ -303,9 +299,7 @@ def _fill(
     file_id = next(f["id"] for f in live.list_files(pid) if f["path"] == MAIN)
     base = live.read_file(pid, MAIN, sent).data.decode()
     review = Review(id=services.new_id(), project_id=pid, reviewer_id=amara.id, commit=sent,
-                    version_id=submission.id, state="submitted", verdict="changes_requested", summary=SUMMARY,
-                    mentions=mentions.mentioned_ids(db, project, SUMMARY), created_at=at(-21, 9),
-                    submitted_at=at(-20, 17, 45))
+                    version_id=submission.id, state="open", summary="", created_at=at(-21, 9))
     db.add(review)
 
     def thread(on: Review | None, commit: str, text: str, quote: str, made: datetime, body: str,

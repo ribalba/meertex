@@ -64,14 +64,13 @@ function hasSuggestion(thread) {
 // What the reader may do with a thread right now. An open thread can only be
 // accepted when it carries a suggestion, a resolved one always.
 export function threadActions(thread, perms) {
-  const live = !thread.pending;
   return {
     reply: perms.comment,
-    resolve: perms.resolve && live && thread.state === "open",
-    apply: perms.resolve && live && thread.state === "open" && !thread.outdated,
-    accept: perms.comment && live && (thread.state === "resolved" || (thread.state === "open" && hasSuggestion(thread)))
+    resolve: perms.resolve && thread.state === "open",
+    apply: perms.resolve && thread.state === "open" && !thread.outdated,
+    accept: perms.comment && (thread.state === "resolved" || (thread.state === "open" && hasSuggestion(thread)))
       && (isMe(thread.created_by) || perms.owner),
-    reopen: perms.comment && live && (thread.state === "resolved" || thread.state === "accepted"),
+    reopen: perms.comment && (thread.state === "resolved" || thread.state === "accepted"),
   };
 }
 
@@ -83,14 +82,16 @@ export const VERDICTS = {
   comment: { text: "Commented", cls: "label-secondary", icon: "comment", color: "color-muted", says: "reviewed" },
 };
 
+// Only reviews submitted before reviews lost their submit step have a
+// verdict. An open review has no label.
 export function verdictLabel(review) {
-  if (review.state === "pending") return h("span", { class: "Label label-attention", text: "Pending, only you see it" });
+  if (review.state !== "submitted") return null;
   const v = VERDICTS[review.verdict] || VERDICTS.comment;
   return h("span", { class: `Label ${v.cls}`, text: v.text });
 }
 
 export function verdictIcon(review, size = 16) {
-  if (review.state === "pending") return icon("clock", { size, cls: "color-attention", label: "Pending" });
+  if (review.state !== "submitted") return icon("comment", { size, cls: "color-muted", label: "Review" });
   const v = VERDICTS[review.verdict] || VERDICTS.comment;
   return icon(v.icon, { size, cls: v.color, label: v.text });
 }
@@ -565,8 +566,7 @@ export function threadCard(thread, env, opts = {}) {
         opts.baseLines && !t.outdated && (t.path !== t.base.path || t.line_start !== t.base.line_start)
           ? h("span", { class: "text-small color-muted", text: `now ${t.path !== t.base.path ? `${t.path}, ` : ""}${linesText(t.line_start, t.line_end)}` }) : null),
       h("div", { class: "rv-labels" },
-        t.pending ? h("span", { class: "Label label-attention", title: "Only you see it until you finish your review", text: "Pending" }) : null,
-        t.pending ? null : stateLabel(t),
+        stateLabel(t),
         t.outdated ? h("span", { class: "Label label-attention", title: "The text this comment was on is gone", text: "Outdated" }) : null,
         !t.outdated && t.changed ? h("span", { class: "Label label-accent", title: "The text changed since the comment was made", text: "Changed" }) : null,
         later ? h("span", { class: "Label", title: "Made on the live text after this review started", text: "Made on a later state" }) : null),
@@ -802,7 +802,6 @@ export function threadCard(thread, env, opts = {}) {
     }
     let hint = null;
     if (t.state === "resolved" && can.accept) hint = "Check the change below, then accept it or reopen the conversation.";
-    else if (t.pending) hint = "Pending until you finish your review.";
     return h("div", { class: "rv-thread-foot" },
       replyHost,
       actions.childNodes.length || hint ? h("div", { class: "rv-thread-bar" },
@@ -814,7 +813,6 @@ export function threadCard(thread, env, opts = {}) {
     const t = current;
     card.classList.toggle("is-collapsed", collapsed);
     card.classList.toggle("is-accepted", t.state === "accepted");
-    card.classList.toggle("is-pending", Boolean(t.pending));
     card.setAttribute("aria-label", `Comment on ${t.outdated ? t.base.path : t.path}, ${linesText(t.line_start, t.line_end)}`);
     const body = collapsed ? null : h("div", { class: "rv-thread-body" },
       opts.snippet === false ? null : snippet(),

@@ -189,10 +189,15 @@ the compile service on port 8076.
 
 What the tests cover:
 
-- A reviewer starts a review on a version, comments on a selection with
-  umlauts and an emoji, suggests a change, comments on a line and a range of
-  lines from their numbers, and submits with a verdict. Nobody else sees the
-  pending review or its threads.
+- A reviewer starts a review on a version, discards it from its header while
+  it has no comments and starts it again. Her own review says on its
+  Conversation that everybody sees each comment at once and that there is
+  nothing to submit, and the Reviews tab offers "Continue your review" next
+  to a plain "Start a review", which gives her the same review on the same
+  state. She comments on a selection with umlauts and an emoji, suggests a
+  change, and comments on a line and a range of lines from their numbers.
+  Every comment box says that everybody sees it. The editor sees each comment
+  at once, on the Reviews tab and on the review, with no submit step.
 - An editor replies, applies the suggestion and resolves another thread with
   a note. The reviewer sees how the text changed as a word diff, accepts one
   and reopens the other, and edits a comment.
@@ -210,8 +215,10 @@ What the tests cover:
   on it. Zoomed in, the selectable text still lies on the drawn one.
 - In the editor: highlights of the open threads that stay on their words while
   typing, the comments panel in the PDF's column, a comment on a selection
-  after an emoji (UTF-16 and code points differ), resolving there, a reviewer's
-  pending review that only she sees, and a viewer who reads only.
+  after an emoji (UTF-16 and code points differ), resolving there, a
+  reviewer's comment added to her open review, a review started there with
+  its first comment, both seen by the editor at once on the text, in the
+  panel and on the Reviews tab, and a viewer who reads only.
 - With a compile service: errors and warnings on their lines (gutter icon, red
   or amber line, the message on hover), right after an edit and after another
   file was open, gone after the fix and a new compile, and shown to viewers.

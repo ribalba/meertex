@@ -109,12 +109,35 @@ def _review_requests_commit_nullable(conn: Connection) -> bool:
     return True
 
 
+def _reviews_pending_open(conn: Connection) -> bool:
+    """Reviews have no submit step any more, and everybody sees their comments
+    at once. A review that was still pending becomes open, so its comments
+    show up now. Submitted reviews keep their verdict. A review comment now
+    answers its reviewer's open request, so a request whose reviewer has
+    commented in such a review is done, with the newest of them."""
+    opened = conn.execute(text("UPDATE reviews SET state = 'open' WHERE state = 'pending'")).rowcount
+    commented = (
+        "SELECT r.id FROM reviews r"
+        " WHERE r.project_id = rq.project_id AND r.reviewer_id = rq.reviewer_id AND r.state = 'open'"
+        " AND EXISTS (SELECT 1 FROM threads t WHERE t.review_id = r.id)"
+    )
+    answered = conn.execute(
+        text(
+            "UPDATE review_requests rq SET state = 'done', done_at = now() AT TIME ZONE 'UTC',"
+            f" review_id = ({commented} ORDER BY r.created_at DESC LIMIT 1)"
+            f" WHERE rq.state = 'open' AND EXISTS ({commented})"
+        )
+    ).rowcount
+    return opened + answered > 0
+
+
 MIGRATIONS: list[tuple[str, Callable[[Connection], bool]]] = [
     ("0001_users_timezone_nullable", _users_timezone_nullable),
     ("0002_login_tokens_expires_nullable", _login_tokens_expires_nullable),
     ("0003_users_first_sign_in_backfill", _users_first_sign_in_backfill),
     ("0004_active_days_backfill", _active_days_backfill),
     ("0005_review_requests_commit_nullable", _review_requests_commit_nullable),
+    ("0006_reviews_pending_open", _reviews_pending_open),
 ]
 
 

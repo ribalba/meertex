@@ -1,9 +1,10 @@
 """The review commands of ``meertex`` (docs/DESIGN.md §13, CLI).
 
-Reviews work like GitHub's pull request reviews. A reviewer comments on lines
-of the paper, the authors answer, change the text and resolve each thread, and
-the reviewer accepts or reopens. Here they are commands for people and for
-Claude alike.
+Reviews work like GitHub's pull request reviews, without the submit step. A
+reviewer comments on lines of the paper and everybody sees each comment at
+once. The authors answer, change the text and resolve each thread, and the
+reviewer accepts or reopens. Here they are commands for people and for Claude
+alike.
 
 Without ``--json`` a thread is printed so that an agent can work from it
 without another request: its short id, state, who started it, where its text
@@ -26,7 +27,6 @@ from . import cli, output
 from .api import file_path, project_path
 from .output import paint, print_json, table
 
-VERDICTS = ("approve", "comment", "changes_requested")
 STATES = ("open", "resolved", "accepted", "all")
 STATE_COLORS = {"open": output.AMBER, "resolved": output.GREEN, "accepted": output.GREEN}
 EVENTS = {
@@ -97,11 +97,12 @@ def line_count(text: str) -> int:
     return count - 1 if count > 1 and text.endswith("\n") else count
 
 
-def pending_review(a, ref: str) -> dict | None:
-    """Your pending review of the project. Only your own pending one is
-    listed among the reviews."""
+def my_review(a, ref: str) -> dict | None:
+    """Your newest open review of the project. The list has everybody's
+    reviews, newest first."""
+    me = (a.get("/api/auth/me") or {}).get("id")
     reviews = a.get(project_path(ref) + "/reviews") or []
-    return next((r for r in reviews if r.get("state") == "pending"), None)
+    return next((r for r in reviews if r.get("state") == "open" and (r.get("reviewer") or {}).get("id") == me), None)
 
 
 # --- Printing ----------------------------------------------------------------------------
@@ -127,7 +128,7 @@ def thread_lines(t: dict) -> list[str]:
     head = [paint(short(t.get("id")), output.BOLD), paint(t.get("state") or "", STATE_COLORS.get(t.get("state"))),
             where(t), who(t.get("created_by"))]
     if t.get("review_id"):
-        head.append(f"review {short(t['review_id'])}" + (" (pending)" if t.get("pending") else ""))
+        head.append(f"review {short(t['review_id'])}")
     if t.get("outdated"):
         head.append(paint("outdated", output.RED))
     lines = ["  ".join(head)]
@@ -208,8 +209,8 @@ def cmd_reviews(args) -> int:
         verdict = (r.get("verdict") or "").replace("_", " ")
         rows.append([short(r.get("id")), r.get("state") or "", verdict, who(r.get("reviewer")), on,
                      str(counts.get("open", 0)), str(counts.get("resolved", 0)), str(counts.get("accepted", 0)),
-                     output.ago(r.get("submitted_at")) if r.get("submitted_at") else ""])
-    print(table(rows, ["ID", "STATE", "VERDICT", "REVIEWER", "ON", "OPEN", "RESOLVED", "ACCEPTED", "SUBMITTED"]))
+                     output.ago(r.get("created_at")) if r.get("created_at") else ""])
+    print(table(rows, ["ID", "STATE", "VERDICT", "REVIEWER", "ON", "OPEN", "RESOLVED", "ACCEPTED", "STARTED"]))
     for r in reviews:
         if r.get("summary"):
             print(f"\n{paint(short(r.get('id')), output.BOLD)} {who(r.get('reviewer'))}")
@@ -310,7 +311,7 @@ def cmd_comment(args) -> int:
                                  f"so {lines_label(first, last)} is not there.")
         started = None
         if args.review:
-            review = pending_review(a, ref)
+            review = my_review(a, ref)
             if review is None:
                 review = started = a.post(project_path(ref) + "/reviews", {"ref": "HEAD"})
             body["review_id"] = review["id"]
@@ -320,12 +321,9 @@ def cmd_comment(args) -> int:
         return 0
     if started:
         print(f"Started a review on HEAD (review {short(started.get('id'))}).")
-    pending = " to your pending review" if t.get("pending") else ""
-    print(f"Added thread {short(t.get('id'))} on {where(t)}{pending}.")
+    in_review = f" to your review {short(t['review_id'])}" if t.get("review_id") else ""
+    print(f"Added thread {short(t.get('id'))} on {where(t)}{in_review}. Everybody on the paper sees it now.")
     print("\n".join(_block(t.get("quote") or "", "  ")))
-    if t.get("pending"):
-        print(paint(f"Nobody sees it until you submit with meertex review {args.project} submit --verdict V.",
-                    output.DIM))
     return 0
 
 
@@ -336,44 +334,26 @@ def cmd_review(args) -> int:
             resp = a.request("POST", project_path(ref) + "/reviews", json={"ref": args.ref or "HEAD"}, raw=True)
             review, created = resp.json(), resp.status_code == 201
         else:
-            review = pending_review(a, ref)
+            review = my_review(a, ref)
             if review is None:
-                raise cli.UsageError(f"You have no pending review of {args.project}. "
-                                     f"Start one with meertex review {args.project} start.")
-            url = f"{project_path(ref)}/reviews/{quote(review['id'], safe='')}"
-            if args.action == "submit":
-                summary = _Stdin()(args.summary)
-                review = a.post(url + "/submit", {"verdict": args.verdict, "summary": summary or ""})
-            else:
-                a.delete(url)
+                raise cli.UsageError(f"You have no open review of {args.project}.")
+            a.delete(f"{project_path(ref)}/reviews/{quote(review['id'], safe='')}")
     if args.json:
         print_json({"discarded": review["id"]} if args.action == "discard" else review)
         return 0
     rid = short(review.get("id"))
     on = (review.get("version") or {}).get("tag") or short(review.get("commit"))
-    count = sum((review.get("counts") or {}).values())
     if args.action == "start":
-        lead = "Started review" if created else "You have a pending review already,"
+        lead = "Started review" if created else "You have a review on this state already,"
         print(f"{lead} {rid} on {on}.")
-        print(paint(f"Comment with meertex comment {args.project} PATH:LINE TEXT --review, "
-                    f"then meertex review {args.project} submit --verdict V.", output.DIM))
-    elif args.action == "submit":
-        verdict = (review.get("verdict") or "").replace("_", " ")
-        print(f"Submitted review {rid} ({verdict}) with {output.count(count, 'thread')}. "
-              "The owner and the editors get a mail.")
+        print(paint(f"Comment with meertex comment {args.project} PATH:LINE TEXT --review. "
+                    "Everybody on the paper sees each comment at once. There is nothing to submit.", output.DIM))
     else:
-        print(f"Discarded review {rid} and its {output.count(count, 'thread')}.")
+        print(f"Discarded review {rid}.")
     return 0
 
 
 # --- Parser ------------------------------------------------------------------------------
-
-
-def _verdict(value: str) -> str:
-    value = value.strip().lower().replace("-", "_").replace(" ", "_")
-    if value not in VERDICTS:
-        raise argparse.ArgumentTypeError(f"choose from {', '.join(VERDICTS)}")
-    return value
 
 
 def add_commands(cmd: Callable[..., argparse.ArgumentParser], common: argparse.ArgumentParser) -> None:
@@ -418,14 +398,11 @@ def add_commands(cmd: Callable[..., argparse.ArgumentParser], common: argparse.A
     p.add_argument("place", metavar="PATH:LINE[-LINE]")
     p.add_argument("text", metavar="TEXT", help="the comment, - to read it from stdin")
     p.add_argument("--suggestion", metavar="TEXT", help="replacement text for those lines")
-    p.add_argument("--review", action="store_true", help="add it to your pending review, starting one on HEAD")
+    p.add_argument("--review", action="store_true", help="add it to your newest open review, starting one on HEAD")
 
-    p = cmd("review", cmd_review, "Start, submit or discard your review of a project")
+    p = cmd("review", cmd_review, "Start or discard your review of a project")
     p.add_argument("project")
-    rsub = p.add_subparsers(dest="action", metavar="start|submit|discard", required=True)
+    rsub = p.add_subparsers(dest="action", metavar="start|discard", required=True)
     r = rsub.add_parser("start", parents=[common], help="start a review on HEAD, a version's tag, a commit or live")
     r.add_argument("--ref", help="what to review, default HEAD")
-    r = rsub.add_parser("submit", parents=[common], help="submit your pending review with a verdict")
-    r.add_argument("--verdict", type=_verdict, required=True, metavar="|".join(VERDICTS))
-    r.add_argument("--summary", metavar="TEXT", help="the review's summary, - to read it from stdin")
-    rsub.add_parser("discard", parents=[common], help="throw your pending review away with its threads")
+    rsub.add_parser("discard", parents=[common], help="throw away your newest open review, if it has no comments")

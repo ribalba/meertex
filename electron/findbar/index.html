@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Find</title>
+  <link rel="stylesheet" href="bar.css" />
+</head>
+<!-- The find bar (find.js). It sits in a view of its own over the window, so
+     the server's page cannot script it and the search does not find its text. -->
+<body>
+  <form id="form" class="bar" role="search" autocomplete="off">
+    <input id="query" class="query" type="text" spellcheck="false" placeholder="Find in page" aria-label="Find in page" />
+    <span id="count" class="count" aria-live="polite"></span>
+    <span class="sep" aria-hidden="true"></span>
+    <button id="prev" class="icon-btn" type="button" aria-label="Previous match" title="Previous match (Shift+Enter)">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.75 10.25 8 6l4.25 4.25"/></svg>
+    </button>
+    <button id="next" class="icon-btn" type="button" aria-label="Next match" title="Next match (Enter)">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.75 5.75 8 10l4.25-4.25"/></svg>
+    </button>
+    <button id="close" class="icon-btn" type="button" aria-label="Close" title="Close (Escape)">
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3.75 3.75l8.5 8.5M12.25 3.75l-8.5 8.5"/></svg>
+    </button>
+  </form>
+
+  <script src="bar.js"></script>
+</body>
+</html>

@@ -180,8 +180,8 @@ def instance(db: DB, admin: InstanceAdmin, period: Literal["30d", "90d", "12m"] 
                        Compile.project_id.not_in(_examples()))
     comments = _counts(db, Comment.created_at, unit, since, Comment.kind == "comment",
                        Comment.thread_id.not_in(example_threads))
-    reviews = _counts(db, Review.submitted_at, unit, since, Review.state == "submitted",
-                      Review.project_id.not_in(_examples()))
+    # Reviews have no submit step any more, so they count when they start.
+    reviews = _counts(db, Review.created_at, unit, since, Review.project_id.not_in(_examples()))
     series = {
         "active": _series(_counts(db, ActiveDay.day, unit, since, distinct=ActiveDay.user_id), buckets),
         "accounts": _series(new_accounts, buckets),

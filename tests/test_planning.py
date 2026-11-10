@@ -107,7 +107,7 @@ def test_the_timeline_lists_every_paper_with_its_dates():
         assert "gone" in [p["name"] for p in client.get("/api/timeline", params={"archived": "all"}).json()["projects"]]
 
 
-def test_open_threads_count_what_you_can_see():
+def test_open_threads_count_every_open_thread():
     with running_app() as client:
         sign_in(client)
         p = client.post("/api/projects", json={"name": "talk", "starter": "basic"}).json()
@@ -118,12 +118,15 @@ def test_open_threads_count_what_you_can_see():
         assert client.get(url).json()["open_threads"] == 1
         with second_client("rev@example.com") as rev:
             review = rev.post(f"{url}/reviews", json={}).json()
-            pending = rev.post(f"{url}/threads", json={"path": "main.tex", "line_start": 3, "body": "Title?", "review_id": review["id"]})
-            assert pending.status_code == 201, pending.text
+            in_review = rev.post(f"{url}/threads", json={"path": "main.tex", "line_start": 3, "body": "Title?", "review_id": review["id"]})
+            assert in_review.status_code == 201, in_review.text
             assert rev.get(url).json()["open_threads"] == 2
-        # The pending thread is the reviewer's own until they submit.
+        # A review's threads count for everybody from the start.
+        assert client.get(url).json()["open_threads"] == 2
+        assert client.get("/api/projects").json()[0]["open_threads"] == 2
+        # Open ones only.
+        assert client.post(f"{url}/threads/{in_review.json()['id']}/resolve").status_code == 200
         assert client.get(url).json()["open_threads"] == 1
-        assert client.get("/api/projects").json()[0]["open_threads"] == 1
 
 
 def _names(r) -> list[str]:

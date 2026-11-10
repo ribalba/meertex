@@ -103,11 +103,13 @@ def _meertex(token: str, cwd: Path):
     env = {**os.environ, "MEERTEX_SERVER": BASE, "MEERTEX_TOKEN": token, "NO_COLOR": "1"}
     env.pop("MEERTEX_TEST_DB", None)
 
-    def run(*args: str, stdin: str | None = None) -> str:
+    def run(*args: str, stdin: str | None = None, status: int = 0) -> str:
+        """The output of ``meertex ARGS``, or its error output when it is
+        meant to fail with ``status``."""
         r = subprocess.run([PY, "-m", "meertex", *args], env=env, cwd=cwd, input=stdin, capture_output=True,
                            text=True, timeout=120, check=False)
-        assert r.returncode == 0, f"meertex {' '.join(args)} exited {r.returncode}\n{r.stdout}\n{r.stderr}"
-        return r.stdout
+        assert r.returncode == status, f"meertex {' '.join(args)} exited {r.returncode}\n{r.stdout}\n{r.stderr}"
+        return r.stdout if status == 0 else r.stderr
 
     return run
 
@@ -123,23 +125,34 @@ def test_a_review_with_the_cli(server, tmp_path):
         r = api.post(f"/api/projects/{p['id']}/members", json={"email": REVIEWER, "role": "reviewer"})
         assert r.status_code == 201
 
-        # The reviewer reviews: a pending review, two comments, the verdict.
-        started = json.loads(reviewer("review", "paper", "start", "--json"))
-        assert started["state"] == "pending"
+        # The reviewer starts a review on the text as it is now. Starting
+        # again on the same state gives the same review.
+        started = json.loads(reviewer("review", "paper", "start", "--ref", "live", "--json"))
+        assert (started["state"], started["verdict"], started["submitted_at"]) == ("open", None, None)
+        again = reviewer("review", "paper", "start", "--ref", "live")
+        assert again.startswith(f"You have a review on this state already, {started['id'][:8]} on ")
+
+        # There is no submit step. The owner sees the review and its first
+        # comment at once.
         t = json.loads(reviewer("comment", "paper", "main.tex:2", "Which energy?", "--review",
                                 "--suggestion", "Wir messen die GPU-Energie von LLMs.", "--json"))
-        assert (t["pending"], t["quote"], t["review_id"]) == (True, "Wir messen die Energie von LLMs.", started["id"])
-        reviewer("comment", "paper", "main.tex:3", "-", "--review", stdin="Schöner Gruß.\nZweite Zeile.")
-        assert json.loads(owner("threads", "--json")) == []
-        out = reviewer("review", "paper", "submit", "--verdict", "changes-requested", "--summary", "Two points.")
-        assert "with 2 threads" in out
+        assert (t["quote"], t["review_id"]) == ("Wir messen die Energie von LLMs.", started["id"])
+        assert "pending" not in t
+        short = t["id"][:8]
+        assert [x["id"] for x in json.loads(owner("threads", "--json"))] == [t["id"]]
+        assert "    Which energy?" in owner("thread", "paper", short).splitlines()
+        seen = json.loads(owner("reviews", "paper", "--json"))
+        assert [(r["id"], r["state"], r["counts"]["open"]) for r in seen] == [(started["id"], "open", 1)]
+        out = reviewer("comment", "paper", "main.tex:3", "-", "--review", stdin="Schöner Gruß.\nZweite Zeile.")
+        assert f" to your review {started['id'][:8]}. Everybody on the paper sees it now." in out
+        assert "Started a review" not in out
+        assert "invalid choice: 'submit'" in reviewer("review", "paper", "submit", status=2)
 
         # The owner sees every open thread, across projects, and works on them.
         threads = json.loads(owner("threads", "--json"))
         assert [x["project"]["name"] for x in threads] == ["paper", "paper"]
         assert [x["line_start"] for x in threads] == [2, 3]
         listing = owner("threads")
-        short = t["id"][:8]
         assert f"{short}  open  main.tex:2  {REVIEWER}  review {started['id'][:8]}" in listing
         assert "    > Wir messen die Energie von LLMs." in listing
         assert "      + Wir messen die GPU-Energie von LLMs." in listing
@@ -161,10 +174,25 @@ def test_a_review_with_the_cli(server, tmp_path):
         reviewer("accept", "paper", short)
         out = reviewer("reopen", "paper", other, "--note", "Köln bitte lassen.")
         assert "now open" in out
-        reviews = json.loads(owner("reviews", "paper", "--json"))
-        assert reviews[0]["counts"] == {"open": 1, "resolved": 0, "accepted": 1}
-        assert "changes requested" in owner("reviews", "paper")
 
+        # A review started by mistake can go, one with comments stays. The
+        # text changed, so a review of it now is a new one.
+        extra = json.loads(reviewer("review", "paper", "start", "--ref", "live", "--json"))
+        assert extra["id"] != started["id"]
+        assert f"Discarded review {extra['id'][:8]}." in reviewer("review", "paper", "discard")
+        assert "This review has comments" in reviewer("review", "paper", "discard", status=1)
+
+        reviews = json.loads(owner("reviews", "paper", "--json"))
+        assert [r["id"] for r in reviews] == [started["id"]]
+        assert reviews[0]["counts"] == {"open": 1, "resolved": 0, "accepted": 1}
+        table = owner("reviews", "paper").splitlines()
+        assert table[0].split()[-1] == "STARTED"
+        assert table[1].split()[:3] == [started["id"][:8], "open", REVIEWER]
+
+    # One mail to the owner for the two comments of one sitting, which links
+    # to the review, and none that says it was submitted.
     log = server.read_text(errors="replace")
-    assert f"To: {OWNER}\nSubject: meertex · {REVIEWER} reviewed Energy paper" in log
+    assert log.count(f"To: {OWNER}\nSubject: meertex · {REVIEWER} started a review of Energy paper") == 1
+    assert "commented in their review of" not in log and "reviewed Energy paper" not in log
+    assert f"{BASE}/p/paper/reviews/{started['id']}\n" in log
     assert f"{BASE}/p/paper/reviews/{started['id']}#thread-{t['id']}" in log

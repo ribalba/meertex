@@ -506,10 +506,6 @@ class Run:
             opening = thread(**span("sections/introduction.tex", "now one of the largest uses of data-centre GPUs"),
                              body="Can we put a number on this? A share of GPU hours from the census would make "
                                   "the opening much stronger.")
-            c.post(f"{url}/reviews/{rid}/submit", json={
-                "verdict": "changes_requested",
-                "summary": "A clear paper with a result people will use. Four small things before the deadline.",
-            }).raise_for_status()
 
         with self.api("lena") as c:
             c.post(f"{url}/threads/{tools['id']}/apply", json={}).raise_for_status()

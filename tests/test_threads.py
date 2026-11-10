@@ -10,7 +10,7 @@ from helpers import needs_db, running_app, sign_in
 from reviewing import TEXT, js_length, live_text, project_with, put, snapshot, thread
 
 THREAD_KEYS = {
-    "id", "review_id", "state", "pending", "created_by", "created_at", "updated_at", "file_id", "path", "start",
+    "id", "review_id", "state", "created_by", "created_at", "updated_at", "file_id", "path", "start",
     "end", "start16", "end16", "line_start", "line_end", "text", "quote", "changed", "outdated", "base",
     "resolution", "accepted", "comments",
 }
@@ -138,7 +138,7 @@ def test_a_thread_on_live_takes_a_snapshot_and_counts_utf16():
         assert set(t) == THREAD_KEYS
         assert set(t["comments"][0]) == COMMENT_KEYS
         assert t["base"]["commit"] == live.resolve_commit(pid, "HEAD")
-        assert (t["state"], t["pending"], t["review_id"], t["outdated"], t["changed"]) == ("open", False, None, False, False)
+        assert (t["state"], t["review_id"], t["outdated"], t["changed"]) == ("open", None, False, False)
         assert t["quote"] == t["text"] == "Köln 😀 und Zürich"
         assert (t["line_start"], t["line_end"]) == (3, 3)
         start = TEXT.index("Köln")

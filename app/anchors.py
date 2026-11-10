@@ -35,7 +35,7 @@ from .models import Thread
 
 # Diffing gives up after this long and returns a coarser diff, which still maps
 # every position, only less precisely around big rewrites.
-DIFF_TIMEOUT_SECONDS = 1.0
+DIFF_TIMEOUT_SECONDS = 30.0
 _HUNK_RE = re.compile(r"^@@ -(\d+)(,\d+)? \+(\d+)(,\d+)? @@(.*)$")
 
 

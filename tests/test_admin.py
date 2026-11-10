@@ -55,6 +55,8 @@ def test_the_dashboard_counts_the_instance(monkeypatch):
         client.post("/api/projects", json={"name": "blue"})
         r = client.post(f"/api/projects/{green['id']}/members", json={"email": "arne@example.com", "role": "editor"})
         assert r.status_code == 201, r.text
+        # A review counts when it starts, as there is nothing to submit.
+        assert client.post(f"/api/projects/{green['id']}/reviews").status_code == 201
 
         d = client.get("/api/admin/instance").json()
         assert (d["period"], d["unit"], len(d["buckets"])) == ("30d", "day", 30)
@@ -69,6 +71,7 @@ def test_the_dashboard_counts_the_instance(monkeypatch):
         assert set(series) == {"active", "accounts", "papers", "snapshots", "compiles", "comments", "reviews", "versions"}
         assert all(len(v) == 30 for v in series.values())
         assert (series["active"][-1], series["accounts"][-1], series["papers"][-1]) == (1, 1, 2)
+        assert (series["reviews"][-1], sum(series["reviews"])) == (1, 1)
         # Every new project starts its history with a commit (§9).
         assert series["snapshots"][-1] >= 2
         assert sum(series["active"][:-1]) == 0

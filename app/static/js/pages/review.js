@@ -1,6 +1,8 @@
-// One review, like a GitHub pull request's review (docs/DESIGN.md §13).
-// /p/<name>/reviews/<id> is the Conversation: the summary and every thread
-// with its snippet, comments, suggestions, resolution and buttons.
+// One review, like a GitHub pull request's review (docs/DESIGN.md §13), but
+// without the submit step. Everybody sees its comments as they are written.
+// /p/<name>/reviews/<id> is the Conversation: every thread with its snippet,
+// comments, suggestions, resolution and buttons, and the summary of a review
+// submitted before reviews lost that step.
 // /reviews/<id>/files is the source at the review's commit with the threads
 // under their lines, a comment box on selected text and the PDF of that
 // commit (review-files.js). /reviews/<id>/changes is the diff from the
@@ -9,16 +11,15 @@
 // Each view has its own URL, so Back and Forward move between them.
 
 import { api, enc, projectUrl } from "../api.js";
-import { h, clear, plural } from "../dom.js";
+import { h, clear } from "../dom.js";
 import { icon } from "../icons.js";
 import { navigate, onLeave } from "../router.js";
 import { renderMarkdown } from "../markdown.js";
-import { attachMentions } from "../mentions.js";
 import { renderDiff } from "../diff.js";
 import { session } from "../session.js";
 import { timeAgo, formatInMyZone } from "../time.js";
 import {
-  avatar, blankslate, busy, confirmDialog, counter, flash, flashBox, flashError, loading, openDialog,
+  avatar, blankslate, busy, confirmDialog, counter, flashBox, flashError, loading,
   personName, queueFlash, setTitle, spinner,
 } from "../ui.js";
 import {
@@ -41,7 +42,7 @@ export async function render(ctx) {
     clear(ctx.main).append(h("div", { class: "box" }, blankslate({
       iconName: "comment",
       title: "This review is not here",
-      text: "It was discarded, or it is somebody's review that is not submitted yet. Only its reviewer sees a pending review.",
+      text: "Its reviewer discarded it, or the link is wrong.",
       action: h("a", { class: "btn", href: `${ctx.base}/reviews` }, icon("arrow-left"), "All reviews"),
     })));
     return;
@@ -50,11 +51,11 @@ export async function render(ctx) {
 
   const perms = permissions(p);
   const rbase = `${ctx.base}/reviews/${enc(review.id)}`;
-  const mine = review.reviewer?.id === session.me?.id;
-  const finishing = mine && review.state === "pending";
+  // Your own open review, which takes your comments.
+  const mine = review.reviewer?.id === session.me?.id && review.state === "open";
   setTitle(view === "files" ? "Files" : view === "changes" ? "Changes" : "Conversation", reviewTitle(review), p.name);
 
-  const head = reviewHeader(ctx, review, { finishing });
+  const head = reviewHeader(ctx, review, { mine });
   const threadCount = counter(review.threads.length);
   const tab = (key, text, iconName, href, extra = null) => h("a", {
     class: "rv-tab", href, "aria-current": key === view ? "page" : null,
@@ -73,7 +74,7 @@ export async function render(ctx) {
     threadCount.textContent = String(own.length);
   };
 
-  const rctx = { ...ctx, review, perms, rbase, finishing, setCounts, main: body };
+  const rctx = { ...ctx, review, perms, rbase, mine, setCounts, main: body };
   if (view === "files") await renderFiles(rctx);
   else if (view === "changes") await renderChanges(rctx);
   else renderConversation(rctx);
@@ -90,19 +91,21 @@ export async function render(ctx) {
 
 // --- Header -----------------------------------------------------------------------
 
-function reviewHeader(ctx, review, { finishing }) {
+function reviewHeader(ctx, review, { mine }) {
   const counts = h("div", { class: "rv-counts text-small" });
+  // A review started by mistake can go while it has no comments.
+  const discard = mine
+    ? h("button", { type: "button", class: "btn btn-sm rv-discard", title: "Throw this review away. It has no comments yet." }, icon("trash"), "Discard")
+    : null;
+  discard?.addEventListener("click", () => discardReview(ctx, review, discard));
   const setCounts = (c) => {
     clear(counts).append(
       h("span", {}, icon("comment", { size: 14 }), ` ${c.open || 0} open`),
       h("span", { text: `${c.resolved || 0} resolved` }),
       h("span", { text: `${c.accepted || 0} accepted` }));
+    if (discard) discard.hidden = (c.open || 0) + (c.resolved || 0) + (c.accepted || 0) > 0;
   };
   setCounts(review.counts || {});
-  const finish = finishing
-    ? h("button", { type: "button", class: "btn btn-primary rv-finish" }, "Finish your review", icon("triangle-down"))
-    : null;
-  finish?.addEventListener("click", () => finishDialog(ctx, review));
   const el = h("div", { class: "rv-head" },
     h("div", { class: "rv-head-top" },
       h("div", { class: "flex-1" },
@@ -115,72 +118,26 @@ function reviewHeader(ctx, review, { finishing }) {
           review.submitted_at ? h("span", { class: "color-muted" }, " · submitted ", timeAgo(review.submitted_at)) : null)),
       h("div", { class: "rv-head-actions" },
         h("a", { class: "btn btn-sm", href: `${ctx.base}/reviews` }, icon("arrow-left"), "All reviews"),
-        finish)),
+        discard)),
     counts);
   return { el, setCounts };
 }
 
-function finishDialog(ctx, review) {
-  const summary = h("textarea", { class: "form-control input-block", rows: "5", placeholder: "Leave a comment", "aria-label": "Summary" });
-  summary.value = review.summary || "";
-  attachMentions(summary, ctx.project.id);
-  const name = "rv-verdict";
-  const choice = (value, title, text) => h("label", { class: "choice" },
-    h("input", { type: "radio", name, value, checked: value === "comment" }),
-    h("div", {}, h("strong", { text: title }), h("span", { text })));
-  const submit = h("button", { type: "button", class: "btn btn-primary", text: "Submit review" });
-  const discard = h("button", { type: "button", class: "btn btn-danger rv-discard", text: "Discard review" });
-  const error = h("div", { class: "form-error", role: "alert", hidden: true });
-  const n = review.threads.length;
-  const d = openDialog({
-    title: "Finish your review",
-    wide: true,
-    body: [
-      h("p", { class: "color-muted", text: n
-        ? `Submitting shows your ${plural(n, "comment")} to the authors and mails the owner and the editors.`
-        : "You have not commented on the text. You can still submit a summary and a verdict." }),
-      summary,
-      h("fieldset", { class: "form-group mt-3 mb-0" },
-        h("legend", { class: "sr-only", text: "Verdict" }),
-        choice("comment", "Comment", "Feedback without a verdict."),
-        choice("approve", "Approve", "The paper is fine as it is."),
-        choice("changes_requested", "Request changes", "Things must change before you are content.")),
-      error,
-    ],
-    footer: [discard, h("span", { class: "flex-1" }),
-      h("button", { type: "button", class: "btn", text: "Cancel", onclick: () => d.close() }), submit],
+async function discardReview(ctx, review, button) {
+  const ok = await confirmDialog({
+    title: "Discard your review?",
+    message: "It has no comments yet, so nothing else goes with it.",
+    confirmText: "Discard review",
+    danger: true,
   });
-  submit.addEventListener("click", async () => {
-    const verdict = d.el.querySelector(`input[name="${name}"]:checked`)?.value || "comment";
-    try {
-      await busy(submit, () => api.post(projectUrl(ctx.ref, `/reviews/${enc(review.id)}/submit`), { verdict, summary: summary.value }));
-      d.close();
-      refreshOpenCounts(ctx.project.id);
-      flash(`Submitted your review (${VERDICTS[verdict].text.toLowerCase()}).`, "success");
-      ctx.reload();
-    } catch (err) {
-      error.textContent = err.message;
-      error.hidden = false;
-    }
-  });
-  discard.addEventListener("click", async () => {
-    d.close();
-    const ok = await confirmDialog({
-      title: "Discard your review?",
-      message: n ? `Your ${plural(n, "pending comment")} go with it. Nobody else has seen them.` : "Nobody else has seen it.",
-      confirmText: "Discard review",
-      danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api.del(projectUrl(ctx.ref, `/reviews/${enc(review.id)}`));
-      queueFlash("Discarded your review.", "success");
-      navigate(`${ctx.base}/reviews`);
-    } catch (err) {
-      flashError(err);
-    }
-  });
-  summary.focus();
+  if (!ok) return;
+  try {
+    await busy(button, () => api.del(projectUrl(ctx.ref, `/reviews/${enc(review.id)}`)));
+    queueFlash("Discarded your review.", "success");
+    navigate(`${ctx.base}/reviews`);
+  } catch (err) {
+    flashError(err);
+  }
 }
 
 // --- Conversation -------------------------------------------------------------------
@@ -205,15 +162,12 @@ function renderConversation(ctx) {
   };
 
   const parts = [];
-  if (ctx.finishing) {
-    const finish = h("button", { type: "button", class: "btn btn-sm", text: "Finish your review", onclick: () => finishDialog(ctx, review) });
+  if (ctx.mine) {
     parts.push(flashBox(h("div", {},
-      h("p", { class: "mb-2" }, h("strong", { text: "This review is pending." }), " ",
-        `Only you can read its ${plural(threads.length, "comment")} until you finish it. The others on the paper see that it is in progress and how many comments it has.`),
-      h("div", { class: "flash-actions mt-0" }, finish,
-        h("a", { class: "btn btn-sm", href: `${ctx.rbase}/files` }, icon("file-text"), "Comment on the files"))), "warn", { iconName: "clock" }));
-  } else if (review.state === "pending") {
-    parts.push(flashBox("This review is pending.", "warn"));
+      h("p", { class: "mb-2" }, h("strong", { text: "This is your review." }), " ",
+        "Everybody on the paper sees each comment as soon as you add it. There is nothing to submit at the end."),
+      h("div", { class: "flash-actions mt-0" },
+        h("a", { class: "btn btn-sm", href: `${ctx.rbase}/files` }, icon("file-text"), "Comment on the files"))), "info"));
   }
 
   if (review.state === "submitted") {
@@ -237,8 +191,8 @@ function renderConversation(ctx) {
     parts.push(h("div", { class: "box" }, blankslate({
       iconName: "comment",
       title: "No comments on the text",
-      text: ctx.finishing ? "Open Files, select text or click a line number, and comment." : "This review has no comments on the text.",
-      action: ctx.finishing ? h("a", { class: "btn", href: `${ctx.rbase}/files` }, icon("file-text"), "Open the files") : null,
+      text: ctx.mine ? "Open Files, select text or click a line number, and comment." : "This review has no comments on the text yet.",
+      action: ctx.mine ? h("a", { class: "btn", href: `${ctx.rbase}/files` }, icon("file-text"), "Open the files") : null,
     })));
   }
   clear(ctx.main).append(...parts);

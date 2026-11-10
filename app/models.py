@@ -412,7 +412,9 @@ class Compile(Base):
 
 # --- Reviews (DESIGN §13) --------------------------------------------------------
 
-REVIEW_STATES = ("pending", "submitted")
+# A review is open from its start on, and everybody sees its comments at once.
+# submitted is a review from before that change, finished with a verdict.
+REVIEW_STATES = ("open", "submitted")
 VERDICTS = ("approve", "comment", "changes_requested")
 THREAD_STATES = ("open", "resolved", "accepted")
 COMMENT_KINDS = ("comment", "resolved", "accepted", "reopened", "applied")
@@ -427,8 +429,8 @@ class Review(Base):
     # The snapshot under review, and the version it is, if it is one.
     commit: Mapped[str] = mapped_column(String(64), nullable=False)
     version_id: Mapped[str | None] = mapped_column(ForeignKey("versions.id", ondelete="SET NULL"))
-    # One of REVIEW_STATES. verdict is one of VERDICTS once submitted.
-    state: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
+    # One of REVIEW_STATES. verdict is one of VERDICTS when submitted.
+    state: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
     verdict: Mapped[str | None] = mapped_column(String(30))
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # The ids of the members the summary @-mentions (§13, Mentions).
@@ -442,8 +444,8 @@ REQUEST_STATES = ("open", "done")
 
 class ReviewRequest(Base):
     """An author asking a member to review the paper on a fixed state (§13,
-    Requests). One open request per person and project. It is done when that
-    person submits a review. Withdrawing deletes it."""
+    Requests). One open request per person and project. It is done with that
+    person's first comment in a review. Withdrawing deletes it."""
 
     __tablename__ = "review_requests"
 

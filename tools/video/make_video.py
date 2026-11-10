@@ -529,7 +529,8 @@ def review_files_act(st, cue):
     time.sleep(0.5)
     compose.locator("textarea").first.press_sequentially(REVIEW_COMMENT, delay=40)
     time.sleep(0.4)
-    st.window.click(compose.get_by_role("button", name="Add single comment"), 0.7)
+    # Her own review, so the comment goes into it, and everybody sees it at once.
+    st.window.click(compose.get_by_role("button", name="Add review comment"), 0.7)
     expect(compose).to_be_hidden(timeout=10000)
 
 

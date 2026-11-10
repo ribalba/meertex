@@ -66,7 +66,7 @@ picks one with `srcset`.
 | `timeline` | The timeline with writing windows, a dashed plan and a writing load that turns red at three. |
 | `versions` | The Versions tab with the submission's compiled PDF. |
 | `pdfdiff` | The Compare view with the latexdiff PDF of a submission and its revision. |
-| `review` | A submitted review on the Conversation view, with an accepted suggestion and a resolved thread. |
+| `review` | A review on the Conversation view, with an accepted suggestion and a resolved thread. |
 | `review-files` | The review's Files view with an open thread next to the PDF. |
 | `editor` | The editor with a coauthor's cursor, the `\cite` completion and the compiled PDF. |
 | `references` | The References tab after a real check of the draft's `.bib`, which needs the network. Real works check out, one with a wrong year, and the made-up ones are in no index. |

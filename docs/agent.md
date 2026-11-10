@@ -32,11 +32,12 @@ while the user's checkouts in `~/papers/<name>` stay in step through
 - **Deleting a project deletes its history and files for every member.** Only
   on an explicit request, and confirm the name first.
 - **Review threads are the reviewers' and the authors' conversation.** Never
-  reply, resolve, apply a suggestion, accept, reopen, comment or submit a
-  review unless the user asks for it. Each of these is in the user's name,
-  shows at once and mails the people in the thread.
+  reply, resolve, apply a suggestion, accept, reopen or comment unless the
+  user asks for it. Each of these is in the user's name, shows to everybody
+  on the paper at once and can mail people. A review comment too, because
+  reviews have no submit step.
 - **An @-mention mails that person.** `@Name` or `@email` of a member in a
-  comment, a reply, a note or a summary sends them a mail. Write one only
+  comment, a reply or a note sends them a mail. Write one only
   when the user asks to bring someone in, and never quote an `@Name` from
   elsewhere into a comment by accident.
 - **Never print the API token.**
@@ -206,10 +207,12 @@ meertex refs <project> files --all            # read every .bib file (--main, or
 
 ## Reviews
 
-meertex has GitHub-style reviews for papers. A reviewer starts a review on a
-fixed state (`HEAD`, a version or the current text), comments on lines or spans
-of the text, optionally with a **suggestion** (replacement text), and submits
-the review with a verdict (`approve`, `comment`, `changes_requested`). The
+meertex has GitHub-style reviews for papers, without the submit step. A
+reviewer starts a review on a fixed state (`HEAD`, a version or the current
+text) and comments on lines or spans of the text, optionally with a
+**suggestion** (replacement text). Everybody on the paper sees each comment as
+soon as it is written. Reviews from before November 2026 may also have a
+verdict and a summary. The
 authors reply, change the text and **resolve** each thread. The reviewer then
 **accepts** the result or **reopens** the thread. A comment can also stand on
 its own, outside any review. Every thread knows where its text is now, even
@@ -223,7 +226,7 @@ meertex threads <project>                # one project, in file order
 meertex threads <project> --state all    # resolved and accepted ones too
 meertex threads <project> --json         # the raw shapes of DESIGN.md §13
 meertex thread <project> a1b2c3d4        # one thread, by the first 8 characters of its id
-meertex reviews <project>                # the reviews, their verdicts and summaries
+meertex reviews <project>                # the reviews, with the verdicts and summaries of older ones
 ```
 
 Each thread prints as its short id, its state, who started it and
@@ -271,8 +274,7 @@ wins. They get a mail unless they turned mention mails off. The thread's
 meertex review <project> start                         # on HEAD, or --ref submission, --ref live
 meertex comment <project> main.tex:42-44 "This claim needs a citation." --review
 meertex comment <project> sections/eval.tex:57 "Typo." --suggestion "the energy consumption" --review
-meertex review <project> submit --verdict changes_requested --summary "Two things before the deadline."
-meertex review <project> discard                       # throw the pending review away
+meertex review <project> discard                       # throw away your open review while it has no comments
 ```
 
 - Line numbers are those of the live text. Read the file in the synced
@@ -280,10 +282,14 @@ meertex review <project> discard                       # throw the pending revie
   `meertex comment` refuses lines that do not exist.
 - A suggestion replaces the whole lines given, without their final newline.
   Write the complete replacement for those lines.
-- Long comments, notes and summaries read from stdin with `-`, as in
+- Long comments and notes read from stdin with `-`, as in
   `meertex comment <project> main.tex:12 - --review <<'EOF'` ... `EOF`.
-- Comments with `--review` stay invisible until the review is submitted.
-  Submitting mails the owner and the editors, so show the user the comments,
-  the verdict and the summary first and submit only when they say so.
-- Without `--review` a comment is visible at once and mails the owner and the
-  editors.
+- Every comment is visible to everybody on the paper at once, with or without
+  `--review`. There is nothing to submit. So show the user each comment before
+  you write it, and write only the ones they agree to.
+- `--review` adds the comment to your newest open review, or starts one on
+  `HEAD`. A review's first comment mails the owner and the editors, and so
+  does the first after an hour without one. The rest of a sitting mails
+  nobody. Without `--review` the comment is a single comment and mails the
+  owner and the editors each time.
+- The first comment in a review answers a review request to you.

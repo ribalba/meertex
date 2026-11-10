@@ -107,6 +107,13 @@ exists. On Linux and Windows it comes in on the command line, on macOS as an
 - **Back and Forward** (Alt+Left/Right, Cmd+[ and Cmd+] on macOS), since there
   is no browser toolbar. The page sees a key first, so inside the editor these
   keys keep the editor's meaning, as in a browser. Home is Ctrl+Shift+H.
+- **Find in page** (Ctrl+F, Cmd+F on macOS), which Electron does not have.
+  A find bar opens in the top right corner and searches the whole page, for
+  example every thread of a review. Enter and F3 (Cmd+G) go to the next match,
+  Shift+Enter and Shift+F3 to the one before, and Escape closes the bar. In the
+  editor's text Ctrl+F stays the editor's own search and replace. The bar is a
+  page of the app in a view of its own (`find.js`, `findbar/`), so the server's
+  page cannot script it.
 - **PDFs, compile logs and raw files** open in a window of their own inside the
   app, where the session cookie is. Chromium's PDF viewer shows the PDFs.
   DOIs, conference pages and every other site open in the system browser.

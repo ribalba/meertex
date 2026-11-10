@@ -1,6 +1,7 @@
-"""Reviews and the life of a thread (DESIGN §13): pending visibility, submit and
-discard, who may do what, resolve with its word diff, applying a suggestion,
-id prefixes, notifications and the list across projects."""
+"""Reviews and the life of a thread (DESIGN §13): everybody sees a review at
+once, one open review per person and commit, no submit step, discard, who may
+do what, resolve with its word diff, applying a suggestion, id prefixes,
+notifications, the list across projects and the migration from pending."""
 
 import pytest
 from helpers import needs_db, running_app, second_client, sign_in
@@ -22,6 +23,9 @@ REVIEW_KEYS = {"id", "reviewer", "state", "verdict", "summary", "mentions", "com
 REVIEWER = "rita@example.com"
 EDITOR = "eddi@example.com"
 VIEWER = "vera@example.com"
+NO_SUBMIT = (
+    "Reviews have no submit step any more. Everybody on the paper sees your comments as soon as you write them."
+)
 
 
 @pytest.fixture
@@ -35,7 +39,7 @@ def _team(client, pid: str) -> None:
         assert r.status_code == 201, r.text
 
 
-def test_a_review_from_start_to_submit(mails):
+def test_everybody_sees_a_review_and_acts_on_its_threads_at_once(mails):
     from app import live
 
     with running_app() as client:
@@ -46,153 +50,215 @@ def test_a_review_from_start_to_submit(mails):
         head = snapshot(pid)
         assert client.post(f"/api/projects/{pid}/versions", json={"kind": "submission"}).status_code == 201
 
-        with second_client(REVIEWER) as rita:
+        with second_client(REVIEWER) as rita, second_client(EDITOR) as eddi, second_client(VIEWER) as vera:
             r = rita.post(f"/api/projects/{pid}/reviews", json={"ref": "submission"})
             assert r.status_code == 201, r.text
             review = r.json()
             assert set(review) == REVIEW_KEYS
-            assert (review["state"], review["verdict"], review["commit"]) == ("pending", None, head)
+            assert (review["state"], review["verdict"], review["summary"], review["mentions"]) == ("open", None, "", [])
+            assert (review["commit"], review["submitted_at"]) == (head, None)
             assert review["version"]["tag"] == "submission"
             assert review["reviewer"]["email"] == REVIEWER
             assert review["counts"] == {"open": 0, "resolved": 0, "accepted": 0}
-            # A second start returns the pending one.
-            again = rita.post(f"/api/projects/{pid}/reviews")
-            assert (again.status_code, again.json()["id"]) == (200, review["id"])
 
             t = thread(rita, pid, "Energie", body="Which energy?", review_id=review["id"][:8])
-            assert (t["pending"], t["review_id"]) == (True, review["id"])
-            t2 = thread(rita, pid, "The end.", body="Too short.", review_id=review["id"])
-            assert [x["id"] for x in rita.get(f"/api/projects/{pid}/threads").json()] == [t["id"], t2["id"]]
-            assert rita.get(f"/api/projects/{pid}/reviews").json()[0]["counts"]["open"] == 2
+            assert t["review_id"] == review["id"]
+            assert "pending" not in t
+            t2 = thread(rita, pid, "The end.", body="Too short.", suggestion="Das Ende.", review_id=review["id"])
 
-            # Nobody else sees a pending review or its threads.
-            for other in (client,):
-                assert other.get(f"/api/projects/{pid}/reviews").json() == []
-                assert other.get(f"/api/projects/{pid}/threads").json() == []
-                assert other.get("/api/threads").json() == []
-                assert other.get(f"/api/projects/{pid}/threads/{t['id']}").status_code == 404
-                assert other.get(f"/api/projects/{pid}/reviews/{review['id']}").status_code == 404
-                assert other.post(f"/api/projects/{pid}/threads/{t['id']}/comments", json={"body": "x"}).status_code == 404
-            # Pending threads have no state to change yet.
-            assert rita.post(f"/api/projects/{pid}/threads/{t['id']}/reopen").status_code == 422
-            assert not mails
+            # Everybody sees the review and its threads as soon as they are written.
+            for other in (client, eddi, vera, rita):
+                assert [x["id"] for x in other.get(f"/api/projects/{pid}/reviews").json()] == [review["id"]]
+                assert other.get(f"/api/projects/{pid}/reviews").json()[0]["counts"]["open"] == 2
+                assert [x["id"] for x in other.get(f"/api/projects/{pid}/threads").json()] == [t["id"], t2["id"]]
+                assert [x["id"] for x in other.get("/api/threads").json()] == [t["id"], t2["id"]]
+                assert other.get(f"/api/projects/{pid}/threads/{t['id']}").json()["review_id"] == review["id"]
+                got = other.get(f"/api/projects/{pid}/reviews/{review['id'][:8]}").json()
+                assert [x["id"] for x in got["threads"]] == [t["id"], t2["id"]]
+                assert not any("pending" in x for x in got["threads"])
+            listed = client.get(f"/api/projects/{pid}/threads", params={"review": review["id"]}).json()
+            assert [x["id"] for x in listed] == [t["id"], t2["id"]]
 
-            # Threads go into your own pending review only.
-            with second_client(EDITOR) as eddi:
-                r = eddi.post(f"/api/projects/{pid}/threads", json={
-                    "path": "main.tex", "line_start": 1, "body": "x", "review_id": review["id"]})
-                assert r.status_code == 404
-                assert eddi.post(f"/api/projects/{pid}/reviews/{review['id']}/submit",
-                                 json={"verdict": "approve"}).status_code == 404
-
-            r = rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit",
-                          json={"verdict": "changes_requested", "summary": "Good start.\nTwo things."})
+            # And answers them right away: a reply, a resolve, an accept, an apply.
+            url = f"/api/projects/{pid}/threads"
+            assert client.post(f"{url}/{t['id']}/comments", json={"body": "The GPU's."}).status_code == 201
+            assert eddi.post(f"{url}/{t['id']}/resolve", json={"note": "Said so."}).json()["state"] == "resolved"
+            assert rita.post(f"{url}/{t['id']}/accept").json()["state"] == "accepted"
+            r = eddi.post(f"{url}/{t2['id']}/apply")
             assert r.status_code == 200, r.text
-            done = r.json()
-            assert (done["state"], done["verdict"], done["summary"]) == ("submitted", "changes_requested",
-                                                                       "Good start.\nTwo things.")
-            assert done["submitted_at"]
-            assert rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit",
-                             json={"verdict": "approve"}).status_code == 422
-            assert rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit",
-                             json={"verdict": "great"}).status_code == 422
-            assert rita.delete(f"/api/projects/{pid}/reviews/{review['id']}").status_code == 422
+            assert r.json()["state"] == "resolved"
+            assert live_text(pid) == TEXT.replace("The end.", "Das Ende.")
+            assert rita.post(f"{url}/{t2['id']}/reopen", json={"note": "Shorter still."}).json()["state"] == "open"
+            assert client.get(f"/api/projects/{pid}/reviews").json()[0]["counts"] == {
+                "open": 1, "resolved": 0, "accepted": 1}
 
-        # The owner and the editor hear of it, the viewer and the reviewer do not.
-        assert sorted(m["to"] for m in mails) == [OWNER, EDITOR]
-        mail = mails[0]
-        assert mail["subject"] == f"{REVIEWER} reviewed Green LLMs"
-        assert "asked for changes" in mail["body"] and "Two things." in mail["body"]
-        assert f"http://testserver/p/paper/reviews/{review['id']}" in mail["body"]
-        assert "The review has 2 comments" in mail["body"]
-
-        listed = client.get(f"/api/projects/{pid}/reviews").json()
-        assert [x["id"] for x in listed] == [review["id"]]
-        got = client.get(f"/api/projects/{pid}/reviews/{review['id'][:8]}").json()
-        assert [x["id"] for x in got["threads"]] == [t["id"], t2["id"]]
-        assert all(x["pending"] is False for x in got["threads"])
-        assert [x["id"] for x in client.get(f"/api/projects/{pid}/threads", params={"review": review["id"]}).json()] == [
-            t["id"], t2["id"]]
+            # Threads go into your own open review only.
+            r = eddi.post(f"/api/projects/{pid}/threads", json={
+                "path": "main.tex", "line_start": 1, "body": "x", "review_id": review["id"]})
+            assert (r.status_code, r.json()["detail"]) == (422, "A thread can only be added to your own open review")
 
         # Changes since the review are a word diff from its commit to live.
-        put(client, pid, "main.tex", TEXT.replace("The end.", "Das Ende."))
         changes = client.get(f"/api/projects/{pid}/reviews/{review['id']}/changes").json()
         assert changes["from"] == head and changes["to"] == live.resolve_commit(pid, "HEAD")
         [f] = changes["files"]
         assert "-The" in f["diff"] and "+Das" in f["diff"]
 
 
-def test_discard_and_one_pending_review_each():
+def test_one_open_review_per_person_and_commit():
     with running_app() as client:
         sign_in(client)
         pid = project_with(client)["id"]
         _team(client, pid)
-        mine = client.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).json()
+        url = f"/api/projects/{pid}/reviews"
+        r = client.post(url, json={"ref": "live"})
+        assert r.status_code == 201, r.text
+        first = r.json()
+        # The same commit, by any name, gives the same review back.
+        for ref in ("live", "HEAD", first["commit"][:10]):
+            again = client.post(url, json={"ref": ref})
+            assert (again.status_code, again.json()["id"]) == (200, first["id"])
+        assert client.post(url).json()["id"] == first["id"]
+
+        # Somebody else's review of the same commit is a review of their own.
+        with second_client(REVIEWER) as rita:
+            r = rita.post(url, json={"ref": "HEAD"})
+            assert r.status_code == 201, r.text
+            theirs = r.json()
+        assert theirs["id"] != first["id"] and theirs["commit"] == first["commit"]
+
+        # The text moves on. A review of the new state is a new one, and the first stays open.
+        put(client, pid, "main.tex", TEXT.replace("The end.", "Das Ende."))
+        r = client.post(url, json={"ref": "live"})
+        assert r.status_code == 201, r.text
+        second = r.json()
+        assert second["commit"] != first["commit"]
+        again = client.post(url, json={"ref": first["commit"]})
+        assert (again.status_code, again.json()["id"]) == (200, first["id"])
+
+        listed = client.get(url).json()
+        assert [x["id"] for x in listed] == [second["id"], theirs["id"], first["id"]]
+        assert {x["state"] for x in listed} == {"open"}
+        assert client.post(url, json={"ref": "nothing-here"}).status_code == 404
+        assert client.post(url, json={"ref": "--all"}).status_code == 422
+
+
+def test_there_is_no_submit_step_any_more():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        review = client.post(f"/api/projects/{pid}/reviews").json()
+        url = f"/api/projects/{pid}/reviews/{review['id']}/submit"
+        # Older clients send a verdict and learn why it is gone.
+        for body in ({"verdict": "approve", "summary": "Fine."}, None):
+            r = client.post(url, json=body)
+            assert (r.status_code, r.json()["detail"]) == (410, NO_SUBMIT)
+        with second_client(REVIEWER) as rita:
+            assert rita.post(url, json={"verdict": "comment"}).status_code == 410
+        with TestClient(app) as anyone:
+            assert anyone.post(url).status_code == 401
+        [still] = client.get(f"/api/projects/{pid}/reviews").json()
+        assert (still["state"], still["verdict"], still["submitted_at"]) == ("open", None, None)
+        # Nothing is in progress any more, so that list is gone too.
+        assert client.get(f"/api/projects/{pid}/reviews-in-progress").status_code == 404
+
+
+def test_only_an_open_review_without_comments_can_be_discarded():
+    import uuid
+
+    from app.database import SessionLocal
+    from app.models import Review, utcnow
+
+    with running_app() as client:
+        me = sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        url = f"/api/projects/{pid}/reviews"
+        mine = client.post(url, json={"ref": "live"}).json()
         t = thread(client, pid, "Energie", review_id=mine["id"])
         with second_client(REVIEWER) as rita:
-            theirs = rita.post(f"/api/projects/{pid}/reviews").json()
-            assert theirs["id"] != mine["id"]
-            assert rita.delete(f"/api/projects/{pid}/reviews/{mine['id']}").status_code == 404
-        assert client.delete(f"/api/projects/{pid}/reviews/{mine['id']}").json() == {"ok": True}
-        assert client.get(f"/api/projects/{pid}/threads/{t['id']}").status_code == 404
-        assert client.get(f"/api/projects/{pid}/reviews").json() == []
-        assert client.post(f"/api/projects/{pid}/reviews", json={"ref": "nothing-here"}).status_code == 404
-        assert client.post(f"/api/projects/{pid}/reviews", json={"ref": "--all"}).status_code == 422
+            r = rita.delete(f"{url}/{mine['id']}")
+            assert (r.status_code, r.json()["detail"]) == (403, "Only the reviewer can discard a review")
+            # Her own one without comments, started by mistake, goes.
+            theirs = rita.post(url).json()
+            assert rita.delete(f"{url}/{theirs['id']}").json() == {"ok": True}
+            assert rita.get(f"{url}/{theirs['id']}").status_code == 404
+
+        # Everybody has seen its comments, so it stays while it has any.
+        r = client.delete(f"{url}/{mine['id']}")
+        assert (r.status_code, r.json()["detail"]) == (
+            422, "This review has comments, so it cannot be discarded. Delete them first.")
+        assert client.get(f"/api/projects/{pid}/threads/{t['id']}").status_code == 200
+        gone = client.delete(f"/api/projects/{pid}/comments/{t['comments'][0]['id']}").json()
+        assert gone == {"ok": True, "thread": None}
+        assert client.delete(f"{url}/{mine['id']}").json() == {"ok": True}
+        assert client.get(f"{url}/{mine['id']}").status_code == 404
+        assert client.get(url).json() == []
+
+        # A review submitted before the submit step went away keeps its verdict and stays.
+        with SessionLocal() as db:
+            db.add(Review(id=str(uuid.uuid4()), project_id=pid, reviewer_id=me["id"], commit=mine["commit"],
+                          state="submitted", verdict="approve", summary="Fine.", submitted_at=utcnow()))
+            db.commit()
+        [old] = client.get(url).json()
+        assert (old["state"], old["verdict"], old["summary"]) == ("submitted", "approve", "Fine.")
+        assert old["submitted_at"]
+        r = client.delete(f"{url}/{old['id']}")
+        assert (r.status_code, r.json()["detail"]) == (422, "A submitted review cannot be discarded")
+        r = client.post(f"/api/projects/{pid}/threads", json={
+            "path": "main.tex", "line_start": 1, "body": "x", "review_id": old["id"]})
+        assert (r.status_code, r.json()["detail"]) == (422, "A thread can only be added to your own open review")
+        # It does not count as an open review of its commit.
+        r = client.post(url, json={"ref": old["commit"]})
+        assert r.status_code == 201 and r.json()["id"] != old["id"]
 
 
-def test_reviews_in_progress_say_who_and_how_many_but_not_what():
+def test_the_migration_opens_pending_reviews_and_answers_their_requests():
+    from sqlalchemy import text
+
+    from app.database import engine
+    from app.migrations import _reviews_pending_open
+
     with running_app() as client:
         sign_in(client)
         pid = project_with(client)["id"]
         _team(client, pid)
-        url = f"/api/projects/{pid}/reviews-in-progress"
-        assert client.get(url).json() == []
+        url = f"/api/projects/{pid}"
+        with second_client(REVIEWER) as rita, second_client(EDITOR) as eddi:
+            # Rita commented in a pending review, and later in one she submitted.
+            pending = rita.post(f"{url}/reviews", json={"ref": "live"}).json()
+            thread(rita, pid, "Energie", review_id=pending["id"])
+            put(client, pid, "main.tex", TEXT.replace("The end.", "Das Ende."))
+            submitted = rita.post(f"{url}/reviews", json={"ref": "live"}).json()
+            thread(rita, pid, "Köln", review_id=submitted["id"], text=live_text(pid))
+            # Eddi started one and wrote nothing yet.
+            empty = eddi.post(f"{url}/reviews").json()
+        asked = {}
+        for email in (REVIEWER, EDITOR):
+            r = client.post(f"{url}/review-requests", json={"reviewer": email})
+            assert r.status_code == 201, r.text
+            asked[email] = r.json()["id"]
 
-        with second_client(REVIEWER) as rita:
-            review = rita.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).json()
-            [started] = client.get(url).json()
-            assert set(started) == {"reviewer", "comments", "started_at", "last_comment_at"}
-            assert started["reviewer"]["email"] == REVIEWER
-            assert started["comments"] == 0 and started["started_at"] and started["last_comment_at"] is None
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE reviews SET state = 'pending' WHERE id IN (:a, :b)"),
+                         {"a": pending["id"], "b": empty["id"]})
+            conn.execute(text("UPDATE reviews SET state = 'submitted', verdict = 'comment', submitted_at = now()"
+                              " WHERE id = :s"), {"s": submitted["id"]})
+            assert _reviews_pending_open(conn)
+            assert not _reviews_pending_open(conn)
 
-            thread(rita, pid, "Energie", body="A private remark.", review_id=review["id"])
-            thread(rita, pid, "Köln", review_id=review["id"])
-            response = client.get(url)
-            [going] = response.json()
-            assert going["comments"] == 2 and going["last_comment_at"]
-            assert "private" not in response.text
-
-            # The comments themselves stay hers, and her own review is not news to her.
-            assert client.get(f"/api/projects/{pid}/threads", params={"state": "all"}).json() == []
-            assert rita.get(url).json() == []
-            with second_client(VIEWER) as vera:
-                assert len(vera.get(url).json()) == 1
-
-            assert rita.post(f"{url.replace('-in-progress', '')}/{review['id']}/submit", json={"verdict": "comment"}).status_code == 200
-            assert client.get(url).json() == []
-
-
-def test_a_review_nobody_can_finish_is_not_in_progress():
-    with running_app() as client:
-        sign_in(client)
-        pid = project_with(client)["id"]
-        _team(client, pid)
-        url = f"/api/projects/{pid}/reviews-in-progress"
-        with second_client(REVIEWER) as rita:
-            assert rita.post(f"/api/projects/{pid}/reviews", json={"ref": "live"}).status_code == 201
-        members = f"/api/projects/{pid}/members"
-        rita_id = next(m["user_id"] for m in client.get(members).json() if m["email"] == REVIEWER)
-        assert len(client.get(url).json()) == 1
-
-        assert client.patch(f"{members}/{rita_id}", json={"role": "viewer"}).status_code == 200
-        assert client.get(url).json() == []
-        assert client.patch(f"{members}/{rita_id}", json={"role": "reviewer"}).status_code == 200
-        assert len(client.get(url).json()) == 1
-
-        assert client.delete(f"{members}/{rita_id}").status_code == 200
-        assert client.get(url).json() == []
-        with second_client(REVIEWER) as gone:
-            assert gone.get(url).status_code == 404
+        states = {r["id"]: (r["state"], r["verdict"]) for r in client.get(f"{url}/reviews").json()}
+        assert states == {pending["id"]: ("open", None), empty["id"]: ("open", None),
+                          submitted["id"]: ("submitted", "comment")}
+        # Her open review with comments answers her request. Eddi's has none, so his stays open.
+        done = client.get(f"{url}/review-requests/{asked[REVIEWER]}").json()
+        assert (done["state"], done["review_id"]) == ("done", pending["id"])
+        assert done["done_at"]
+        assert client.get(f"{url}/review-requests/{asked[EDITOR]}").json()["state"] == "open"
 
 
 def test_roles():
@@ -436,11 +502,67 @@ def test_mails_go_to_everybody_in_the_thread_but_the_actor(mails):
             # A thread in a review links to the review.
             review = rita.post(f"/api/projects/{pid}/reviews").json()
             t2 = thread(rita, pid, "The end.", review_id=review["id"])
-            assert mails == []
-            rita.post(f"/api/projects/{pid}/reviews/{review['id']}/submit", json={"verdict": "comment"})
+            assert [m["to"] for m in mails] == [OWNER]
             mails.clear()
             client.post(f"/api/projects/{pid}/threads/{t2['id']}/comments", json={"body": "Ok."})
+            assert [m["to"] for m in mails] == [REVIEWER]
             assert f"http://testserver/p/paper/reviews/{review['id']}#thread-{t2['id']}" in mails[0]["body"]
+
+
+def test_review_comments_mail_the_authors_once_a_sitting(mails):
+    from sqlalchemy import text
+
+    from app.database import engine
+    from app.routers.reviews import REVIEW_MAIL_PAUSE
+
+    with running_app() as client:
+        sign_in(client)
+        pid = project_with(client)["id"]
+        _team(client, pid)
+        url = f"/api/projects/{pid}"
+        with second_client(REVIEWER) as rita:
+            review = rita.post(f"{url}/reviews").json()
+            assert mails == []
+            thread(rita, pid, "Energie 🔋 von LLMs", body="Which energy?", review_id=review["id"])
+            # The review's first comment tells the owner and the editors, not the viewer or the reviewer.
+            assert sorted(m["to"] for m in mails) == [OWNER, EDITOR]
+            m = mails[0]
+            assert m["subject"] == f"{REVIEWER} started a review of Green LLMs"
+            body = m["body"]
+            assert body.startswith(f'{REVIEWER} started a review of "Green LLMs" with this comment.')
+            assert "main.tex, line 2" in body and "> Energie 🔋 von LLMs" in body and "Which energy?" in body
+            assert "More comments may follow without a mail each." in body
+            assert body.endswith(f"http://testserver/p/paper/reviews/{review['id']}")
+            mails.clear()
+
+            # The rest of the sitting mails nobody.
+            thread(rita, pid, "Köln", body="Which city?", review_id=review["id"])
+            thread(rita, pid, "The end.", body="Too short.", review_id=review["id"])
+            assert mails == []
+
+            # After a pause the next comment tells them again.
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE threads SET created_at = created_at - :pause WHERE review_id = :review"),
+                             {"pause": REVIEW_MAIL_PAUSE, "review": review["id"]})
+            thread(rita, pid, "Einführung", body="A better title?", review_id=review["id"])
+            assert sorted(m["to"] for m in mails) == [OWNER, EDITOR]
+            m = mails[0]
+            assert m["subject"] == f"{REVIEWER} commented in their review of Green LLMs"
+            assert m["body"].startswith(f'{REVIEWER} is back at their review of "Green LLMs" with this comment.')
+            assert "A better title?" in m["body"]
+            mails.clear()
+            thread(rita, pid, "Zürich", review_id=review["id"])
+            assert mails == []
+
+        # Nobody hears of their own comment.
+        with second_client(EDITOR) as eddi:
+            theirs = eddi.post(f"{url}/reviews").json()
+            thread(eddi, pid, "Energie", review_id=theirs["id"])
+        assert [(m["to"], m["subject"]) for m in mails] == [(OWNER, f"{EDITOR} started a review of Green LLMs")]
+        mails.clear()
+        mine = client.post(f"{url}/reviews").json()
+        thread(client, pid, "Energie", review_id=mine["id"])
+        assert [m["to"] for m in mails] == [EDITOR]
 
 
 def test_threads_across_projects():
@@ -455,14 +577,16 @@ def test_threads_across_projects():
             invite_r = client.post(f"/api/projects/{b['id']}/members", json={"email": REVIEWER, "role": "reviewer"})
             assert invite_r.status_code == 201
             review = rita.post(f"/api/projects/{b['id']}/reviews").json()
-            hidden = thread(rita, b["id"], "Köln", review_id=review["id"])
+            in_review = thread(rita, b["id"], "Köln", review_id=review["id"])
             mine = [t["id"] for t in rita.get("/api/threads").json()]
-            assert mine == [tb0["id"], tb1["id"], hidden["id"]]
+            assert mine == [tb0["id"], tb1["id"], in_review["id"]]
+        # Her review's thread is the owner's to see too.
         listed = client.get("/api/threads").json()
-        assert [t["id"] for t in listed] == [ta["id"], tb0["id"], tb1["id"]]
+        assert [t["id"] for t in listed] == [ta["id"], tb0["id"], tb1["id"], in_review["id"]]
         assert listed[0]["project"] == {"id": a["id"], "name": "alpha", "title": "Alpha"}
+        assert listed[-1]["project"] == {"id": b["id"], "name": "beta", "title": "Beta"}
         assert "project" not in client.get(f"/api/projects/{a['id']}/threads").json()[0]
         client.post(f"/api/projects/{a['id']}/threads/{ta['id']}/resolve")
-        assert [t["id"] for t in client.get("/api/threads").json()] == [tb0["id"], tb1["id"]]
+        assert [t["id"] for t in client.get("/api/threads").json()] == [tb0["id"], tb1["id"], in_review["id"]]
         assert [t["id"] for t in client.get("/api/threads", params={"state": "resolved"}).json()] == [ta["id"]]
-        assert len(client.get("/api/threads", params={"state": "all"}).json()) == 3
+        assert len(client.get("/api/threads", params={"state": "all"}).json()) == 4

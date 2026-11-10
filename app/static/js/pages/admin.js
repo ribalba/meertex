@@ -24,7 +24,7 @@ const MEASURES = [
   ["snapshots", "Snapshots", "history commits of the live text"],
   ["compiles", "Compiles", null],
   ["comments", "Comments", "on the text and in reviews"],
-  ["reviews", "Reviews submitted", null],
+  ["reviews", "Reviews started", null],
   ["versions", "Versions", "submissions, revisions, camera-ready"],
 ];
 

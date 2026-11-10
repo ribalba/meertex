@@ -1100,11 +1100,18 @@ an offline machine pays the timeout once a day at most.
 
 ## 13. Reviews
 
-GitHub's pull request review, for a paper. A reviewer starts a review on a
-fixed state, comments on spans of text (or clicks in the PDF), and submits the
-review with a verdict. The authors reply, change the text, and resolve each
-thread. Resolving records how the span changed, so the reviewer sees the
-request, the answer and the change side by side, and accepts or reopens.
+GitHub's pull request review, for a paper, without the submit step. A
+reviewer starts a review on a fixed state and comments on spans of text (or
+clicks in the PDF). Everybody on the paper sees each comment as soon as it is
+written. The authors reply, change the text, and resolve each thread.
+Resolving records how the span changed, so the reviewer sees the request, the
+answer and the change side by side, and accepts or reopens.
+
+Reviews had a submit step with a verdict until November 2026, like GitHub's.
+Reviewers who do not know GitHub commented and never found "Finish your
+review", so the authors never saw their comments. The step is gone. Reviews
+submitted before keep their verdict and summary, and migration 0006 turned the
+pending ones into open ones.
 
 ### Objects
 
@@ -1112,7 +1119,7 @@ request, the answer and the change side by side, and accepts or reopens.
 review   {id, reviewer: person, state, verdict, summary, mentions: [person], commit,
           version: {id, tag, label} | null, created_at, submitted_at,
           counts: {open, resolved, accepted}}
-thread   {id, review_id, state, pending, created_by: person, created_at, updated_at,
+thread   {id, review_id, state, created_by: person, created_at, updated_at,
           file_id, path, start, end, start16, end16, line_start, line_end,
           text, quote, changed, outdated,
           base: {commit, path, start, end, line_start, line_end},
@@ -1124,13 +1131,16 @@ request  {id, reviewer: person, requested_by: person, state, note, commit,
           version: {id, tag, label} | null, review_id, created_at, done_at}
 ```
 
-- `review.state` is `pending` or `submitted`. `verdict` is null while
-  pending, then `approve`, `comment` or `changes_requested`.
-- `request.state` is `open`, or `done` once the person asked submitted a
-  review. `review_id` is then that review (see Requests). `request.commit`
-  is null when the review is to start on the live text as it reads then.
-- `thread.state` is `open`, `resolved` or `accepted`. `pending` is true for a
-  thread of a review that is not submitted yet. Only its reviewer sees it.
+- `review.state` is `open` for every review started now. `submitted` is a
+  review from before the submit step went away. Only those have a `verdict`
+  (`approve`, `comment` or `changes_requested`), a `summary`, its `mentions`
+  and `submitted_at`. An open review has `verdict` and `submitted_at` null
+  and an empty `summary`.
+- `request.state` is `open`, or `done` once the person asked wrote their
+  first comment in a review. `review_id` is then that review (see
+  Requests). `request.commit` is null when the review is to start on the
+  live text as it reads then.
+- `thread.state` is `open`, `resolved` or `accepted`.
 - `comment.kind` is `comment`, or one of the events `resolved`, `accepted`,
   `reopened`, `applied` that the timeline shows between comments. An event's
   `body` is the note given with it, possibly empty.
@@ -1191,16 +1201,19 @@ to a snapshot instead, and mapped to the live text by diffing.
 | Request a review, withdraw a request | editor, owner |
 | Start a requested review | the person asked |
 
-- A user has at most one pending review per project. Starting a second one
-  returns the pending one.
-- A thread made with the `review_id` of your pending review is pending until
-  you submit. Without `review_id` it is a single comment, visible at once.
-  Any other `review_id` is 422.
-- Only the reviewer submits or discards a review (403 for anybody else). A
-  submitted review cannot be submitted again or discarded (422).
-- A pending thread takes replies from its reviewer, but it cannot be
-  resolved, applied, accepted or reopened before the review is submitted
-  (422).
+- Every member sees every review and every thread, from the moment it is
+  made.
+- A user has at most one open review per project and commit. Starting
+  another one on the same commit returns it. A review on another commit (a
+  new version, or the live text after edits) is a review of its own.
+- A thread made with the `review_id` of one of your open reviews belongs to
+  it. Without `review_id` it is a single comment. The review of somebody
+  else, or a submitted one, is 422.
+- Only the reviewer discards a review (403 for anybody else), and only an
+  open one without threads, one started by mistake (422 otherwise), because
+  everybody has seen its comments. A request it answered stays answered.
+- Reviews have no submit step. `POST .../reviews/{id}/submit` is 410 and
+  says so, for older clients.
 - Resolve and apply need an open thread. Accept needs a resolved one, or an
   open one with a suggestion in one of its comments, because a plain comment
   has nothing to accept before the authors resolve it. Reopen needs a
@@ -1218,12 +1231,17 @@ to a snapshot instead, and mapped to the live text by diffing.
   file's line numbers.
 - Events cannot be edited or deleted (422). A thread goes with its last
   comment of kind `comment`.
-- **Notifications.** Submitting a review mails the owner and the editors,
-  with a link to `<BASE_URL>/p/<name>/reviews/<review id>`. A new single
-  comment mails them too. A reply, a resolve, an apply, an accept or a reopen
-  mails everybody who wrote in the thread (comments and events). Mails only go
-  to current members, never to the person who acted, and never about a
-  pending review. Thread mails link to
+- **Notifications.** A new single comment mails the owner and the editors. A
+  new thread in a review mails them when it starts a sitting: it is the
+  review's first thread ("Rita started a review of ..."), or the review had
+  no new thread for an hour (`REVIEW_MAIL_PAUSE`, "Rita is back at their
+  review ..."). The mail shows that comment, says that more may follow
+  without a mail each and links to `<BASE_URL>/p/<name>/reviews/<review id>`.
+  The other threads of a sitting mail nobody but the people they mention, so
+  a review of thirty comments is one mail and not thirty. A reply, a resolve,
+  an apply, an accept or a reopen mails everybody who wrote in the thread
+  (comments and events). Mails only go to current members and never to the
+  person who acted. Thread mails link to
   `<BASE_URL>/p/<name>/reviews/<review id>#thread-<thread id>`, or to
   `<BASE_URL>/p/<name>/reviews#thread-<thread id>` for a single comment.
   A mention changes who hears of it (see Mentions). A review request mails
@@ -1251,41 +1269,30 @@ for.
   `<BASE_URL>/p/<name>/reviews/requests/<request id>`. It goes out whatever
   `mention_mails` says, because it is addressed to that person.
 - **The link.** The web app starts the review from the request
-  (`/review-requests/{id}/start`) and opens its Files view. A request without
-  a commit takes a snapshot of the live text then, and the review gets the
-  newest version at that commit, as a review started on `live` does. The
-  request stays without a commit, so a review started again after a discard
-  is on the text of that moment. A pending review
-  of your own comes back instead, on whatever state it is (200), because there
-  is one per person. A request that was answered opens the review that
-  answered it, a withdrawn one the Reviews tab. Anybody else who follows the
-  link lands on the Reviews tab. Starting does not answer the request.
-- **Answered.** Submitting any review of the project answers every open
-  request to its reviewer: `state` becomes `done`, with `review_id` and
-  `done_at`. A done request cannot be started or withdrawn (422).
+  (`/review-requests/{id}/start`) and opens its Files view with a flash that
+  says everybody sees each comment at once. A request without a commit takes
+  a snapshot of the live text then, and the review gets the newest version at
+  that commit, as a review started on `live` does. The request stays without
+  a commit, so a review started again after a discard is on the text of that
+  moment. Your open review of that commit comes back instead (200), because
+  there is one per person and commit. A request that was answered opens the
+  review that answered it, its Files view for the person asked and its
+  Conversation for anybody else. A withdrawn one opens the Reviews tab.
+  Anybody else who follows the link lands on the Reviews tab. Starting does
+  not answer the request.
+- **Answered.** The person's first thread in one of their reviews answers
+  their open request in the project: `state` becomes `done`, with
+  `review_id` and `done_at`. A done request cannot be started or withdrawn
+  (422).
 - **Withdrawing** deletes an open request without a mail. A review started
   from it stays.
 - The list leaves out requests to people who left the paper or are viewers
   now, because they cannot answer them.
 
-### Reviews in progress
-
-Everybody on the paper sees that somebody has started a review and not
-submitted it yet, so nobody wonders where the comments are. They see who it
-is, how many comments it has so far, when it started and when it was last
-commented on. What the comments say stays with the reviewer until they submit.
-
-```
-in progress  {reviewer: person, comments, started_at, last_comment_at | null}
-```
-
-The list leaves out your own review, and the reviews of people who left the
-paper or are viewers now, because they cannot finish them.
-
 ### Mentions
 
-A comment, a reply, the note of a resolve, an accept or a reopen, and a
-review's summary can mention the paper's members, as on GitHub. The person
+A comment, a reply, the note of a resolve, an accept or a reopen, and the
+summary of a submitted review can mention the paper's members, as on GitHub. The person
 mentioned gets a mail, unless they turned that off. The code is in
 `app/mentions.py`.
 
@@ -1298,24 +1305,20 @@ mentioned gets a mail, unless they turned that off. The code is in
   members are plain text.
 - **Stored.** The mentioned members' ids are found when the text is written
   and stored with the comment (`comments.mentions`) or the review
-  (`reviews.mentions`, at submitting). The API returns them as people in
+  (`reviews.mentions`, filled when reviews were still submitted). The API returns them as people in
   `mentions`. A member who leaves stays in it.
 - **Mails.** Whoever a new comment, reply or note mentions gets a mail that
   says so ("Rita mentioned you on Green LLMs"), in place of the usual thread
   mail, so nobody gets two. The usual rules for everybody else stay as they
-  are. An edit mails only the people it adds a mention of. A pending review
-  mails nobody. When it is submitted, the owner and the editors get the
-  review mail as before, which adds "It mentions you." for those it
-  mentions in its summary or its comments. The other members it mentions get
-  a mail of their own about the review. Nobody is mailed about mentioning
-  themselves.
+  are. An edit mails only the people it adds a mention of. A comment in a
+  review mails the people it mentions at once, also when it does not start a
+  sitting. Nobody is mailed about mentioning themselves.
 - **Turning it off.** `mention_mails` on the user (default on), set with
   `PATCH /api/auth/me` and under Settings, Mentions. Off, a mention still
   shows and is stored, but mails nothing. The person then gets the mails
   they would get without it. Every mention mail says why it came and links
   to `<BASE_URL>/settings#mentions`.
-- **In the web app.** Typing `@` in a comment box, a note or the review's
-  summary lists the members but yourself (`GET /api/projects/{ref}/members`),
+- **In the web app.** Typing `@` in a comment box or a note lists the members but yourself (`GET /api/projects/{ref}/members`),
   narrowed by what follows the `@`: the start of the name, of the email or
   of a later word of the name. Up and Down move, Enter or Tab takes one,
   Escape closes the list and nothing else. A person is completed to
@@ -1325,19 +1328,17 @@ mentioned gets a mail, unless they turned that off. The code is in
 
 ### Routes
 
-- `GET /api/projects/{ref}/reviews-in-progress` lists who else has a pending
-  review, newest first, without its comments (see Reviews in progress). Every
-  member sees it.
-- `GET /api/projects/{ref}/reviews` lists the submitted reviews and your own
-  pending one, newest first.
+- `GET /api/projects/{ref}/reviews` lists every review, newest first (by
+  `submitted_at`, else `created_at`).
 - `POST /api/projects/{ref}/reviews {ref?}` starts a review. `ref` is `HEAD`
   (the default), a version's tag, a commit or `live` (snapshot now). 201, or
-  200 with your existing pending review. Its `version` is the one whose tag
-  was given, else the newest version at that commit.
+  200 with your open review of that commit. Its `version` is the one whose
+  tag was given, else the newest version at that commit.
 - `GET /api/projects/{ref}/reviews/{id}` returns the review and its threads.
-- `POST /api/projects/{ref}/reviews/{id}/submit {verdict, summary?}`
-- `DELETE /api/projects/{ref}/reviews/{id}` discards a pending review and its
-  threads.
+- `POST /api/projects/{ref}/reviews/{id}/submit` is 410. Reviews have no
+  submit step any more.
+- `DELETE /api/projects/{ref}/reviews/{id}` discards your open review while
+  it has no threads.
 - `GET /api/projects/{ref}/reviews/{id}/changes?word=true` is the diff from
   the review's commit to `live` (§11 diff). The PDF of the same change is
   `POST /api/projects/{ref}/pdfdiff {from: <review commit>, to: "live"}` (§14).
@@ -1355,7 +1356,6 @@ mentioned gets a mail, unless they turned that off. The code is in
 - `GET /api/projects/{ref}/threads/{id}`. Ids of threads, reviews and
   comments may be given as a prefix of at least 8 characters everywhere. A
   shorter one is 422, one that fits several is 409 with the `candidates`.
-  Someone else's pending review and its threads are 404.
 - `POST /api/projects/{ref}/threads/{id}/comments {body, suggestion?}`
   returns the thread (201).
 - `PATCH /api/projects/{ref}/comments/{id} {body?, suggestion?}` returns the
@@ -1372,8 +1372,8 @@ mentioned gets a mail, unless they turned that off. The code is in
 - `GET /api/projects/{ref}/review-requests/{id}` returns one request, open or
   done. Request ids may be prefixes too.
 - `POST /api/projects/{ref}/review-requests/{id}/start` starts the review on
-  the request's state and returns it. 201, or 200 with your pending review.
-  403 for anybody but the person asked.
+  the request's state and returns it. 201, or 200 with your open review of
+  that commit. 403 for anybody but the person asked.
 - `DELETE /api/projects/{ref}/review-requests/{id}` withdraws an open request.
 
 ### CLI
@@ -1386,10 +1386,10 @@ mentioned gets a mail, unless they turned that off. The code is in
 | `meertex reply <project> <id> TEXT [--suggestion TEXT]` | |
 | `meertex resolve <project> <id> [--note TEXT]`, `accept`, `reopen [--note]` | |
 | `meertex apply <project> <id> [--comment ID]` | Apply a suggestion. |
-| `meertex comment <project> <path>:<line>[-<line>] TEXT [--suggestion TEXT] [--review]` | A comment on lines of the live text. `--review` adds it to your pending review, starting one on `HEAD` if needed. |
-| `meertex review <project> start [--ref R]`, `submit --verdict V [--summary S]`, `discard` | |
+| `meertex comment <project> <path>:<line>[-<line>] TEXT [--suggestion TEXT] [--review]` | A comment on lines of the live text. `--review` adds it to your newest open review, starting one on `HEAD` if you have none. |
+| `meertex review <project> start [--ref R]`, `discard` | `discard` throws away your newest open review while it has no comments. |
 
-`TEXT`, `--suggestion`, `--note` and `--summary` take `-` to read the text
+`TEXT`, `--suggestion` and `--note` take `-` to read the text
 from stdin, for one of them per call. `meertex comment` reads the live file
 first, so lines that are not there fail before anything is written. The
 commands are in `cli/meertex/cmd_reviews.py`.
@@ -1401,12 +1401,11 @@ commands are in `cli/meertex/cmd_reviews.py`.
   "Request a review" there. They pick a member who can review, the state and
   a note. The state offers "The text when they start" first and picks it,
   then the same choices as starting a review. The open requests are listed
-  above the reviews, with "Withdraw" for
-  the authors and "Start your review" for the person asked (unless they have a
-  pending review to continue). `/p/<name>/reviews/requests/<id>`, the mail's
-  link, starts the review and opens its Files view with the note in a flash.
-  Reviews in progress are listed after the requests, with who, how many
-  comments so far and when.
+  above the reviews, with "Withdraw" for the authors and "Start your review"
+  for the person asked. `/p/<name>/reviews/requests/<id>`, the mail's link,
+  starts the review and opens its Files view with the note in a flash. With
+  an open review of your own, "Continue your review" opens the newest one's
+  Files view, and "Start a review" starts one on another state.
 - A **review page** has three views. *Conversation*: every thread with its
   snippet, comments, suggestions, resolution diff and the buttons for the
   next step. *Files*: the source at the review's commit with line numbers and
@@ -1419,19 +1418,23 @@ commands are in `cli/meertex/cmd_reviews.py`.
   the selection's start and end, and the passage is looked for there as a
   reader sees it, by its start and its end where math or a citation reads
   differently. *Changes since this review*: the word diff
-  to `live` and the latexdiff PDF. A pending review has a "Finish your review"
-  dialog with the verdict and a summary. Every comment box completes
-  @-mentions (see Mentions).
+  to `live` and the latexdiff PDF. Your own open review says on its
+  Conversation that everybody sees each comment at once and that there is
+  nothing to submit, and its header has "Discard" while it has no comments.
+  Every comment box says that everybody sees the comment as soon as it is
+  added, and completes @-mentions (see Mentions). A submitted review shows
+  its verdict and summary.
 - The **editor** shows open threads as highlighted spans in the text (from
   `start16`/`end16`, moved along with every edit and read again from the
   server a few seconds after edits settle) and in a Comments panel, where
-  authors reply, resolve and apply suggestions. The panel also says who has a
-  review in progress and how many comments it has so far. Selecting text shows a
+  authors reply, resolve and apply suggestions. Selecting text shows a
   floating "Comment" button (also Ctrl+Alt+M), so selecting to copy does not
-  open anything. In the review's *Files* view, clicking a line number (shift
-  for a range) opens the comment box at once. That view also shows single
-  comments and other reviews' threads made on the same commit.
-- The project summary's `open_threads` counts the open threads you can see,
+  open anything. Its box adds to your newest open review, or makes a single
+  comment or starts a review on the live text when you have none. In the
+  review's *Files* view, clicking a line number (shift for a range) opens the
+  comment box at once. That view also shows single comments and other
+  reviews' threads made on the same commit.
+- The project summary's `open_threads` counts the project's open threads,
   for the Reviews tab's counter and the overview.
 
 ## 14. Compiling *(phase 2b)*
@@ -2283,7 +2286,8 @@ to this one, all in UTC. It returns
   bucket. `accounts` are first sign-ins, `snapshots` the commits of every
   project's history (§9), `compiles` leaves out `unavailable`, `comments`
   are comments and replies but not the resolve and accept notes, and
-  `reviews` are submitted reviews.
+  `reviews` are reviews by the day they started (§13, reviews have no
+  submit step).
 - `growth` is how many signed-in accounts and papers there were at the end
   of each bucket, counting the papers that still exist.
 - `accounts` are the newest 200, by first sign-in and then by creation.
@@ -2338,7 +2342,7 @@ snapshot (§9) dated when it happened, or a row with that date.
 | -37 | Jonas moves the submission deadline from day -35 to day -31. |
 | -31 | The text as handed in, with anonymous authors. Answered yes, it is the version Submission (§7). |
 | -24 | The version arXiv, with the authors' names. |
-| -21 to -18 | Amara reviews Submission with four threads and asks for changes. Jonas answers one of them. |
+| -21 to -18 | Amara reviews Submission with four threads. Her review is open, without a verdict, like every review now. Jonas answers one of the threads. |
 | -5 | Jonas rewrites two of the passages and resolves their threads. |
 | -3 | Amara accepts one of the two. |
 | -2 | Amara comments on the current text outside the review and mentions Jonas. |

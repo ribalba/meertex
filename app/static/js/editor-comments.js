@@ -6,8 +6,8 @@
 // threads are asked for again. A side panel, in the PDF's column, lists the
 // file's threads with the review page's cards, so authors reply, resolve,
 // apply suggestions, accept and reopen right next to the text. Selecting text
-// offers "Comment". Threads of a pending review reach only their reviewer,
-// because the server sends them to nobody else.
+// offers "Comment". Everybody sees a comment as soon as it is added, in a
+// review or on its own.
 //
 //   const comments = editorComments({ project, base, cm: () => cm, view: () => view,
 //     path: () => openPath, reveal(from, to), openFile(path, line), show(on), note(text) });
@@ -20,7 +20,7 @@ import { api, enc, projectUrl, request } from "./api.js";
 import { h, clear, plural } from "./dom.js";
 import { icon } from "./icons.js";
 import { session } from "./session.js";
-import { counter, flash, personName } from "./ui.js";
+import { counter, flash } from "./ui.js";
 import {
   commentForm, linesText, permissions, refreshOpenCounts, threadCard, toCodePoints,
 } from "./threads.js";
@@ -35,7 +35,6 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
   const url = (rest) => projectUrl(project.id, rest);
   let threads = [];
   let reviews = [];
-  let inProgress = []; // the reviews others have started and not submitted
   let field = null;
   let setSpans = null;
   let selected = null;
@@ -79,9 +78,8 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
 
   const list = h("div", { class: "editor-comments-list" });
   const composeHost = h("div");
-  const progressHost = h("div", { hidden: true });
   const more = h("details", { class: "editor-comments-more" }, h("summary"));
-  const body = h("div", { class: "editor-comments-body" }, composeHost, progressHost, list);
+  const body = h("div", { class: "editor-comments-body" }, composeHost, list);
   const el = h("section", { class: "editor-comments", "aria-label": "Comments" },
     h("div", { class: "editor-comments-head" },
       icon("comment", { cls: "color-muted" }),
@@ -120,19 +118,6 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     }
   }
 
-  // Who else has a review under way, so nobody wonders where their comments
-  // are. What the comments say stays with them until they submit.
-  function paintProgress() {
-    progressHost.hidden = !inProgress.length;
-    clear(progressHost).append(...inProgress.map((r) => h("p", { class: "editor-comments-progress" },
-      icon("clock", { size: 14, cls: "color-attention" }),
-      h("span", {},
-        h("strong", { text: personName(r.reviewer) }),
-        r.comments
-          ? ` has a review in progress, ${plural(r.comments, "comment")} so far, not submitted. Only they can read them until they submit.`
-          : " has started a review and not commented yet."))));
-  }
-
   function paint() {
     const here = threads.filter(inFile);
     const open = here.filter((t) => t.state === "open").length;
@@ -140,7 +125,6 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     count.hidden = !open;
     button.title = open ? `${plural(open, "open comment")} on this file` : "Show the comments on this file";
     if (!shownNow) return;
-    paintProgress();
     if (!path()) {
       clear(list).append(h("p", { class: "editor-comments-empty", text: "Comments are on the text of a file. Open one." }));
       return;
@@ -185,7 +169,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
   function makeField(lib) {
     setSpans = lib.StateEffect.define();
     const build = (spans) => lib.Decoration.set(spans.map((s) => {
-      const cls = ["cm-rv-thread", `is-${s.state}`, s.pending && "is-pending", s.id === selected && "is-selected"].filter(Boolean).join(" ");
+      const cls = ["cm-rv-thread", `is-${s.state}`, s.id === selected && "is-selected"].filter(Boolean).join(" ");
       return lib.Decoration.mark({ class: cls, attributes: { "data-thread": s.id, title: s.title } }).range(s.from, s.to);
     }), true);
     field = lib.StateField.define({
@@ -232,7 +216,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
       const first = t.comments.find((c) => c.kind === "comment");
       const words = first?.body || (first?.suggestion !== null ? "Suggested a change" : "");
       out.push({
-        id: t.id, from, to, state: t.state, pending: t.pending,
+        id: t.id, from, to, state: t.state,
         title: `${first?.author?.name || first?.author?.email || "Someone"}: ${words.length > 120 ? `${words.slice(0, 120)}…` : words}`,
       });
     }
@@ -313,8 +297,9 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
 
   // --- Writing a comment -------------------------------------------------------------
 
-  function myPending() {
-    return reviews.find((r) => r.state === "pending" && r.reviewer?.id === session.me?.id) || null;
+  // Your newest open review. The list comes newest first.
+  function myReview() {
+    return reviews.find((r) => r.state === "open" && r.reviewer?.id === session.me?.id) || null;
   }
 
   function startComment() {
@@ -345,10 +330,10 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     clear(composeHost);
     if (!compose) return;
     const c = compose;
-    const pending = myPending();
+    const mine = myReview();
     const single = { text: "Add single comment", onClick: (v) => create(c, v, null) };
-    const buttons = pending
-      ? [{ text: "Add to your review", primary: true, onClick: (v) => create(c, v, pending.id) }, single]
+    const buttons = mine
+      ? [{ text: "Add to your review", primary: true, onClick: (v) => create(c, v, mine.id) }, single]
       : [{ ...single, primary: true }, { text: "Start a review", onClick: (v) => startReview(c, v) }];
     const form = commentForm({
       prefill: c.quote,
@@ -368,7 +353,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
         h("strong", { text: `Comment on ${linesText(c.line_start, c.line_end)}` })),
       h("div", { class: "rv-compose-body" },
         h("blockquote", { class: "rv-compose-quote", text: c.quote.length > 400 ? `${c.quote.slice(0, 400)}…` : c.quote }),
-        pending ? h("p", { class: "text-small color-muted mb-2", text: "Comments added to your review stay pending, and only you see them, until you finish it." }) : null,
+        h("p", { class: "text-small color-muted mb-2", text: "Everybody on the paper sees your comment as soon as you add it." }),
         form.el)));
     form.focus();
   }
@@ -392,7 +377,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     threads = [...threads, t];
     loaded = true;
     refreshOpenCounts(project.id);
-    if (!t.review_id) flash("Added your comment. Everybody on the paper sees it now.", "success");
+    flash("Added your comment. Everybody on the paper sees it now.", "success");
     paint();
     select(t.id);
     return t;
@@ -404,8 +389,9 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     reviews = [...reviews.filter((r) => r.id !== review.id), review];
     env.reviews.set(review.id, review);
     await create(c, values, review.id);
-    flash(h("span", {}, "Started your review on the text as it is now. ",
-      h("a", { href: `${base}/reviews/${enc(review.id)}`, text: "Finish it" }), " when you are done."), "success");
+    flash(h("span", {}, "Started ",
+      h("a", { href: `${base}/reviews/${enc(review.id)}`, text: "your review" }),
+      " on the text as it is now. Everybody on the paper sees your comments as soon as you add them."), "success");
   }
 
   // Edits while a comment is written move its span along.
@@ -417,7 +403,7 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
   }
 
   // What a card shows. Positions move with every edit and are left out.
-  const looks = (t) => JSON.stringify([t.state, t.pending, t.text, t.outdated, t.changed, t.resolution?.at, t.accepted?.at,
+  const looks = (t) => JSON.stringify([t.state, t.text, t.outdated, t.changed, t.resolution?.at, t.accepted?.at,
     t.comments.map((c) => [c.id, c.edited_at])]);
 
   // --- Loading -----------------------------------------------------------------------
@@ -427,15 +413,13 @@ export function editorComments({ project, base, cm, view, path, reveal, openFile
     if (loading) return loading;
     loading = (async () => {
       try {
-        const [list, revs, underWay] = await Promise.all([
+        const [list, revs] = await Promise.all([
           api.get(url("/threads"), { query: { state: "all" } }),
           api.get(url("/reviews")),
-          api.get(url("/reviews-in-progress")),
         ]);
         if (dead) return;
         threads = list;
         reviews = revs;
-        inProgress = underWay;
         env.reviews = new Map(revs.map((r) => [r.id, r]));
         // Cards of threads that changed are drawn again, unless something is being written in them.
         for (const t of threads) {

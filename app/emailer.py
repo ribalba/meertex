@@ -137,11 +137,6 @@ def send_new_user(
 
 # --- Reviews (DESIGN §13) --------------------------------------------------------
 
-VERDICTS = {
-    "approve": "approved it",
-    "comment": "left comments",
-    "changes_requested": "asked for changes",
-}
 THREAD_EVENTS = {
     "comment": "{actor} commented on {title}",
     "reply": "{actor} replied on {title}",
@@ -177,23 +172,25 @@ def _why_mentioned(actor: str) -> str:
     return f"You get this mail because {actor} mentioned you. Turn these mails off at {base}/settings#mentions."
 
 
-def send_review_submitted(
-    to: str, reviewer: str, project_title: str, verdict: str, summary: str, comments: int, link: str,
-    mentions_you: bool = False,
+def send_review_comment(
+    to: str, reviewer: str, project_title: str, first: bool, where: str, quote: str, text: str, link: str
 ) -> None:
-    """A review was submitted. Goes to the owner and the editors, and says so
-    when the review mentions the one it goes to."""
-    headline = f'{reviewer} reviewed "{project_title}" and {VERDICTS.get(verdict, verdict)}.'
-    parts = [f"{headline} It mentions you." if mentions_you else headline]
-    if summary.strip():
-        parts.append(summary.strip())
-    if comments:
-        noun = "comment" if comments == 1 else "comments"
-        parts.append(f"The review has {comments} {noun} on the text. Open it to answer them.")
+    """A reviewer commented in their review, and the comment starts a sitting:
+    it is the review's first (``first``), or the first after a pause. The
+    other comments of a sitting mail nobody, so a long review is one mail.
+    Goes to the owner and the editors, ``link`` is the review."""
+    if first:
+        subject = f"{reviewer} started a review of {project_title}"
+        headline = f'{reviewer} started a review of "{project_title}" with this comment.'
     else:
-        parts.append("Open the review to read it.")
+        subject = f"{reviewer} commented in their review of {project_title}"
+        headline = f'{reviewer} is back at their review of "{project_title}" with this comment.'
+    parts = [headline, f"{where}\n{_quoted(quote)}" if quote else where]
+    if text.strip():
+        parts.append(text.strip())
+    parts.append("More comments may follow without a mail each. Open the review to read and answer them.")
     parts.append(link)
-    send_email(to, f"{reviewer} reviewed {project_title}", "\n\n".join(parts))
+    send_email(to, subject, "\n\n".join(parts))
 
 
 def send_review_request(
@@ -213,8 +210,8 @@ def send_review_request(
     if note.strip():
         parts.append(note.strip())
     parts.append(
-        f"The link starts your review {where}. Your comments stay pending, and only you see them,"
-        " until you finish the review."
+        f"The link starts your review {where}. Everybody on the paper sees your comments as soon as you"
+        " write them. There is nothing to submit at the end."
     )
     parts.append(link)
     send_email(to, f"{requester} asked you to review {project_title}", "\n\n".join(parts))
@@ -233,20 +230,6 @@ def send_thread_event(
     parts.append("Open the thread to answer.")
     parts.append(link)
     send_email(to, headline.format(actor=actor, title=project_title), "\n\n".join(parts))
-
-
-def send_review_mention(
-    to: str, reviewer: str, project_title: str, verdict: str, summary: str, link: str
-) -> None:
-    """A submitted review mentions somebody who does not get the review mail
-    (a reviewer or a viewer), in its summary or in one of its comments."""
-    parts = [f'{reviewer} reviewed "{project_title}", {VERDICTS.get(verdict, verdict)} and mentioned you.']
-    if summary.strip():
-        parts.append(summary.strip())
-    parts.append("Open the review to read it.")
-    parts.append(link)
-    parts.append(_why_mentioned(reviewer))
-    send_email(to, f"{reviewer} mentioned you in a review of {project_title}", "\n\n".join(parts))
 
 
 def send_mention(

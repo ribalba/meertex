@@ -87,10 +87,12 @@ def test_the_review_has_a_thread_in_every_state():
         p = _example(client)
         url = f"/api/projects/{p['id']}"
         reviews = client.get(f"{url}/reviews").json()
-        assert [(r["reviewer"]["email"], r["state"], r["verdict"]) for r in reviews] == [
-            (AMARA, "submitted", "changes_requested"),
+        # Open, as every review is now, without a verdict.
+        assert [(r["reviewer"]["email"], r["state"], r["verdict"], r["summary"]) for r in reviews] == [
+            (AMARA, "open", None, ""),
         ]
-        assert reviews[0]["version"]["tag"] == "submission"
+        assert (reviews[0]["version"]["tag"], reviews[0]["submitted_at"]) == ("submission", None)
+        assert reviews[0]["counts"] == {"open": 2, "resolved": 1, "accepted": 1}
 
         threads = client.get(f"{url}/threads", params={"state": "all"}).json()
         assert sorted(t["state"] for t in threads) == ["accepted", "open", "open", "open", "resolved"]

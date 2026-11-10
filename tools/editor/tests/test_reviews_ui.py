@@ -211,7 +211,7 @@ class Env:
 
     def expected(self, message):
         """Errors the browser logs for answers the page expects: the 404 of a
-        review somebody else may not see, of /compiles/latest before the first
+        review that was discarded, of /compiles/latest before the first
         compile, and the 503 of the compile routes without a compile service."""
         url = (message.location or {}).get("url", "")
         if "404" in message.text and ("/reviews/" in url or "/compiles/latest" in url or "/synctex/" in url):
@@ -273,6 +273,18 @@ def no_page_scroll(page: Page, width: int):
     assert over <= width, f"the page is {over} px wide at {width}"
 
 
+def no_submit_step(page: Page):
+    """Reviews have no submit step, so nothing on the page waits for one or
+    keeps a comment from the others."""
+    body = page.locator("body")
+    for old in ("Finish your review", "Submit review", "Pending", "in progress", "only you see"):
+        expect(body).not_to_contain_text(old)
+
+
+def flashes(page: Page):
+    return page.locator("#flash-region")
+
+
 # --- tests: starting and writing a review ------------------------------------------------------
 
 
@@ -282,21 +294,99 @@ def start_review_on_a_version(env, browser):
     page = env.go(env.page(ctx, "rita"), "/reviews")
     expect(page.locator(".underline-nav-item[aria-current='page']")).to_contain_text("Reviews")
     expect(page.get_by_text("No reviews yet")).to_be_visible()
-    page.locator(".subhead").get_by_role("button", name="Start a review").click()
+    start = page.locator(".subhead").get_by_role("button", name="Start a review")
+    expect(start).to_have_class(re.compile(r"\bbtn-primary\b"))
+    expect(page.get_by_role("link", name="Continue your review")).to_have_count(0)
+    start.click()
     dialog = page.locator("dialog")
+    expect(dialog).to_contain_text("Everybody on the paper sees each comment as soon as you add it. There is nothing to submit at the end.")
     dialog.get_by_text(env.version["label"], exact=True).click()
     env.shot(page, "start-1280")
     dialog.get_by_role("button", name="Start review").click()
     expect(page).to_have_url(re.compile(r"/reviews/[0-9a-f-]{36}/files$"))
     env.review = page.url.split("/reviews/")[1].split("/")[0]
-    expect(page.locator(".rv-head")).to_contain_text("Pending, only you see it")
-    expect(page.locator(".rv-head")).to_contain_text(env.version["tag"])
+    head = page.locator(".rv-head")
+    expect(head).to_contain_text(env.version["tag"])
+    # An open review has no verdict, and while it has no comments it can go.
+    expect(head.locator(".rv-title .Label")).to_have_count(0)
+    expect(head.locator(".rv-discard")).to_be_visible()
     expect(page.locator("#RL4 td.lc")).to_contain_text("Grüße aus Köln")
+    no_submit_step(page)
     with env.api("rita") as c:
         review = c.get(env.url(f"/reviews/{env.review}")).json()
     assert review["commit"] == env.version["commit"], review
+    assert review["state"] == "open" and review["verdict"] is None and review["submitted_at"] is None, review
     ctx.close()
     return f"review {env.review[:8]} on {env.version['tag']}"
+
+
+@test
+def discard_an_empty_review(env, browser):
+    ctx = env.context(browser, "rita")
+    page = env.go(env.page(ctx, "rita"), f"/reviews/{env.review}")
+    # Her own review says on its Conversation that there is nothing to submit.
+    note = page.locator(".rv-view .flash")
+    expect(note).to_contain_text("This is your review. Everybody on the paper sees each comment as soon as you add it. "
+                                 "There is nothing to submit at the end.")
+    expect(note.get_by_role("link", name="Comment on the files")).to_have_attribute("href", re.compile(rf"/reviews/{env.review}/files$"))
+    expect(page.locator(".blankslate")).to_contain_text("No comments on the text")
+    no_submit_step(page)
+    env.shot(page, "conversation-own-1280")
+    # A review started by mistake goes, after a question.
+    page.locator(".rv-head .rv-discard").click()
+    dialog = page.locator("dialog")
+    expect(dialog).to_contain_text("Discard your review?")
+    dialog.get_by_role("button", name="Discard review").click()
+    expect(page).to_have_url(re.compile(r"/reviews$"))
+    expect(flashes(page)).to_contain_text("Discarded your review.")
+    expect(page.get_by_text("No reviews yet")).to_be_visible()
+    with env.api("rita") as c:
+        assert c.get(env.url(f"/reviews/{env.review}")).status_code == 404
+    # She starts it again.
+    page.get_by_role("button", name="Start the first review").click()
+    dialog.get_by_text(env.version["label"], exact=True).click()
+    dialog.get_by_role("button", name="Start review").click()
+    expect(page).to_have_url(re.compile(r"/reviews/[0-9a-f-]{36}/files$"))
+    gone, env.review = env.review, page.url.split("/reviews/")[1].split("/")[0]
+    assert env.review != gone
+    expect(page.locator(".rv-head .rv-discard")).to_be_visible()
+    ctx.close()
+    return f"review {env.review[:8]} now"
+
+
+@test
+def continue_your_review(env, browser):
+    ctx = env.context(browser, "rita")
+    page = env.go(env.page(ctx, "rita"), "/reviews")
+    head = page.locator(".subhead")
+    # With an open review of her own, going on with it is the main button and
+    # starting another one, on another state, a plain one.
+    resume = head.get_by_role("link", name="Continue your review")
+    expect(resume).to_have_class(re.compile(r"\bbtn-primary\b"))
+    expect(resume).to_have_attribute("href", re.compile(rf"/reviews/{env.review}/files$"))
+    start = head.get_by_role("button", name="Start a review")
+    expect(start).to_be_visible()
+    expect(start).not_to_have_class(re.compile(r"\bbtn-primary\b"))
+    row = page.locator(".rv-review-row")
+    expect(row).to_have_count(1)
+    expect(row).to_contain_text("Review by Rita Reviewer")
+    expect(row.locator(".Label")).to_have_count(0)
+    no_submit_step(page)
+    env.shot(page, "reviews-own-1280")
+    # Starting again on the same state gives her that review.
+    start.click()
+    dialog = page.locator("dialog")
+    dialog.get_by_text(env.version["label"], exact=True).click()
+    dialog.get_by_role("button", name="Start review").click()
+    expect(page).to_have_url(re.compile(rf"/reviews/{env.review}/files$"))
+    expect(flashes(page)).to_contain_text("You have a review of this state already. Here it is.")
+    env.go(page, "/reviews")
+    resume.click()
+    expect(page).to_have_url(re.compile(rf"/reviews/{env.review}/files$"))
+    expect(page.locator("#RL4")).to_be_visible()
+    with env.api("rita") as c:
+        assert [r["id"] for r in c.get(env.url("/reviews")).json()] == [env.review]
+    ctx.close()
 
 
 @test
@@ -311,6 +401,8 @@ def comment_on_a_selection_with_umlauts(env, browser):
     compose = page.locator(".rv-compose")
     expect(compose).to_contain_text("Comment on line 4")
     expect(compose.locator(".rv-compose-quote")).to_have_text("Grüße aus Köln")
+    expect(compose).to_contain_text("Everybody on the paper sees your comment as soon as you add it.")
+    expect(compose.get_by_role("button", name="Add single comment")).to_be_visible()
     compose.get_by_label("Comment").fill("Bitte prüfen: die Größe der Grüße passt nicht. 🎉")
     env.shot(page, "compose-1280")
     compose.get_by_role("button", name="Add review comment").click()
@@ -320,13 +412,27 @@ def comment_on_a_selection_with_umlauts(env, browser):
     assert len(threads) == 1, threads
     t = threads[0]
     assert t["quote"] == "Grüße aus Köln", t["quote"]
-    assert t["base"]["line_start"] == 4 and t["pending"], t
+    assert t["base"]["line_start"] == 4 and t["review_id"] == env.review and t["state"] == "open", t
+    assert "pending" not in t, t
     assert t["comments"][0]["body"] == "Bitte prüfen: die Größe der Grüße passt nicht. 🎉"
     env.threads["greeting"] = t["id"]
     thread = card(page, t["id"])
-    expect(thread).to_contain_text("Pending")
+    expect(thread.locator(".rv-labels")).to_contain_text("Open")
     expect(thread).to_contain_text("Bitte prüfen")
     expect(page.locator("#RL4 mark.rv-mark")).to_have_text("Grüße aus Köln")
+    # A review with a comment stays, so Discard is gone.
+    expect(page.locator(".rv-head .rv-discard")).to_be_hidden()
+    no_submit_step(page)
+    ctx.close()
+
+    # The editor sees the comment at once, and she does nothing more for it.
+    ctx = env.context(browser, "bob")
+    page = env.go(env.page(ctx, "bob"), "/reviews")
+    expect(page.locator(".underline-nav-item .rv-open-count")).to_have_text("1")
+    expect(page.locator(".rv-review-row")).to_contain_text("Review by Rita Reviewer")
+    expect(page.locator(".rv-thread-list .rv-thread")).to_have_count(1)
+    expect(card(page, t["id"])).to_contain_text("Bitte prüfen: die Größe der Grüße passt nicht. 🎉")
+    no_submit_step(page)
     ctx.close()
 
 
@@ -374,46 +480,35 @@ def suggestion_and_line_comments(env, browser):
     expect(card(page, sugg["id"]).locator(".rv-suggestion ins")).to_have_text("naive")
     expect(page.locator(".rv-tab[aria-current='page']")).to_contain_text("Files")
     expect(page.locator(".rv-tab").first.locator(".counter")).to_have_text("3")
-    env.shot(page, "files-pending-1280")
+    env.shot(page, "files-review-1280")
     ctx.close()
 
 
 @test
-def pending_threads_are_invisible_to_others(env, browser):
+def editor_sees_the_review_at_once(env, browser):
+    mine = {env.threads["greeting"], env.threads["suggestion"], env.threads["paragraph"]}
     with env.api("bob") as c:
-        assert c.get(env.url("/reviews")).json() == []
-        assert c.get(env.url("/threads"), params={"state": "all"}).json() == []
-        assert c.get(env.url(f"/reviews/{env.review}")).status_code == 404
-    ctx = env.context(browser, "bob")
-    page = env.go(env.page(ctx, "bob"), "/reviews")
-    # Bob sees that the review is under way, and nothing of what it says.
-    expect(page.locator(".rv-review-row", has_text="Rita Reviewer").locator(".Label")).to_have_text("Review in progress")
-    expect(page.get_by_text("No open conversations")).to_be_visible()
-    expect(page.locator(".underline-nav-item .rv-open-count")).to_have_text("0")
-    env.go(page, f"/reviews/{env.review}")
-    expect(page.locator(".blankslate")).to_contain_text("This review is not here")
-    ctx.close()
-
-
-@test
-def submit_with_a_verdict(env, browser):
-    ctx = env.context(browser, "rita")
-    page = env.go(env.page(ctx, "rita"), f"/reviews/{env.review}")
-    expect(page.locator(".rv-thread")).to_have_count(3)
-    expect(page.locator(".rv-view .flash")).to_contain_text("This review is pending.")
-    page.locator(".rv-head").get_by_role("button", name="Finish your review").click()
-    dialog = page.locator("dialog")
-    dialog.get_by_label("Summary").fill("Schöne Arbeit. A few things to fix before the camera-ready.")
-    dialog.get_by_text("Request changes", exact=True).click()
-    env.shot(page, "finish-1280")
-    dialog.get_by_role("button", name="Submit review").click()
-    expect(page.locator(".rv-head")).to_contain_text("Changes requested")
-    expect(page.locator(".rv-summary")).to_contain_text("Schöne Arbeit.")
-    expect(page.locator(".rv-head").get_by_role("button", name="Finish your review")).to_have_count(0)
+        reviews = c.get(env.url("/reviews")).json()
+        assert [(r["id"], r["state"]) for r in reviews] == [(env.review, "open")], reviews
+        assert {t["id"] for t in c.get(env.url("/threads"), params={"state": "all"}).json()} == mine
+        assert c.get(env.url(f"/reviews/{env.review}")).status_code == 200
+    # Older clients learn that there is nothing to submit.
     with env.api("rita") as c:
-        review = c.get(env.url(f"/reviews/{env.review}")).json()
-    assert review["state"] == "submitted" and review["verdict"] == "changes_requested", review
-    assert not any(t["pending"] for t in review["threads"])
+        r = c.post(env.url(f"/reviews/{env.review}/submit"))
+        assert r.status_code == 410 and "no submit step" in r.json()["detail"], r.text
+    ctx = env.context(browser, "bob")
+    page = env.go(env.page(ctx, "bob"), f"/reviews/{env.review}")
+    expect(page.locator(".rv-thread")).to_have_count(3)
+    expect(page.locator(".rv-counts")).to_contain_text("3 open")
+    # Somebody else's review has no note for its reviewer and no Discard.
+    expect(page.locator(".rv-view .flash")).to_have_count(0)
+    expect(page.locator(".rv-head .rv-discard")).to_have_count(0)
+    expect(page.locator(".rv-head .rv-title .Label")).to_have_count(0)
+    # The authors answer each comment right away.
+    expect(card(page, env.threads["paragraph"]).get_by_role("button", name="Resolve conversation")).to_be_visible()
+    expect(card(page, env.threads["suggestion"]).get_by_role("button", name="Apply suggestion")).to_be_visible()
+    no_submit_step(page)
+    env.shot(page, "conversation-editor-1280")
     ctx.close()
 
 
@@ -426,7 +521,8 @@ def editor_replies_applies_and_resolves(env, browser):
     page = env.go(env.page(ctx, "bob"), "/reviews")
     expect(page.locator(".underline-nav-item .rv-open-count")).to_have_text("3")
     expect(page.locator(".rv-review-row")).to_contain_text("Review by Rita Reviewer")
-    expect(page.locator(".rv-review-row")).to_contain_text("Changes requested")
+    # An open review has no verdict.
+    expect(page.locator(".rv-review-row .Label")).to_have_count(0)
     cards = page.locator(".rv-thread-list .rv-thread")
     expect(cards).to_have_count(3)
     # In file order, with the text as it reads now and the lines around it.
@@ -476,6 +572,9 @@ def editor_replies_applies_and_resolves(env, browser):
 def reviewer_accepts_one_and_reopens_the_other(env, browser):
     ctx = env.context(browser, "rita")
     page = env.go(env.page(ctx, "rita"), f"/reviews/{env.review}")
+    # Still her open review, with comments, so it cannot be discarded.
+    expect(page.locator(".rv-view .flash")).to_contain_text("This is your review.")
+    expect(page.locator(".rv-head .rv-discard")).to_be_hidden()
     greeting = card(page, env.threads["greeting"])
     expect(greeting.locator(".rv-resolution")).to_contain_text("How it was changed")
     expect(greeting.locator(".rv-resolution ins")).to_contain_text("dem schönen")
@@ -829,9 +928,14 @@ def editor_highlights_and_panel(env, browser):
     compose = panel.locator(".editor-compose")
     expect(compose.locator(".rv-compose-head")).to_have_text("Comment on line 8")
     expect(compose.locator(".rv-compose-quote")).to_have_text("results are good")
+    # She has no review, so the box makes a single comment or starts one.
+    expect(compose).to_contain_text("Everybody on the paper sees your comment as soon as you add it.")
+    expect(compose.get_by_role("button", name="Start a review")).to_be_visible()
+    expect(compose.get_by_role("button", name="Add to your review")).to_have_count(0)
     compose.get_by_label("Comment").fill("Which results? Grüße 🎉")
     compose.get_by_role("button", name="Add single comment").click()
     expect(compose).to_have_count(0)
+    expect(flashes(page)).to_contain_text("Added your comment. Everybody on the paper sees it now.")
     with env.api("alice") as c:
         made = [t for t in c.get(env.url("/threads")).json() if t["quote"] == "results are good"]
     assert len(made) == 1 and made[0]["comments"][0]["body"] == "Which results? Grüße 🎉", made
@@ -857,28 +961,37 @@ def editor_highlights_and_panel(env, browser):
 
 @test
 def editor_comments_for_reviewers_and_viewers(env, browser):
-    # A reviewer cannot type, but comments, and starts a review on the text as it is.
+    # A reviewer cannot type, but comments. Her open review takes the comment.
     ctx = env.context(browser, "rita")
     page = open_editor(env, env.page(ctx, "rita"))
-    cm_select(page, "We conclude" if "We conclude" in env.file("rita", "main.tex") else "Conclusion")
+    needle = "We conclude" if "We conclude" in env.file("rita", "main.tex") else "Conclusion"
+    cm_select(page, needle)
     page.locator(".editor-comment-float").click()
     compose = page.locator(".editor-compose")
-    compose.get_by_label("Comment").fill("Pending note from Rita.")
-    compose.get_by_role("button", name="Start a review").click()
+    expect(compose).to_contain_text("Everybody on the paper sees your comment as soon as you add it.")
+    expect(compose.get_by_role("button", name="Add single comment")).to_be_visible()
+    expect(compose.get_by_role("button", name="Start a review")).to_have_count(0)
+    compose.get_by_label("Comment").fill("A late note from Rita.")
+    compose.get_by_role("button", name="Add to your review").click()
     expect(compose).to_have_count(0)
+    expect(flashes(page)).to_contain_text("Added your comment. Everybody on the paper sees it now.")
     with env.api("rita") as c:
-        mine = [t for t in c.get(env.url("/threads")).json() if t["comments"][0]["body"] == "Pending note from Rita."]
-    assert len(mine) == 1 and mine[0]["pending"], mine
-    pending = mine[0]["id"]
-    expect(card(page, pending).locator(".rv-labels")).to_contain_text("Pending")
-    expect(page.locator(f".cm-rv-thread.is-pending[data-thread='{pending}']").first).to_be_visible()
+        mine = [t for t in c.get(env.url("/threads")).json() if t["comments"][0]["body"] == "A late note from Rita."]
+    assert len(mine) == 1 and mine[0]["review_id"] == env.review and "pending" not in mine[0], mine
+    late = mine[0]["id"]
+    expect(card(page, late).locator(".rv-labels")).to_contain_text("Open")
+    expect(page.locator(f".cm-rv-thread.is-open[data-thread='{late}']").first).to_be_visible()
+    no_submit_step(page)
     ctx.close()
 
-    # Nobody else sees it.
+    # The editor sees it at once, on the text and in the panel.
     ctx = env.context(browser, "bob")
     page = open_editor(env, env.page(ctx, "bob"))
-    wait_until(lambda: mark_text(page, env.threads["greeting"]), what="the highlights")
-    expect(page.locator(f".cm-rv-thread[data-thread='{pending}']")).to_have_count(0)
+    wait_until(lambda: mark_text(page, late) == needle, what="the reviewer's new comment highlighted")
+    page.locator(".editor-comments-btn").click()
+    expect(card(page, late)).to_contain_text("A late note from Rita.")
+    expect(card(page, late).get_by_role("button", name="Resolve conversation")).to_be_visible()
+    no_submit_step(page)
     ctx.close()
 
     # A viewer reads the comments and cannot write one.
@@ -1076,42 +1189,56 @@ def pdf_click_finds_the_word(env, browser):
 
 
 @test
-def reviews_in_progress_are_listed(env, browser):
-    paper = paper_with(env, f"Under way {env.run}", {"main.tex": PAPER}, members={"bob": "editor", "rita": "reviewer"})
-    with env.api("rita") as c:
-        review = c.post(f"/api/projects/{paper['id']}/reviews", json={"ref": "live"})
-        review.raise_for_status()
-        c.post(f"/api/projects/{paper['id']}/threads", json={
-            "path": "main.tex", "line_start": 4, "body": "A private remark.", "review_id": review.json()["id"],
-        }).raise_for_status()
-
-    ctx = env.context(browser, "alice")
-    page = env.page(ctx, "alice")
-    page.goto(f"{env.base}/p/{paper['name']}/reviews")
-    row = page.locator(".rv-review-row", has_text="Rita Reviewer")
-    expect(row.locator(".Label")).to_have_text("Review in progress")
-    expect(row).to_contain_text("1 comment so far, not submitted")
-    expect(page.locator("body")).not_to_contain_text("A private remark.")
-    env.shot(page, "reviews-in-progress-1280")
-
-    # The comments in the editor say it too.
-    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
-    page.locator(".editor-comments-btn").click()
-    expect(page.locator(".editor-comments-progress")).to_contain_text("Rita Reviewer has a review in progress, 1 comment so far")
-    expect(page.locator(".editor-comments")).not_to_contain_text("A private remark.")
-    env.shot(page, "editor-review-in-progress-1280")
-    ctx.close()
-
-    # The reviewer has their own row and the button to go on with it.
+def review_started_in_the_editor_is_seen_at_once(env, browser):
+    paper = paper_with(env, f"At once {env.run}", {"main.tex": PAPER}, members={"bob": "editor", "rita": "reviewer"})
+    # The reviewer has no review yet and starts one with her first comment.
     ctx = env.context(browser, "rita")
     page = env.page(ctx, "rita")
-    page.goto(f"{env.base}/p/{paper['name']}/reviews")
-    expect(page.get_by_role("link", name="Continue your review")).to_be_visible()
-    expect(page.get_by_text("Review in progress")).to_have_count(0)
     page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    expect(page.locator(".editor-status")).to_have_text("Connected", timeout=10000)
+    cm_select(page, "results are good")
+    page.locator(".editor-comment-float").click()
+    compose = page.locator(".editor-compose")
+    expect(compose).to_contain_text("Everybody on the paper sees your comment as soon as you add it.")
+    expect(compose.get_by_role("button", name="Add to your review")).to_have_count(0)
+    compose.get_by_label("Comment").fill("A remark everybody sees.")
+    compose.get_by_role("button", name="Start a review").click()
+    expect(compose).to_have_count(0)
+    started = flashes(page).locator(".flash-success")
+    expect(started).to_contain_text("Started your review on the text as it is now. "
+                                    "Everybody on the paper sees your comments as soon as you add them.")
+    link = started.get_by_role("link", name="your review")
+    expect(link).to_have_attribute("href", re.compile(r"/reviews/[0-9a-f-]{36}$"))
+    review = link.get_attribute("href").rsplit("/", 1)[1]
+    env.shot(page, "editor-review-started-1280")
+    ctx.close()
+    with env.api("rita") as c:
+        reviews = c.get(f"/api/projects/{paper['id']}/reviews").json()
+    assert [(r["id"], r["state"], r["counts"]["open"]) for r in reviews] == [(review, "open", 1)], reviews
+
+    # The editor sees it at once, on the Reviews tab and next to the text.
+    ctx = env.context(browser, "bob")
+    page = env.page(ctx, "bob")
+    page.goto(f"{env.base}/p/{paper['name']}/reviews")
+    row = page.locator(".rv-review-row")
+    expect(row).to_have_count(1)
+    expect(row).to_contain_text("Review by Rita Reviewer")
+    expect(row).to_contain_text("1 open")
+    expect(row.locator(".Label")).to_have_count(0)
+    expect(page.locator(".underline-nav-item .rv-open-count")).to_have_text("1")
+    expect(page.locator(".rv-thread-list .rv-thread")).to_have_count(1)
+    expect(page.locator(".rv-thread-list .rv-thread")).to_contain_text("A remark everybody sees.")
+    no_submit_step(page)
+    env.shot(page, "reviews-open-review-1280")
+
+    page.goto(f"{env.base}/p/{paper['name']}/edit/main.tex")
+    expect(page.locator(".editor-status")).to_have_text("Connected", timeout=10000)
+    expect(page.locator(".editor-comments-btn .counter")).to_have_text("1")
     page.locator(".editor-comments-btn").click()
-    expect(page.locator(".editor-comments .rv-thread").first).to_contain_text("A private remark.")
-    expect(page.locator(".editor-comments-progress")).to_have_count(0)
+    expect(page.locator(".editor-comments-list > .rv-thread")).to_have_count(1)
+    expect(page.locator(".editor-comments-list > .rv-thread")).to_contain_text("A remark everybody sees.")
+    no_submit_step(page)
+    env.shot(page, "editor-review-comment-1280")
     ctx.close()
 
 
