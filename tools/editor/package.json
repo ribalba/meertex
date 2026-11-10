@@ -19,7 +19,7 @@
     "@codemirror/view": "6.43.15",
     "@lezer/highlight": "1.2.5",
     "lib0": "0.2.119",
-    "pdfjs-dist": "6.4.299",
+    "pdfjs-dist": "6.5.438",
     "y-codemirror.next": "0.3.6",
     "y-protocols": "1.0.7",
     "y-websocket": "3.1.0",
