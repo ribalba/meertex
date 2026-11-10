@@ -5,7 +5,7 @@
 # now and then, so the digest pins the exact image. About 2.6 GB to download
 # and 5.5 GB on disk. It brings Python 3, latexmk, synctex, latexdiff, biber
 # and the luaotfload font database, which is all the service needs.
-FROM texlive/texlive:TL2025-historic@sha256:7056390eac37715fd3e01875037ceb4016cb17d44c611f7bbbfa7a012007979f
+FROM texlive/texlive:TL2025-historic@sha256:dbd65d778eb83de9b45fb0a8deb3afe44cbbaba2272e4e1e644e94dda52c7109
 
 ARG MEERTEX_VERSION=0.0.0
 
