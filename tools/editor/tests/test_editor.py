@@ -609,6 +609,8 @@ def back_forward_and_leaving(env, browser):
     tree = page.locator(".editor-tree-body")
     tree.locator(".tree-row[data-path='refs.bib'] a").click()
     expect(page).to_have_url(re.compile(r"/edit/refs\.bib$"))
+    # Folders start closed, so the file's row shows once its folder is open.
+    tree.get_by_role("button", name="Expand back", exact=True).click()
     tree.locator(".tree-row[data-path='back/forward.tex'] a").click()
     expect(page).to_have_url(re.compile(r"/edit/back/forward\.tex$"))
     wait_until(lambda: "Back and forward" in (editor_text(page) or ""), what="back/forward.tex in the editor")

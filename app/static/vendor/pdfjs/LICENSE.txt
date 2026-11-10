@@ -1,4 +1,4 @@
-pdf.js and pdf.worker.js are pdfjs-dist 6.4.299 (Apache-2.0), copied unchanged from legacy/build.
+pdf.js and pdf.worker.js are pdfjs-dist 6.5.438 (Apache-2.0), copied unchanged from legacy/build.
 
 
                                  Apache License
