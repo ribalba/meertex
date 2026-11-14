@@ -1248,9 +1248,22 @@ code.cmd {
 .editor-other { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .editor-message { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 16px; }
 .editor-blob { display: flex; flex-direction: column; min-height: 100%; }
-.editor-blob-head { display: flex; align-items: center; gap: 8px; padding: 8px 16px; font-size: 12px; border-bottom: 1px solid var(--border-muted); }
+.editor-blob-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 45px; padding: 8px 16px;
+  font-size: 12px; border-bottom: 1px solid var(--border-muted);
+}
 .editor-blob .blankslate { margin: auto; }
-.editor-blob .image-preview { flex: 1 1 auto; }
+/* An image or a PDF fills the pane, and scrolls in it. */
+.editor-blob.is-image, .editor-blob.is-pdf { height: 100%; }
+.editor-image { display: flex; flex: 1 1 auto; min-height: 0; padding: 16px; overflow: auto; background: var(--bg-muted); }
+/* margin: auto centres it, and keeps all of a large one reachable by scrolling. */
+.editor-image img { margin: auto; max-width: 100%; max-height: 100%; object-fit: contain; background: #fff; box-shadow: 0 0 0 1px var(--border-muted); }
+.editor-image.is-full img { max-width: none; max-height: none; }
+.editor-image img.can-zoom { cursor: zoom-in; }
+.editor-image.is-full img.can-zoom { cursor: zoom-out; }
+.editor-blob-pdf { position: relative; flex: 1 1 auto; min-height: 0; }
+.editor-blob-pdf .pdfview { position: absolute; inset: 0; height: auto; }
+.editor-blob-pdf > .blankslate { margin-top: 48px; }
 
 /* The PDF pane (pages/editor-pdf.js). */
 .pdf-pane { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; }
@@ -1284,6 +1297,13 @@ code.cmd {
   background: var(--attention-bg); border-bottom: 1px solid var(--attention-border);
 }
 .pdf-stale .icon, .pdf-limit .icon { flex: 0 0 auto; color: var(--attention); }
+/* Which file the PDF is of, when not the main file, and the switch to the open file. */
+.pdf-source {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 12px; font-size: 12px;
+  background: var(--accent-bg); border-bottom: 1px solid var(--accent-border);
+}
+.pdf-source > .icon { flex: 0 0 auto; color: var(--accent); }
+.pdf-source-text { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .pdf-pages.is-over { color: var(--attention); font-weight: 600; }
 .pdf-body { position: relative; flex: 1 1 auto; min-height: 0; }
 .pdf-view { position: absolute; inset: 0; }

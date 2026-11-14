@@ -220,6 +220,65 @@ def test_main_file_and_compiler_come_from_the_project():
         assert client.get(c["log_url"]).text.startswith("This is XeTeX")
 
 
+LETTER = rb"""\documentclass{letter}
+\begin{document}
+Dear reviewers,
+
+thank you.
+\end{document}
+"""
+
+
+def test_another_document_of_the_paper(service):
+    """A response letter next to the paper compiles on its own, in the
+    editor's workspace too, and never passes for the paper's PDF."""
+    with running_app() as client:
+        sign_in(client)
+        pid = _project(client, {"main.tex": HELLO, "sections/intro.tex": INTRO, "response/letter.tex": LETTER})
+        paper = _editor(client, pid)
+        assert paper["main_file"] == "main.tex"
+
+        r = client.post(f"/api/projects/{pid}/compile", json={"editor": True, "main_file": "response/letter.tex"})
+        assert r.status_code == 200, r.text
+        letter = r.json()
+        assert (letter["status"], letter["main_file"], letter["ref"]) == ("success", "response/letter.tex", "live")
+        assert letter["id"] != paper["id"]
+        pdf = client.get(letter["pdf_url"])
+        assert pdf.content.startswith(b"%PDF-")
+        assert pdf.content != client.get(paper["pdf_url"]).content
+        assert "letter" in pdf.headers["content-disposition"]
+
+        # latest is the paper's PDF unless another file is asked for.
+        assert client.get(f"/api/projects/{pid}/compiles/latest").json()["id"] == paper["id"]
+        latest = client.get(f"/api/projects/{pid}/compiles/latest", params={"main_file": "response/letter.tex"}).json()
+        assert latest["id"] == letter["id"]
+        never = client.get(f"/api/projects/{pid}/compiles/latest", params={"main_file": "sections/intro.tex"})
+        assert (never.status_code, never.json()) == (200, None)
+
+        # SyncTeX knows the letter's lines.
+        base = f"/api/projects/{pid}/compiles/{letter['id']}/synctex"
+        boxes = client.post(f"{base}/view", json={"path": "response/letter.tex", "line": 5}).json()["boxes"]
+        assert boxes
+        point = {"page": boxes[0]["page"], "x": boxes[0]["x"] + 2, "y": boxes[0]["y"] + boxes[0]["height"] / 2}
+        assert client.post(f"{base}/edit", json=point).json()["path"] == "response/letter.tex"
+
+        # Back to the paper: the same text is the same compile, and an edit
+        # compiles in the workspace the letter used last.
+        assert _editor(client, pid)["id"] == paper["id"]
+        client.put(f"/api/projects/{pid}/files/sections/intro.tex", content=INTRO + b"More.\n")
+        again = _editor(client, pid)
+        assert (again["status"], again["main_file"]) == ("success", "main.tex")
+
+        # A clean compile of the letter, as the CLI would ask, and a file that is not there.
+        r = client.post(f"/api/projects/{pid}/compile", json={"main_file": "response/letter.tex"})
+        assert r.status_code == 200, r.text
+        assert (r.json()["status"], r.json()["main_file"]) == ("success", "response/letter.tex")
+        assert r.json()["id"] != letter["id"]
+        r = client.post(f"/api/projects/{pid}/compile", json={"editor": True, "main_file": "response/gone.tex"})
+        assert r.status_code == 404
+        assert client.post(f"/api/projects/{pid}/compile", json={"main_file": ""}).status_code == 422
+
+
 def test_without_a_compile_service(monkeypatch):
     from app.config import get_settings
 

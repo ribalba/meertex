@@ -19,6 +19,7 @@ import { avatar, blankslate, confirmDialog, dropdown, field, flash, flashError, 
 import { FILES, materialize, pathProblem } from "../livefiles.js";
 import { ProjectIndex, latexAutocomplete } from "../latexcomplete.js";
 import { pdfPane } from "./editor-pdf.js";
+import { createPdfView } from "../pdfview.js";
 import { editorComments } from "../editor-comments.js";
 import { editorFormat } from "../editor-format.js";
 import { editorGrammar } from "../editor-grammar.js";
@@ -49,7 +50,15 @@ const TREE_WIDTH_KEY = "meertex.editor.treewidth";
 const FOLDERS_KEY = "meertex.editor.folders";
 const PHONE = "(max-width: 767px)";
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+const PDF = /\.pdf$/i;
 const LATEX = /\.(tex|sty|cls|ltx|dtx|ins|bbx|cbx|lbx|tikz)$/i;
+// A .tex file is a document of its own when a line that is not commented out
+// has \documentclass and a later one \begin{document}.
+const DOCUMENTCLASS = /^[^%\n]*\\documentclass\b/m;
+const BEGIN_DOCUMENT = /^[^%\n]*\\begin\s*\{document\}/m;
+// The names the compile service takes for a main file, per part of its path
+// (compile/service.py, MAIN_FILE_PART_RE).
+const MAIN_NAME = /^[\p{L}\p{N}_][\p{L}\p{N}_ .,+=@-]*$/u;
 const DRAG_PATH = "application/x-meertex-path";
 // The colours and the hash of ui.js's avatar(), so a cursor has the colour of
 // its person's avatar.
@@ -150,6 +159,9 @@ export async function render(ctx) {
     onProblems: (problems) => ed.problems.update(problems),
     hasFile: (path) => (ed.ready ? ed.byPath.has(path) : null),
     canEdit: ed.canEdit,
+    openDocument: () => openDocument(ed),
+    // Followed by id, so a rename keeps it (followTarget).
+    onTarget: (path) => { ed.pdfTarget = (path && ed.byPath.get(path)?.id) || null; },
   });
   ed.el.pdfColumn.append(ed.pdf.el);
   onLeave(() => ed.pdf.destroy());
@@ -437,6 +449,7 @@ function destroy(ed) {
   clearTimeout(ed.refreshTimer);
   clearTimeout(ed.noteTimer);
   ed.offs.forEach((off) => off());
+  dropBlob(ed);
   ed.view?.destroy();
   ed.view = null;
   ed.undo.forEach((um) => um.destroy());
@@ -614,8 +627,35 @@ function refresh(ed) {
     if (entry) open(ed, entry.id, { history: "replace" });
     else if (ed.waiting === true && ed.emptyHadFiles !== ed.byPath.size > 0) showEmpty(ed);
   }
+  if (ed.pdfTarget) followTarget(ed);
   paintTree(ed);
   paintPresence(ed);
+}
+
+// The PDF pane compiles another file than the main file. It follows that
+// file's renames, and goes back to the paper when the file is gone.
+function followTarget(ed) {
+  const entry = ed.byId.get(ed.pdfTarget);
+  if (entry?.kind === "text") {
+    ed.pdf.setTarget(entry.shownAt);
+    return;
+  }
+  ed.pdfTarget = null;
+  ed.pdf.setTarget(null);
+  note(ed, "The file the PDF was made from is gone. The PDF shows the paper again.");
+}
+
+// The open file's path when LaTeX can compile it on its own: a .tex file
+// other than the main file, with its own \documentclass and \begin{document},
+// and a name the compile service takes. Else null.
+function openDocument(ed) {
+  const path = ed.boundText ? ed.openPath : null;
+  if (!path || !/\.tex$/i.test(path) || path === (ed.p.main_file || "main.tex")) return null;
+  if (!path.split("/").every((part) => MAIN_NAME.test(part))) return null;
+  const text = ed.boundText.toString();
+  const cls = DOCUMENTCLASS.exec(text);
+  const begin = cls && BEGIN_DOCUMENT.exec(text);
+  return begin && cls.index <= begin.index ? path : null;
 }
 
 function follow(ed) {
@@ -714,6 +754,9 @@ function openFromLink(ed, e, id) {
 }
 
 function paintPath(ed, entry) {
+  // Every change of the open file comes here. The PDF pane offers to compile
+  // it when it is a document of its own.
+  ed.pdf?.fileOpened();
   const el = clear(ed.el.path);
   if (!entry) return;
   const parts = entry.shownAt.split("/");
@@ -807,7 +850,8 @@ function bindText(ed, entry) {
       cm.yCollab(entry.text, ed.awareness, { undoManager }),
     ],
   });
-  ed.el.other.hidden = true;
+  dropBlob(ed);
+  clear(ed.el.other).hidden = true;
   ed.el.host.hidden = false;
   ed.shownSha = null;
   if (ed.view) ed.view.setState(state);
@@ -840,6 +884,7 @@ function reveal(ed, pos, select = true) {
 }
 
 function unbind(ed) {
+  dropBlob(ed);
   saveSelection(ed);
   ed.view?.destroy();
   ed.view = null;
@@ -947,22 +992,56 @@ function showMessage(ed, node) {
   clear(ed.el.other).append(h("div", { class: "editor-message" }, node));
 }
 
+// A file that is not text: an image or a PDF shown where the text would be,
+// anything else as a download. A PDF someone replaces keeps its place.
 function showBlob(ed, entry) {
-  unbind(ed);
   const url = `${projectUrl(ed.p.id, `/files/${encPath(entry.shownAt)}`)}?v=${encodeURIComponent((entry.sha || "").slice(0, 12))}`;
   const name = entry.shownAt.split("/").pop();
+  const shown = ed.blobView;
+  if (shown?.id === entry.id && shown.pdf && PDF.test(name)) {
+    shown.pdf.load(url).catch((err) => console.warn("The PDF could not be shown", err));
+    shown.size.textContent = `${formatBytes(entry.size)} · PDF`;
+    Object.assign(shown.download, { href: url, download: name });
+    ed.shownSha = entry.sha;
+    return;
+  }
+  unbind(ed);
   const download = h("a", { class: "btn btn-sm", href: url, download: name }, icon("download"), "Download");
+  const size = h("span", { class: "color-muted" });
+  const tools = [];
   let body;
+  let kind = "is-file";
+  let pdf = null;
+  let stop = null;
   if (IMAGE.test(name)) {
-    body = h("div", { class: "image-preview editor-image" }, h("img", { src: url, alt: entry.shownAt }));
-  } else if (/\.pdf$/i.test(name)) {
-    body = blankslate({
-      iconName: "pdf", title: name, text: `A PDF of ${formatBytes(entry.size)}.`,
-      action: h("div", { class: "flex", style: { justifyContent: "center" } },
-        h("a", { class: "btn", href: url, target: "_blank", rel: "noopener" }, "Open the PDF"),
-        h("a", { class: "btn", href: url, download: name }, icon("download"), "Download")),
+    kind = "is-image";
+    size.textContent = `${formatBytes(entry.size)} · image`;
+    ({ el: body, stop } = imageView(url, entry.shownAt, size, entry.size));
+  } else if (PDF.test(name)) {
+    kind = "is-pdf";
+    size.textContent = `${formatBytes(entry.size)} · PDF`;
+    body = h("div", { class: "editor-blob-pdf" });
+    const zoom = h("span", { class: "pdf-zoom-text" });
+    const pages = h("span", { class: "pdf-pages" });
+    tools.push(
+      h("button", { type: "button", class: "btn-octicon pdf-zoom-step", "aria-label": "Zoom out", title: "Zoom out", text: "−", onclick: () => pdf.zoomOut() }),
+      zoom,
+      h("button", { type: "button", class: "btn-octicon pdf-zoom-step", "aria-label": "Zoom in", title: "Zoom in", text: "+", onclick: () => pdf.zoomIn() }),
+      h("button", { type: "button", class: "btn btn-sm", text: "Fit", title: "Fit the width", onclick: () => pdf.setZoom("width") }),
+      pages);
+    pdf = createPdfView(body, {
+      onChange: ({ page, pages: n, zoom: z }) => {
+        zoom.textContent = `${Math.round(z * 100)}%`;
+        pages.textContent = n ? `${page} / ${n}` : "";
+      },
+    });
+    pdf.load(url).catch((err) => {
+      if (ed.blobView?.pdf !== pdf) return;
+      console.error(err);
+      clear(body).append(blankslate({ iconName: "alert", title: "The PDF could not be shown", text: "Download it to open it on your computer." }));
     });
   } else {
+    size.textContent = `${formatBytes(entry.size)} · binary file`;
     body = blankslate({
       iconName: "file-binary", title: name, text: `A binary file of ${formatBytes(entry.size)}. It cannot be edited here.`,
       action: h("a", { class: "btn", href: url, download: name }, icon("download"), "Download"),
@@ -970,10 +1049,43 @@ function showBlob(ed, entry) {
   }
   ed.el.host.hidden = true;
   ed.el.other.hidden = false;
-  clear(ed.el.other).append(h("div", { class: "editor-blob" },
-    h("div", { class: "editor-blob-head" }, h("span", { class: "color-muted", text: `${formatBytes(entry.size)} · binary file` }), h("span", { class: "flex-1" }), download),
+  clear(ed.el.other).append(h("div", { class: `editor-blob ${kind}` },
+    h("div", { class: "editor-blob-head" }, size, h("span", { class: "flex-1" }), ...tools, download),
     body));
+  ed.blobView = { id: entry.id, pdf, stop, size, download };
   ed.shownSha = entry.sha;
+}
+
+// An image fitted into the pane. A click shows one that had to shrink at
+// its full size, and a second fits it again.
+function imageView(url, alt, size, bytes) {
+  const img = h("img", { src: url, alt });
+  const box = h("div", { class: "editor-image" }, img);
+  const shrunk = () => img.naturalWidth > img.clientWidth + 1 || img.naturalHeight > img.clientHeight + 1;
+  const paint = () => {
+    const full = box.classList.contains("is-full");
+    img.classList.toggle("can-zoom", full || shrunk());
+    img.title = full ? "Click to fit it in" : shrunk() ? "Click for the full size" : "";
+  };
+  img.addEventListener("load", () => {
+    size.textContent = `${formatBytes(bytes)} · ${img.naturalWidth} × ${img.naturalHeight} px`;
+    paint();
+  });
+  img.addEventListener("click", () => {
+    if (!box.classList.contains("is-full") && !shrunk()) return;
+    box.classList.toggle("is-full");
+    paint();
+  });
+  const resized = new ResizeObserver(paint);
+  resized.observe(box);
+  return { el: box, stop: () => resized.disconnect() };
+}
+
+// The viewer of an image or a PDF in the pane goes with the file.
+function dropBlob(ed) {
+  ed.blobView?.pdf?.destroy();
+  ed.blobView?.stop?.();
+  ed.blobView = null;
 }
 
 function showEmpty(ed) {
@@ -1508,6 +1620,7 @@ async function makeMain(ed, path) {
   note(ed, `${path} is the main document now`);
   paintTree(ed);
   ed.outline.changed();
+  ed.pdf.mainChanged();
   ed.pdf.compile();
 }
 

@@ -3,6 +3,10 @@
 // problems of the last compile, SyncTeX in both directions, and a warning when
 // the PDF is longer than the paper's page limit (pagelimit.js).
 //
+// It compiles the paper's main file, or another .tex file of the paper that
+// is a document of its own (a response letter, slides, a standalone figure)
+// when the person switches to it. That choice holds for this page only.
+//
 // The server compiles and caches by content, so every open editor may ask
 // after every edit. Only one request runs here at a time. Edits meanwhile stop
 // it and ask again when it has answered, so the newest text is what gets
@@ -51,18 +55,29 @@ function seconds(ms) {
 // read when the pane opens and after every compile, marked "References".
 // `hasFile(path)` says whether the paper has that file (null while the files
 // load) and `canEdit` whether the person may choose another main document,
-// both for the hint under a compile that made no PDF.
-export function pdfPane({ project, openSource, cursor, note, onHide, onProblems = null, hasFile = null, canEdit = false }) {
+// both for the hint under a compile that made no PDF. `openDocument()` is the
+// open file's path when LaTeX can compile it on its own, else null, which
+// offers to switch to it. `onTarget(path)` hears when the person switched,
+// null being the paper's main file again.
+export function pdfPane({
+  project, openSource, cursor, note, onHide, onProblems = null, hasFile = null, canEdit = false,
+  openDocument = null, onTarget = null,
+}) {
   const url = (rest) => projectUrl(project.id, rest);
+  const mainFile = () => project.main_file || "main.tex";
   let auto = readAuto();
+  let target = null; // another file compiled instead of the main file, or null
   let shown = null; // the compile whose PDF is in the view
+  let viewFile = null; // the main file of the PDF in the view, which stays there after a switch until the next one comes
   let last = null; // the newest finished compile
   let running = null;
   let runningSince = 0;
   let stopping = false; // the server was asked to stop the compile that runs
+  let switched = false; // the file to compile changed while a compile ran
   let again = false;
   let cleanNext = false; // the next compile starts from nothing
   let timer = 0;
+  let sourceTimer = 0; // looks again whether the open file is a document of its own
   let settleTimer = 0; // the quiet second look after a compile right after typing
   let lastEdit = 0; // the newest edit by anybody
   let lastLocalEdit = 0;
@@ -124,12 +139,14 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     showButton, zoomOut, zoomMenu, zoomIn, pageCount, download,
     h("button", { type: "button", class: "btn-octicon pdf-hide", "aria-label": "Back to the text", onclick: () => onHide?.() }, icon("x")));
   const viewHost = h("div", { class: "pdf-view" });
+  // Which file the PDF is of, when it is not the main file, and the switch to the open file.
+  const source = h("div", { class: "pdf-source", hidden: true });
   const message = h("div", { class: "pdf-message" }, h("div", { class: "loading" }, spinner(true)));
   const stale = h("div", { class: "pdf-stale", hidden: true }, icon("alert", { size: 14 }),
     h("span", { text: "The last compile made no PDF. This one is from before it." }));
   const overLimit = h("div", { class: "pdf-limit", hidden: true }, icon("alert", { size: 14 }), h("span"));
   const problems = h("div", { class: "pdf-problems", hidden: true });
-  const el = h("section", { class: "pdf-pane", "aria-label": "PDF" }, toolbar, stale, overLimit, h("div", { class: "pdf-body" }, viewHost, message), problems);
+  const el = h("section", { class: "pdf-pane", "aria-label": "PDF" }, toolbar, source, stale, overLimit, h("div", { class: "pdf-body" }, viewHost, message), problems);
 
   const view = createPdfView(viewHost, {
     onClick: (at) => findSource(at),
@@ -142,9 +159,16 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
   });
 
   // The PDF in the view against the paper's page limit (pagelimit.js). A
-  // newer PDF meanwhile gets its own check.
+  // newer PDF meanwhile gets its own check. Another document than the paper
+  // has no limit.
   async function checkPages() {
     const mine = ++limitChecked;
+    if (target) {
+      overLimit.hidden = true;
+      pageCount.classList.remove("is-over");
+      limitNote = "";
+      return;
+    }
     let result = null;
     try {
       result = await checkView(view, project.page_limit);
@@ -197,12 +221,16 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     stale.hidden = Boolean(c.pdf_url) || !shown;
     if (c.pdf_url) {
       download.href = c.pdf_url;
-      download.download = `${project.name}.pdf`;
+      download.download = c.main_file && c.main_file !== mainFile()
+        ? `${c.main_file.split("/").pop().replace(/\.[^.]*$/, "")}.pdf`
+        : `${project.name}.pdf`;
       download.hidden = false;
       if (shown?.id !== c.id) {
         try {
-          await view.load(c.pdf_url);
+          // Another document starts at its top, a newer PDF of the same one where the view was.
+          await view.load(c.pdf_url, { keepPlace: viewFile === c.main_file });
           shown = c;
+          viewFile = c.main_file;
           message.hidden = true;
           checkPages();
         } catch (err) {
@@ -225,7 +253,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
       h("h3", { text: c.status === "timeout" ? "The compile took too long" : "LaTeX made no PDF" }),
       h("p", { text: (c.problems || []).length ? "The problems below say why." : "The log says why." }),
       c.log_url ? h("a", { class: "btn", href: c.log_url, target: "_blank", rel: "noopener" }, "Open the log") : null,
-      c.status === "timeout" ? null : mainHint(c)));
+      c.status === "timeout" || target ? null : mainHint(c)));
   }
 
   // LaTeX may have compiled the wrong file. Says which one, and how to pick another.
@@ -310,13 +338,14 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     return c;
   }
 
-  // Ask the server to stop the compile that runs, when its text is out of date.
-  // It answers that compile's request with a 409, and the next one starts then.
+  // Ask the server to stop the compile that runs, when its text is out of date
+  // or it compiles a file the person switched away from. It answers that
+  // compile's request with a 409, and the next one starts then.
   function stopRunning() {
     if (stopping) return;
     const outdated = lastEdit > runningSince;
     const resultIsOld = Date.now() - resultAt > MAX_RESULT_AGE_MS;
-    if (!cleanNext && (!outdated || resultIsOld)) return;
+    if (!cleanNext && !switched && (!outdated || resultIsOld)) return;
     stopping = true;
     api.post(url("/compile/cancel")).catch(() => {
       // The compile just ends the normal way, and the next one follows it.
@@ -341,12 +370,19 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
       recompile.disabled = true;
     }
     const settle = Date.now() - lastLocalEdit < IN_FLIGHT_MS;
-    const body = { ref: "live", editor: true, clean: cleanNext };
+    const file = target;
+    const body = { ref: "live", editor: true, clean: cleanNext, main_file: file || undefined };
     cleanNext = false;
+    switched = false;
     runningSince = Date.now();
     running = (async () => {
       try {
         const c = await finish(await api.post(url("/compile"), body));
+        if (file !== target) {
+          // The person switched to another file meanwhile. That one is next.
+          again = true;
+          return;
+        }
         resultAt = Date.now();
         if (!dead) {
           if (c.id !== last?.id) loadReferenceProblems();
@@ -354,8 +390,9 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
         }
       } catch (err) {
         if (dead) return;
-        if (err.status === 409) {
-          // A newer edit stopped it, here or in a coauthor's editor.
+        if (err.status === 409 || file !== target) {
+          // A newer edit stopped it, here or in a coauthor's editor, or the
+          // person switched to another file.
           again = true;
         } else if (err.status === 503) {
           setStatus("off", "Compiling is not set up on this server");
@@ -385,6 +422,9 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     lastEdit = Date.now();
     if (local) lastLocalEdit = lastEdit;
     clearTimeout(settleTimer);
+    // A \documentclass typed or taken away changes what the open file is.
+    clearTimeout(sourceTimer);
+    if (!dead) sourceTimer = setTimeout(paintSource, AUTO_DELAY_MS);
     if (!auto || dead) return;
     clearTimeout(timer);
     timer = setTimeout(() => compile(), AUTO_DELAY_MS);
@@ -428,27 +468,106 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     else note("Nothing in the PDF comes from this line.");
   }
 
+  // The newest PDF there is of the file compiled here, unless a compile came
+  // back first.
+  async function loadLatest() {
+    const file = target;
+    try {
+      // null when the file was never compiled.
+      const c = await api.get(url("/compiles/latest"), { query: { ref: "live", main_file: file || undefined } });
+      if (!dead && file === target && !last && c && FINISHED.has(c.status)) await show(c);
+    } catch (err) {
+      if (err.status !== 404 && err.status !== 503) console.error(err);
+    }
+  }
+
   // The newest PDF there is, then a compile, which the server answers from its
   // cache when nothing changed. The reference check's problems come along,
   // also when there is no compile service.
   async function start() {
     loadReferenceProblems();
-    try {
-      // null when the paper was never compiled.
-      const c = await api.get(url("/compiles/latest"), { query: { ref: "live" } });
-      if (!dead && c && FINISHED.has(c.status)) await show(c);
-    } catch (err) {
-      if (err.status !== 404 && err.status !== 503) console.error(err);
-    }
+    await loadLatest();
     if (!dead) compile();
   }
   start();
+
+  // The bar under the toolbar. It names the file the PDF is of when that is
+  // not the main file, and offers the open file when LaTeX can compile it on
+  // its own.
+  function paintSource() {
+    clearTimeout(sourceTimer);
+    if (dead) return;
+    const open = openDocument?.() || null;
+    const offer = open && open !== target && open !== mainFile() ? open : null;
+    recompile.title = target ? `Compile ${target} now (Ctrl+Enter)` : "Compile the paper now (Ctrl+Enter)";
+    const signature = JSON.stringify([target, offer, mainFile()]);
+    if (source.dataset.signature === signature) return;
+    source.dataset.signature = signature;
+    clear(source);
+    source.hidden = !target && !offer;
+    if (source.hidden) return;
+    const file = (path) => h("code", { text: path.split("/").pop(), title: path });
+    source.append(...[icon(target ? "pdf" : "file-text", { size: 14 }),
+      h("span", { class: "pdf-source-text" }, ...(target
+        ? ["PDF of ", file(target), ", not of the paper."]
+        : [file(offer), " is a document of its own."])),
+      offer && h("button", { type: "button", class: "btn btn-sm", title: `Compile ${offer} and show its PDF here`, onclick: () => switchTo(offer) },
+        icon("arrow-switch"), target ? `Show ${offer.split("/").pop()}` : "Show its PDF"),
+      target && h("button", { type: "button", class: "btn btn-sm", title: `Compile ${mainFile()} again`, onclick: () => switchTo(null) },
+        "Back to the paper")].filter(Boolean));
+  }
+
+  function switchTo(path) {
+    setTarget(path);
+    onTarget?.(target);
+  }
+
+  // Compile `path` from now on instead of the main file, or the main file
+  // again with null. The PDF of the one before stays in the view until the
+  // new one is there, under a spinner, so it is never taken for the new one.
+  function setTarget(path) {
+    const next = path && path !== mainFile() ? path : null;
+    if (next === target) {
+      paintSource();
+      return;
+    }
+    target = next;
+    shown = null;
+    last = null;
+    limitChecked += 1;
+    limitNote = "";
+    overLimit.hidden = true;
+    pageCount.classList.remove("is-over");
+    stale.hidden = true;
+    download.hidden = true;
+    paintProblems(null);
+    onProblems?.(forLines(null));
+    setStatus("idle", "Not compiled yet");
+    showMessage(h("div", { class: "loading" }, spinner(true)));
+    paintSource();
+    if (running) switched = true;
+    loadLatest().then(() => {
+      if (!dead) compile();
+    });
+  }
 
   return {
     el,
     compile,
     edited,
     showCursor,
+    setTarget,
+    // The open file changed, or what it is.
+    fileOpened: paintSource,
+    // The main file changed (Make main document). A file compiled instead of
+    // it that is the main file now is the paper's PDF already.
+    mainChanged() {
+      if (target && target === mainFile()) {
+        target = null;
+        onTarget?.(null);
+      }
+      paintSource();
+    },
     // A compile that failed before the files were in names its main file
     // without knowing whether it is there. Now it does.
     filesLoaded() {
@@ -457,6 +576,7 @@ export function pdfPane({ project, openSource, cursor, note, onHide, onProblems 
     destroy() {
       dead = true;
       clearTimeout(timer);
+      clearTimeout(sourceTimer);
       clearTimeout(settleTimer);
       view.destroy();
     },

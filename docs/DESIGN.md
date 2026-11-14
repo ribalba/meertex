@@ -710,6 +710,12 @@ sync client's, and other people's cursors show with their names (awareness).
   folder keeps its state.
 - A `.tex` file's menu has Make main document, which sets the project's
   `main_file` and compiles again. The tree marks the main file.
+- Files that are not text show where the text would be. An image (PNG,
+  JPEG, GIF, WebP) is fitted into the pane, with its size in pixels above
+  it. A click on one that had to shrink shows it at full size, and a second
+  click fits it again. A PDF opens in the PDF viewer (`pdfview.js`) with
+  zoom, Fit and the page count. A coauthor's new upload of the open PDF
+  replaces it where the view was. Every other file offers a download.
 - An outline under the tree shows the headings (`\part` to `\subparagraph`)
   as a tree (`app/static/js/editor-outline.js`). It starts at the main file
   and follows `\input`, `\include`, `\subfile` and `\import` in reading
@@ -1542,16 +1548,25 @@ compile {id, kind, status, ref, commit, compiler, main_file, duration_ms,
 
 `pdf_url` (null without a PDF) and `log_url` are paths on this server.
 
-- `POST /api/projects/{ref}/compile {ref?, editor?, clean?}` (default `live`).
-  Viewers too, because reviewers read the PDF. `editor` is the open editor's
-  compile described above. `clean` makes it start from nothing and reuse no
-  finished compile. An editor's compile that a newer edit stopped answers 409.
+- `POST /api/projects/{ref}/compile {ref?, editor?, clean?, main_file?}`
+  (default `live`). Viewers too, because reviewers read the PDF. `editor` is
+  the open editor's compile described above. `clean` makes it start from
+  nothing and reuse no finished compile. An editor's compile that a newer
+  edit stopped answers 409. `main_file` compiles another file of the paper
+  instead of the project's main file, a response letter or a standalone
+  figure, and is 404 when the paper has no such file at that ref. Its
+  compile has that `main_file`, its PDF's file name has the file's name in
+  it, and it never counts as the paper's PDF. An editor's compile of it
+  shares the paper's workspace, whose build files are tied to one main file,
+  so a switch compiles from nothing once.
 - `POST /api/projects/{ref}/compile/cancel` stops the editor's compile that
   runs for the paper and answers `{cancelled}`, false when none was running.
-- `GET /api/projects/{ref}/compiles/latest?ref=live`, the newest compile of
-  kind `pdf`, or `null` (200) when there is none yet, because the editor asks
-  every time it opens a paper. A tag or a commit finds every compile of that
-  commit. A ref that names nothing is 404.
+- `GET /api/projects/{ref}/compiles/latest?ref=live&main_file=`, the newest
+  compile of kind `pdf`, or `null` (200) when there is none yet, because the
+  editor asks every time it opens a paper. A tag or a commit finds every
+  compile of that commit. A ref that names nothing is 404. `main_file` finds
+  only the compiles of that file. `live` without it finds those of the
+  project's main file, so another document is never taken for the paper.
 - `GET /api/projects/{ref}/compiles/{id}`, `/pdf` (inline), `/log` (text).
 - `POST /api/projects/{ref}/compiles/{id}/synctex/edit {page, x, y}` returns
   `{path, line, column}`, 404 when SyncTeX knows nothing there.
@@ -1593,6 +1608,19 @@ It exits 0 on `success` and 1 otherwise.
   its line.
 - A compile that made no PDF shows which file LaTeX compiled, says when it
   is not in the paper, and points to Make main document.
+- **Another document.** A `.tex` file other than the main file is a document
+  of its own when a line that is not commented out has `\documentclass` and
+  a later one `\begin{document}`, and its name is one the compile service
+  takes. With such a file open, a bar under the PDF's toolbar says so and has
+  Show its PDF. The pane then compiles that file (`main_file`, above) on every
+  pause in typing, in any file, and the bar says "PDF of letter.tex, not of
+  the paper" with Back to the paper. With a third document open, the bar
+  offers that one as well. The choice holds for the open page only and
+  changes nothing for the coauthors. It follows a rename of the file, and
+  goes back to the paper when the file is deleted or made the main document.
+  The PDF of the file before stays under a spinner until the new one is
+  there, so it is never taken for the new one. Another document has no page
+  limit, and its download is named after the file.
 - A click in the PDF jumps to the source line (SyncTeX). A button jumps
   from the cursor to the PDF and marks the spot.
 - LaTeX autocomplete: commands, environments after `\begin{`, `\ref` and

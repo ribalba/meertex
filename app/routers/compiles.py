@@ -16,6 +16,7 @@ import re
 import uuid
 from collections.abc import Callable
 from functools import partial
+from pathlib import PurePosixPath
 from typing import TypeVar
 
 import anyio
@@ -84,6 +85,9 @@ class CompileIn(BaseModel):
     # stop it. `clean` makes it start from nothing.
     editor: bool = False
     clean: bool = False
+    # Another file of the paper that is a document of its own (a letter, a
+    # standalone figure), instead of the project's main file.
+    main_file: str | None = Field(default=None, min_length=1, max_length=500)
 
 
 class DiffIn(BaseModel):
@@ -94,7 +98,7 @@ class DiffIn(BaseModel):
 def _compile(db: DBSession, user: User, project: str, body: CompileIn) -> dict:
     p = project_for(db, user, project, "viewer")
     try:
-        row = call_live(compiler.compile_ref, db, p, user.id, body.ref, body.editor, body.clean)
+        row = call_live(compiler.compile_ref, db, p, user.id, body.ref, body.editor, body.clean, body.main_file)
     except compiler.Unavailable as e:
         raise _unavailable(e) from None
     except compiler.Superseded as e:
@@ -122,7 +126,8 @@ def _diff(db: DBSession, user: User, project: str, from_ref: str, to_ref: str) -
 @router.post("/projects/{project}/compile")
 async def compile_project(project: str, user: SessionOrTokenUser, db: DB, body: CompileIn | None = None) -> dict:
     """Compile the files at ``ref`` (``live`` by default) and return the
-    finished compile. The same files compiled before give that compile back."""
+    finished compile. The same files compiled before give that compile back.
+    ``main_file`` compiles another file of the paper than its main file."""
     return await _in_thread(_compile, db, user, project, body or CompileIn())
 
 
@@ -143,13 +148,20 @@ async def pdfdiff(project: str, body: DiffIn, user: SessionOrTokenUser, db: DB) 
 
 
 @router.get("/projects/{project}/compiles/latest")
-def latest_compile(project: str, user: SessionOrTokenUser, db: DB, ref: str = "live") -> dict | None:
+def latest_compile(
+    project: str, user: SessionOrTokenUser, db: DB, ref: str = "live", main_file: str | None = None
+) -> dict | None:
     """The newest compile (kind pdf) of ``ref``, or null when there is none
     yet. That is no error, the editor asks every time it opens a paper. A tag
     or a commit finds every compile of its commit, under whichever name it was
-    asked for. A ref that names nothing is 404."""
+    asked for. A ref that names nothing is 404. ``main_file`` finds only the
+    compiles of that file. ``live`` without it finds the paper's main file's,
+    so another document someone compiled is not taken for the paper."""
     p = project_for(db, user, project, "viewer")
     query = db.query(Compile).filter(Compile.project_id == p.id, Compile.kind == "pdf")
+    main_file = main_file or (p.main_file if ref == "live" else None)
+    if main_file:
+        query = query.filter(Compile.main_file == main_file)
     if ref == "live":
         query = query.filter(Compile.commit.is_(None))
     else:
@@ -171,6 +183,10 @@ def get_compile(project: str, compile_id: str, user: SessionOrTokenUser, db: DB)
 def _file_name(p: Project, row: Compile, suffix: str) -> str:
     ref = re.sub(r"[^A-Za-z0-9._-]+", "-", row.ref).strip("-") or "live"
     kind = "-diff" if row.kind == "pdfdiff" else ""
+    # A document of its own in the paper, a response letter say, is named after its file.
+    if row.main_file != p.main_file:
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", PurePosixPath(row.main_file).stem).strip("-")
+        kind += f"-{stem}" if stem else ""
     return f"{p.name}{kind}-{ref}{suffix}"
 
 

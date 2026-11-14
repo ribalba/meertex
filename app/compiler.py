@@ -95,6 +95,10 @@ class LiveFiles(Mapping[str, bytes]):
     def __len__(self) -> int:
         return len(self._texts) + len(self._stored)
 
+    def __contains__(self, path: object) -> bool:
+        # Mapping's own would read a blob to say it is there.
+        return path in self._texts or path in self._stored
+
     def digest(self, path: str) -> bytes:
         if path in self._texts:
             return hashlib.sha256(self._texts[path]).digest()
@@ -540,15 +544,30 @@ def _load(db: DBSession, compile_id: str) -> Compile:
     return row
 
 
-def compile_ref(db: DBSession, project: Project, user_id: str, ref: str, editor: bool = False, clean: bool = False) -> Compile:
+def compile_ref(
+    db: DBSession,
+    project: Project,
+    user_id: str,
+    ref: str,
+    editor: bool = False,
+    clean: bool = False,
+    main_file: str | None = None,
+) -> Compile:
     """Compile the files at ``ref`` and return the finished row. ``editor``
     is a compile of the live text from an open editor, which runs in the
     paper's workspace and can be stopped by a newer edit. ``clean`` makes
-    that one start from nothing. Raises Unavailable, Superseded, live.Refused
-    and live.NotFound."""
+    that one start from nothing. ``main_file`` compiles another file of the
+    paper instead of its main file, a letter or a figure that is a document
+    of its own, and must be there. Raises Unavailable, Superseded,
+    live.Refused and live.NotFound."""
     _require()
-    project_id, main_file, compiler = project.id, project.main_file, project.compiler
+    project_id, compiler = project.id, project.compiler
+    main_file = main_file or project.main_file
     commit, files = files_at(project_id, ref)
+    # The paper's own main file that is missing makes a failed compile, which
+    # says so and points to Make main document.
+    if main_file != project.main_file and main_file not in files:
+        raise live.NotFound(f"There is no file {main_file}")
     workspace = project_id if editor and ref == "live" else None
     source = Source("pdf", ref, commit, main_file, compiler, files, workspace=workspace)
     # Hand the request's database connection back while TeX runs.

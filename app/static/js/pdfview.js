@@ -4,6 +4,7 @@
 //
 //   const view = createPdfView(container, { onClick, onChange });
 //   await view.load(url);       // load, or replace and keep the scroll position
+//   await view.load(url, { keepPlace: false });  // replace with another document, from its top
 //   view.setZoom(1.25);         // or "width" to fit the width; zoomIn(), zoomOut()
 //   view.showBoxes(boxes);      // mark [{page, x, y, width, height}] and scroll there
 //   view.destroy();
@@ -346,7 +347,7 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
     return out;
   }
 
-  async function load(url) {
+  async function load(url, { keepPlace = true } = {}) {
     const mine = ++loadToken;
     lib ??= await loadPdfjs();
     worker ??= new lib.PDFWorker({ name: "pdfview" });
@@ -370,7 +371,7 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
       next.loadingTask.destroy();
       return;
     }
-    const at = anchor();
+    const at = keepPlace ? anchor() : null;
     const fresh = loaded.map(({ page, base }, i) => makePage(page, base, i));
     if (mode === "width") zoom = fitWidth(fresh);
     fresh.forEach(size);
@@ -390,7 +391,8 @@ export function createPdfView(container, { onClick = null, onDoubleClick = null,
     doc = next;
     pages = fresh;
     scroller.replaceChildren(inner);
-    restore(at);
+    if (keepPlace) restore(at);
+    else scroller.scrollTo(0, 0);
     old?.loadingTask.destroy();
     marks = marks.filter((m) => m.keep);
     placeMarks();
