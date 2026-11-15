@@ -1341,6 +1341,59 @@ def synctex(env, browser):
     return f"line {target} and back"
 
 
+# The width of the PDF's first page in 20 frames in a row, and whether its
+# pages were higher than the view in the last one.
+FRAMES = """() => new Promise((done) => {
+    const widths = [];
+    const step = () => {
+        widths.push(document.querySelector('.editor-pdf .pdfview-page').offsetWidth);
+        if (widths.length < 20) { requestAnimationFrame(step); return; }
+        const view = document.querySelector('.editor-pdf .pdfview');
+        done({ widths, over: view.querySelector('.pdfview-pages').offsetHeight > view.clientHeight });
+    };
+    requestAnimationFrame(step);
+})"""
+
+
+@test
+def fit_width_settles(env, browser):
+    """A one-page PDF about as high as the view, with a scrollbar that takes
+    room, as on Linux and Windows. Fitting the width once gave the page a
+    scrollbar, fitted the narrower room, lost the scrollbar again and so on
+    every frame, and the PDF flickered and jumped."""
+    if not env.compiling:
+        return "skipped, needs --compile or --compile-url"
+    paper = compile_paper(env, f"Fit width {env.run}")
+    # Playwright hides the scrollbars of a headless Chrome. This one shows them.
+    shown = browser.browser_type.launch(channel="chrome", headless=not env.args.headed, ignore_default_args=["--hide-scrollbars"])
+    try:
+        ctx = env.context(shown, "alice")
+        page = env.open_editor(env.page(ctx, "alice"), "main.tex", project=paper)
+        expect(page.locator(".pdf-status")).to_have_text(re.compile(r"^Compiled in"), timeout=90000)
+        expect(page.locator(".pdfview-page")).to_have_count(1)
+        page.wait_for_timeout(300)
+        # The window's height at which the page is as high as the view.
+        size = page.viewport_size
+        edge = size["height"] + page.evaluate("""() => {
+            const view = document.querySelector('.editor-pdf .pdfview');
+            return view.querySelector('.pdfview-pages').offsetHeight - view.clientHeight;
+        }""")
+        unsettled, over = [], set()
+        for height in range(edge - 30, edge + 31, 3):
+            page.set_viewport_size({"width": size["width"], "height": height})
+            page.wait_for_timeout(150)
+            frames = page.evaluate(FRAMES)
+            over.add(frames["over"])
+            if len(set(frames["widths"])) > 1:
+                unsettled.append((height, sorted(set(frames["widths"]))))
+        assert over == {True, False}, f"the heights {edge - 30} to {edge + 30} did not cross the page's height"
+        assert not unsettled, f"the page's width keeps changing at these window heights: {unsettled}"
+        ctx.close()
+    finally:
+        shown.close()
+    return f"window heights {edge - 30} to {edge + 30}"
+
+
 @test
 def versions_pdf(env, browser):
     if not env.compiling:

@@ -1329,8 +1329,12 @@ code.cmd {
 .pdf-problem-where { flex: none; font-family: var(--mono); white-space: nowrap; }
 .pdf-problem-message { min-width: 0; word-break: break-word; }
 
-/* The PDF viewer (pdfview.js). */
-.pdfview { height: 100%; overflow: auto; background: var(--bg-muted); outline: none; }
+/* The PDF viewer (pdfview.js). The scrollbar's room is always kept. "Fit the
+   width" fits the pages into the room left of the scrollbar, so without it a
+   page about as high as the view never settles. It fits without the
+   scrollbar, gets too high for that and gains one, fits the narrower room,
+   loses the scrollbar again, and so on every frame. */
+.pdfview { height: 100%; overflow: auto; scrollbar-gutter: stable; background: var(--bg-muted); outline: none; }
 .pdfview-pages { display: flex; flex-direction: column; align-items: center; width: max-content; min-width: 100%; }
 .pdfview-page { position: relative; flex: none; background: #fff; box-shadow: 0 0 0 1px #1f23281a, 0 1px 3px #1f23281f; }
 .pdfview-page canvas { display: block; }

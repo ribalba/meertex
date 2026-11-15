@@ -161,6 +161,9 @@ latexdiff on the `PATH`, and pandoc for the Markdown test of
   the place of the text and goes back.
 - SyncTeX both ways: Ctrl+Shift+Enter marks the cursor's line in the PDF, and
   a click there leads back to it.
+- A one-page PDF about as high as the view holds still. It runs in a Chrome
+  of its own that shows its scrollbars, which Playwright otherwise hides,
+  and steps the window's height across the page's height.
 - A version's compiled PDF on the Versions tab with its preview, and the PDF
   diff of the Compare view.
 
