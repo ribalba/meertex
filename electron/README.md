@@ -141,6 +141,8 @@ brings its edits into the editor.
 - `agent.js` runs the `claude` command with stream-json on stdin and stdout
   and answers its permission prompts with native dialogs. `MEERTEX_CLAUDE`
   names another command, `OLLAMA_HOST` another Ollama.
+- The Claude models in the panel are the ones this computer's Claude Code
+  lists. The app asks it for them when a panel loads.
 - `panel/` is the chat. It is served from `meertex-agent://panel` into an
   iframe of the editor, so the server's page cannot script it.
   `preload.js` gives that frame the chat's bridge and the server's pages only

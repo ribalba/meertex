@@ -13,7 +13,6 @@ const PROJECT = params.get("project") || "";
 const NAME = params.get("name") || "";
 const POSITION = params.get("position") === "below" ? "below" : "column";
 const DRAFT_KEY = `meertex.agent.draft.${PROJECT}`;
-const CLAUDE_MODELS = [["", "Default"], ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"]];
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -36,6 +35,10 @@ const el = {
 let state = null;
 const shown = new Map();
 let pendingProvider = null;
+// The names every Claude Code knows. Its own list takes their place as soon
+// as the app has it (loadModels).
+let claudeModels = [{ value: "opus", label: "Opus" }, { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }];
+let modelsLoaded = false;
 
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -219,9 +222,14 @@ function paintChoices() {
   el.provider.value = provider();
   const options = [];
   if (provider() === "claude") {
-    for (const [value, text] of CLAUDE_MODELS) options.push(h("option", { value, text }));
+    const saved = state.settings.claudeModel || "";
+    // Default passes no model, and Claude Code takes the one of its settings.
+    options.push(h("option", { value: "", text: "Default" }));
+    for (const m of claudeModels) options.push(h("option", { value: m.value, text: m.label }));
+    // A saved model the list does not have, or does not have yet.
+    if (saved && !claudeModels.some((m) => m.value === saved)) options.push(h("option", { value: saved, text: saved }));
     el.model.replaceChildren(...options);
-    el.model.value = state.settings.claudeModel || "";
+    el.model.value = saved;
   } else {
     const models = state.ollama.models || [];
     const saved = state.settings.ollamaModel;
@@ -321,9 +329,20 @@ function paint() {
 }
 
 async function refresh() {
+  if (!modelsLoaded) loadModels();
   state = await bridge.attach(PROJECT);
   if (!state) return;
   paint();
+}
+
+// Claude Code's own list of models. The app starts Claude Code for it, which
+// takes a moment the first time, so the panel does not wait for the answer.
+async function loadModels() {
+  const list = await bridge.models().catch(() => null);
+  if (!Array.isArray(list) || !list.length) return;
+  claudeModels = list;
+  modelsLoaded = true;
+  if (state) paintChoices();
 }
 
 async function choose(choice) {

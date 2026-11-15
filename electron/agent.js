@@ -38,10 +38,11 @@ const PANEL_FILES = {
   "/panel.css": ["panel.css", "text/css"],
 };
 const PROVIDERS = ["claude", "ollama"];
-// Claude Code's own aliases. The empty one leaves the choice to its settings.
-const CLAUDE_MODELS = ["", "opus", "sonnet", "haiku"];
+// How long Claude Code gets to name its models (claudeModels below).
+const MODELS_TIMEOUT = 15000;
 // Ollama answers Anthropic's Messages API from 0.14 on.
 const OLLAMA_MIN = [0, 14, 0];
+// An empty Claude model leaves the choice to Claude Code's own settings.
 const DEFAULTS = { provider: "claude", claudeModel: "", ollamaModel: "" };
 // What a running Claude Code session puts into the environment of what it
 // starts. An app started from such a session, `make desktop` say, would hand
@@ -79,6 +80,7 @@ function setup(ses, origin) {
   ipcMain.handle("agent:stop", (e, projectId) => panelCall(e, projectId, (s) => s.stop()));
   ipcMain.handle("agent:reset", (e, projectId) => panelCall(e, projectId, (s) => s.reset()));
   ipcMain.handle("agent:settings", (e, projectId, choice) => panelCall(e, projectId, (s) => s.choose(e, choice)));
+  ipcMain.handle("agent:models", (e) => (fromPanel(e) ? claudeModels() : null));
   ipcMain.on("agent:open", (e, projectId, file, line) => {
     if (!fromPanel(e) || !isId(projectId)) return;
     const rel = sessions.get(projectId)?.relative(String(file || ""));
@@ -144,7 +146,7 @@ function readSettings() {
   const saved = readJson(settingsFile(), {});
   const s = { ...DEFAULTS, ...(saved && typeof saved === "object" ? saved : {}) };
   if (!PROVIDERS.includes(s.provider)) s.provider = DEFAULTS.provider;
-  if (!CLAUDE_MODELS.includes(s.claudeModel)) s.claudeModel = DEFAULTS.claudeModel;
+  if (!isClaudeModel(s.claudeModel)) s.claudeModel = DEFAULTS.claudeModel;
   if (!isModelName(s.ollamaModel)) s.ollamaModel = DEFAULTS.ollamaModel;
   return s;
 }
@@ -159,6 +161,13 @@ function saveSettings(s) {
 
 function isModelName(value) {
   return typeof value === "string" && value.length <= 200 && /^[\w.:/-]*$/.test(value);
+}
+
+// What Claude Code calls a model. That is an alias like opus, an id like
+// claude-opus-4-6, either of them with [1m] for the long context, or the id
+// of a cloud provider with @, : and /. It never starts like an option.
+function isClaudeModel(value) {
+  return typeof value === "string" && value.length <= 200 && /^(\w[\w.:/@[\]-]*)?$/.test(value);
 }
 
 function readJson(file, fallback) {
@@ -283,6 +292,82 @@ function claudeVersion(bin, env) {
       resolve(err ? null : (String(stdout).trim().split(/\s+/)[0] || null));
     });
   });
+}
+
+// Which models there are depends on the version of Claude Code and on the
+// account, so the app asks Claude Code itself when a panel loads. Its answer
+// to the initialize request names them, and the agent SDKs take their list
+// from the same answer. No message goes to a model for it. The list is kept
+// per binary while the app runs, so an updated Claude Code is asked again.
+const modelLists = new Map();
+
+async function claudeModels() {
+  const env = await shellEnv();
+  const bin = findClaude(env);
+  if (!bin) return null;
+  const key = binaryKey(bin);
+  if (!modelLists.has(key)) {
+    modelLists.set(key, askModels(bin, env).catch(() => null).then((list) => {
+      // Without an answer nothing is kept, and the next panel asks again.
+      if (!list) modelLists.delete(key);
+      return list;
+    }));
+  }
+  return modelLists.get(key);
+}
+
+function binaryKey(bin) {
+  try {
+    const file = fs.realpathSync(bin);
+    return `${file}:${fs.statSync(file).mtimeMs}`;
+  } catch {
+    return bin;
+  }
+}
+
+// A start of Claude Code that only answers the initialize request. It runs
+// without the person's MCP servers and hooks, which a real start would run.
+function askModels(bin, env) {
+  return new Promise((resolve) => {
+    const args = ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json",
+      "--strict-mcp-config", "--settings", JSON.stringify({ disableAllHooks: true })];
+    const child = spawn(bin, args, {
+      cwd: app.getPath("userData"), env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true, timeout: MODELS_TIMEOUT,
+    });
+    const id = crypto.randomUUID();
+    // Closing stdin ends Claude Code.
+    const finish = (list) => {
+      resolve(list);
+      child.stdin?.end();
+    };
+    child.on("error", () => finish(null));
+    child.on("exit", () => finish(null));
+    child.stdin.on("error", () => {});
+    readline.createInterface({ input: child.stdout }).on("line", (line) => {
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (msg?.type === "control_response" && msg.response?.request_id === id) finish(listedModels(msg.response.response?.models));
+    });
+    child.stdin.write(`${JSON.stringify({ type: "control_request", request_id: id, request: { subtype: "initialize" } })}\n`);
+  });
+}
+
+// The names and labels of Claude Code's list. Its "default" entry is left
+// out, because the panel's Default passes no model at all, and Claude Code
+// then takes the one from the person's settings.
+function listedModels(models) {
+  const list = [];
+  for (const m of Array.isArray(models) ? models : []) {
+    if (!m || !isClaudeModel(m.value) || !m.value || m.value === "default") continue;
+    if (list.some((x) => x.value === m.value)) continue;
+    const label = typeof m.displayName === "string" ? m.displayName.trim().slice(0, 80) : "";
+    list.push({ value: m.value, label: label || m.value });
+  }
+  return list.length ? list : null;
 }
 
 // OLLAMA_HOST is what `ollama serve` listens on: 127.0.0.1:11434, 0.0.0.0 or
@@ -483,9 +568,8 @@ class Session {
   async choose(e, choice) {
     const s = readSettings();
     const provider = PROVIDERS.includes(choice?.provider) ? choice.provider : s.provider;
-    const model = isModelName(choice?.model) ? choice.model : null;
-    if (provider === "claude" && model !== null && CLAUDE_MODELS.includes(model)) s.claudeModel = model;
-    if (provider === "ollama" && model !== null) s.ollamaModel = model;
+    if (provider === "claude" && isClaudeModel(choice?.model)) s.claudeModel = choice.model;
+    if (provider === "ollama" && isModelName(choice?.model)) s.ollamaModel = choice.model;
     s.provider = provider;
     saveSettings(s);
     // Another provider is another conversation. Another model of the same

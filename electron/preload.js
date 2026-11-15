@@ -42,6 +42,7 @@ if (location.origin === PANEL_ORIGIN) {
     stop: (projectId) => ipcRenderer.invoke("agent:stop", projectId),
     reset: (projectId) => ipcRenderer.invoke("agent:reset", projectId),
     choose: (projectId, choice) => ipcRenderer.invoke("agent:settings", projectId, choice),
+    models: () => ipcRenderer.invoke("agent:models"),
     openFile: (projectId, path, line) => ipcRenderer.send("agent:open", projectId, path, line),
     layout: (projectId, action) => ipcRenderer.send("agent:layout", projectId, action),
     onEvent: (fn) => listen("agent:event", fn),

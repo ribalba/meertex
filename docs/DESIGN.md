@@ -2493,12 +2493,12 @@ like a coauthor's. The server takes no part in it. The code is
   Its responses carry `frame-ancestors <server origin>`.
 - `electron/preload.js` runs in every frame and gives each at most one
   bridge, by origin. The panel gets `window.meertexAgent` (attach, send,
-  stop, reset, choose a provider and model, open a file, move or close the
-  panel). The top frame of a server page gets `window.meertexDesktop` with
-  `version: 2` and an `agent` part: `status(projectId)`,
-  `setContext(projectId, context)`, `onOpenFile` and `onLayout`. Every other
-  frame gets nothing. `agent.js` checks the sending frame's origin of every
-  message again.
+  stop, reset, choose a provider and model, list Claude Code's models, open
+  a file, move or close the panel). The top frame of a server page gets
+  `window.meertexDesktop` with `version: 2` and an `agent` part:
+  `status(projectId)`, `setContext(projectId, context)`, `onOpenFile` and
+  `onLayout`. Every other frame gets nothing. `agent.js` checks the sending
+  frame's origin of every message again.
 - The page cannot send a prompt. Prompts are typed in the panel only, and
   every permission Claude Code asks for is a native dialog of the app, which
   no page can draw or click.
@@ -2542,9 +2542,21 @@ like a coauthor's. The server takes no part in it. The code is
   the session. Stop interrupts the turn and closes an open question. A
   declined call shows as declined.
 - With Claude the person's own Claude Code settings apply (CLAUDE.md,
-  permission rules, MCP servers). The model is Claude Code's default, Opus,
-  Sonnet or Haiku. Another model of the same provider carries on with
-  `--resume`.
+  permission rules, MCP servers). The model is Default, which passes no
+  `--model` and so leaves the choice to those settings, or one of the models
+  Claude Code lists itself. Another model of the same provider carries on
+  with `--resume`.
+- The list of models comes from Claude Code, because it depends on its
+  version and on the account. When a panel loads, the app starts `claude`
+  once more, sends only the initialize request and takes `models` (a name
+  and a label each) from the answer, which is where the agent SDKs get their
+  list too. No message goes to a model, and that start runs without MCP
+  servers (`--strict-mcp-config`) and hooks (`disableAllHooks`). The entry
+  `default` is left out, since Default stands for it. The list is kept per
+  `claude` binary while the app runs, so an updated Claude Code is asked
+  again. The panel does not wait for it. Until the list is there, and with a
+  Claude Code that names no models, it offers Opus, Sonnet and Haiku. A saved
+  model that is not in the list stays in the menu under its name.
 - With Ollama the app points Claude Code at Ollama's Anthropic API
   (`ANTHROPIC_BASE_URL` from `OLLAMA_HOST`, by default 127.0.0.1:11434, and
   any `ANTHROPIC_API_KEY`), and every model Claude Code would pick is the
