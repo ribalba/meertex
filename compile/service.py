@@ -3,9 +3,10 @@
 The meertex server never runs TeX. It sends the files of a project here as a
 tar.gz and gets back a status and the log. The job's folder stays here for a
 while, so the PDF can be fetched and SyncTeX can map between the PDF and the
-sources. This file and its Lua filter for Markdown (markdown.lua) are the
-whole service. It uses only the standard library, so it runs the same in its
-Docker image (compile/Dockerfile) and natively next to a developer's TeX Live
+sources. This file, the box it runs every job in (sandbox.py) and its Lua
+filter for Markdown (markdown.lua) are the whole service. It uses only the
+standard library, so it runs the same in its Docker image
+(compile/Dockerfile) and natively next to a developer's TeX Live
 (``make compile-dev``).
 
 A Markdown main file (``.md``) is turned into LaTeX first, by pandoc with
@@ -19,11 +20,19 @@ run Lua, so every job is boxed in:
 
 * A fresh folder per job. The upload is unpacked by our own rules: no absolute
   paths, no ``..``, no links or device files, and a cap on the total size.
+* Every program of a job runs in a box of the kernel's (Landlock, sandbox.py).
+  It reads TeX Live and the system's programs, it writes to the paper's
+  files, a HOME and a TMPDIR of its own, and nothing else on the machine is
+  open to it, neither /proc, where the container's environment is, nor
+  another paper's folder. It cannot open a TCP connection. The rules below
+  bind single programs, and the Lua of LuaTeX gets around kpathsea's
+  (``io.input`` opens any path), so they are no longer what a paper's
+  privacy rests on.
 * latexmk without rc files (``-norc``, because a latexmkrc is Perl), TeX
   without shell escape.
-* kpathsea's paranoid mode (``openin_any=p``, ``openout_any=p``): TeX and the
-  Lua of LuaTeX read and write only below the job's folder. lualatex may also
-  read TeX Live's own tree (see ``latexmk_engine``).
+* kpathsea's paranoid mode (``openin_any=p``, ``openout_any=p``): TeX reads
+  and writes only below the job's folder. lualatex may also read TeX Live's
+  own tree (see ``latexmk_engine``).
 * A wall clock limit, after which the job's whole process group is killed,
   and a cap on the size of any one file a job writes.
 * biber is Perl, so kpathsea's rules do not bind it. latexmk runs it through
@@ -32,7 +41,10 @@ run Lua, so every job is boxed in:
 * pandoc runs with ``--sandbox``, so it reads nothing but the Markdown file,
   and with a data folder that does not exist, so no template or filter of
   anyone else's. A document cannot name a filter or a template.
-* The service's own settings (the token) are not in a job's environment.
+* A job's environment holds a handful of variables (``tex_env``) and none of
+  the service's or the container's own. LuaTeX gives a document
+  ``os.getenv``, and on Coolify every container of a resource holds every
+  secret of the resource.
 
 The container adds the rest: an unprivileged user, a read-only root file
 system, and memory, CPU and process limits (docker-compose*.yml).
@@ -41,8 +53,9 @@ A compile from an open editor has to be quick, so it runs in the paper's
 workspace instead of a fresh folder (``Workspace``). The paper's files stay
 there between compiles and only changed ones are sent. The build files of the
 last run that reached its end are put back, so a small edit usually needs one
-TeX pass instead of three. Nothing else survives from one compile to the next.
-Versions, diffs and the CLI never use a workspace.
+TeX pass instead of three. Its HOME stays as well, with the font caches.
+Nothing else survives from one compile to the next, and nothing at all goes
+from one paper to another. Versions, diffs and the CLI never use a workspace.
 """
 
 import contextlib
@@ -124,6 +137,23 @@ MARKDOWN_FILTER = Path(__file__).resolve().with_name("markdown.lua")
 MARKDOWN_MARK_RE = re.compile(r"(?<!\\)%meertex:(\d+)\s*$")
 # What a Markdown job keeps: the Markdown line of every line of the LaTeX.
 MARKDOWN_LINES = "markdown-lines.json"
+# The launcher that puts a job's program into its box (``Sandbox``).
+SANDBOX = Path(__file__).resolve().with_name("sandbox.py")
+SANDBOX_MODES = ("auto", "on", "off")
+# The only variables of the service's own environment that a job gets, plus
+# the locale's (LC_*). Everything else stays here. On Coolify every container
+# of a resource holds every variable of the resource, the passwords of the
+# database and the mail server among them, and LuaTeX gives a document
+# os.getenv.
+ENV_KEEP = ("PATH", "LANG", "LANGUAGE", "TZ")
+# Where the programs, their libraries and their settings are. A job reads
+# these, and TeX Live's own trees wherever they are (``Sandbox``).
+SYSTEM_ROOTS = (
+    "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt",
+    "/var/lib/texmf", "/var/cache/fontconfig",
+)  # fmt: skip
+# A program of a job that is installed somewhere else is read from there.
+SANDBOX_TOOLS = ("latexmk", "pdflatex", "xelatex", "lualatex", "bibtex", "biber", "latexdiff", "pandoc", "kpsewhich", "perl")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -145,6 +175,8 @@ class Config:
     max_tree: int
     max_files: int
     max_file: int
+    max_home: int
+    sandbox: str
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -152,6 +184,9 @@ class Config:
         if not token:
             sys.exit("COMPILE_TOKEN is not set. The service refuses to run without a token.")
         jobs = os.environ.get("COMPILE_JOBS_DIR", "").strip()
+        sandbox = os.environ.get("COMPILE_SANDBOX", "").strip().lower() or "auto"
+        if sandbox not in SANDBOX_MODES:
+            sys.exit(f"COMPILE_SANDBOX is one of {', '.join(SANDBOX_MODES)}, not {sandbox}.")
         return cls(
             token=token,
             host=os.environ.get("COMPILE_HOST", "127.0.0.1").strip() or "127.0.0.1",
@@ -165,6 +200,8 @@ class Config:
             max_tree=_env_int("COMPILE_MAX_TREE_BYTES", 512 * 1024 * 1024),
             max_files=_env_int("COMPILE_MAX_FILES", 20000),
             max_file=_env_int("COMPILE_MAX_FILE_BYTES", 256 * 1024 * 1024),
+            max_home=_env_int("COMPILE_MAX_HOME_BYTES", 512 * 1024 * 1024),
+            sandbox=sandbox,
         )
 
 
@@ -392,6 +429,21 @@ def texmf_root() -> str:
     return root
 
 
+def texmf_trees() -> list[str]:
+    """The folders TeX Live's own files are in, the fonts and formats this
+    machine made included. A tree in a user's home is not one of them."""
+    names = ("TEXMFROOT", "TEXMFDIST", "TEXMFLOCAL", "TEXMFSYSVAR", "TEXMFSYSCONFIG")
+    try:
+        out = subprocess.run(
+            ["kpsewhich", "-expand-var", "|".join(f"${name}" for name in names)],
+            capture_output=True, text=True, timeout=30, check=True,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return []
+    # A variable kpathsea does not know stays as it was written.
+    return [tree for tree in out.stdout.strip().split("|") if os.path.isabs(tree)]
+
+
 # The data sources biblatex hands biber, in the .bcf file it writes for it.
 BCF_SOURCE_RE = re.compile(r"<bcf:datasource\b[^>]*>([^<]*)</bcf:datasource>")
 URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
@@ -444,8 +496,12 @@ def latexmk_engine(compiler: str, texmf: str) -> list[str]:
 
 
 def tex_env() -> dict[str, str]:
-    """The environment of every TeX, latexmk, latexdiff and synctex run."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("COMPILE_")}
+    """The environment of every TeX, latexmk, latexdiff, pandoc and synctex
+    run. It holds the few variables of the service's own that a job needs
+    (ENV_KEEP) and TeX's settings. A job gets a HOME and a TMPDIR of its own
+    on top (``Service._run``). None of the service's settings is in it, and
+    nothing else the container was started with."""
+    env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith("LC_")}
     env.update(
         openin_any="p",
         openout_any="p",
@@ -469,6 +525,100 @@ def _limit(pid: int, max_file: int) -> None:
     with contextlib.suppress(ProcessLookupError, PermissionError, ValueError, OSError):
         resource.prlimit(pid, resource.RLIMIT_FSIZE, (max_file, max_file))
         resource.prlimit(pid, resource.RLIMIT_CORE, (0, 0))
+
+
+@dataclass(frozen=True)
+class Box:
+    """What one job may write to. ``home`` is its HOME, where LuaTeX keeps
+    its font caches and biber unpacks itself, and the only place it runs
+    programs of its own from. ``tmp`` is its TMPDIR. ``folders`` hold the
+    paper's files."""
+
+    home: Path
+    tmp: Path
+    folders: tuple[Path, ...]
+
+
+class Sandbox:
+    """Runs a job's programs in the box of compile/sandbox.py. That is
+    Landlock, the kernel's own rules about which files a process and
+    everything it starts may open. A job reads TeX Live and the system's
+    programs (``read``) and writes to what its ``Box`` names. The rest of
+    the machine is closed to it, /proc with the container's environment and
+    the other papers' folders included, and so is TCP.
+
+    ``mode`` is COMPILE_SANDBOX. ``auto`` uses Landlock where the kernel has
+    it (Linux 5.13 and later), ``on`` refuses to start without it, ``off``
+    never uses it. Without it a job is held only by the rules of its
+    programs, which the Lua of LuaTeX gets around."""
+
+    def __init__(self, mode: str, jobs_dir: Path, path: str | None) -> None:
+        self.mode = mode
+        self.abi = 0 if mode == "off" else self._abi()
+        if mode == "on" and not self.on:
+            sys.exit("COMPILE_SANDBOX is on, but this kernel has no Landlock (Linux 5.13 and later have it).")
+        self.read = self._read_roots(jobs_dir, path) if self.on else []
+
+    @property
+    def on(self) -> bool:
+        return self.abi >= 1
+
+    def __str__(self) -> str:
+        if self.on:
+            return f"jobs in a sandbox (Landlock {self.abi})"
+        return "jobs WITHOUT a sandbox (" + ("COMPILE_SANDBOX is off" if self.mode == "off" else "this kernel has no Landlock") + ")"
+
+    @staticmethod
+    def _abi() -> int:
+        try:
+            out = subprocess.run(
+                [sys.executable, "-I", str(SANDBOX), "--abi"], capture_output=True, text=True, timeout=30, check=True
+            )
+            return int(out.stdout.strip())
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return 0
+
+    @staticmethod
+    def _read_roots(jobs_dir: Path, path: str | None) -> list[str]:
+        """The folders every job may read and run programs from."""
+        candidates = [
+            *SYSTEM_ROOTS,
+            *texmf_trees(),
+            # Python itself, for the biber guard.
+            sys.prefix, sys.base_prefix, sys.exec_prefix, sys.base_exec_prefix,
+            # This file, which is the biber guard, and markdown.lua.
+            str(SANDBOX.parent),
+        ]  # fmt: skip
+        for tool in SANDBOX_TOOLS:
+            found = shutil.which(tool, path=path)
+            if found:
+                candidates.append(os.path.dirname(os.path.realpath(found)))
+        jobs = os.path.realpath(jobs_dir)
+        roots: list[str] = []
+        for candidate in candidates:
+            root = os.path.realpath(candidate)
+            if not os.path.isabs(candidate) or not os.path.exists(root):
+                continue
+            if any(root == known or root.startswith(known + os.sep) for known in roots):
+                continue
+            if root == os.sep or jobs == root or jobs.startswith(root + os.sep):
+                # Reading it would open every paper's folder to every job.
+                logger.warning("The jobs are kept below %s, so no job gets to read that folder.", root)
+                continue
+            roots.append(root)
+        return roots
+
+    def command(self, cmd: list[str], box: Box) -> list[str]:
+        """``cmd`` as it runs inside ``box``."""
+        if not self.on:
+            return cmd
+        flags: list[str] = []
+        for root in self.read:
+            flags += ["-r", root]
+        for folder in (*box.folders, box.tmp):
+            flags += ["-w", str(folder)]
+        flags += ["-x", str(box.home)]
+        return [sys.executable, "-I", str(SANDBOX), *flags, "--", *cmd]
 
 
 class Runner:
@@ -582,12 +732,18 @@ class Workspace:
 
     All compiles of a workspace belong to one paper, so its writers are the
     same people the paper's text already trusts. A file a document changed is
-    noticed by its size and time and sent again."""
+    noticed by its size and time and sent again.
+
+    ``home`` is the HOME of the paper's compiles. The font caches of LuaTeX
+    and what biber unpacks of itself stay there, so only a paper's first
+    compile pays for them. No other paper's compile reads or writes it,
+    because these caches hold code that the next run loads."""
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
         self.tree = folder / "tree"
         self.seeds = folder / "seeds"
+        self.home = folder / "home"
         self.state = folder / "state.json"
         # One preparation or job at a time.
         self.lock = threading.Lock()
@@ -742,6 +898,19 @@ class Workspace:
         self.seeds_for = None
         self.save()
 
+    def trim_home(self, limit: int) -> None:
+        """Drop the caches in ``home`` once they are larger than ``limit``.
+        The next run makes them again. They stay from one compile to the
+        next, so without this a paper could fill the disk a little at a time."""
+        total = 0
+        for folder, _dirs, names in os.walk(self.home):
+            for name in names:
+                with contextlib.suppress(OSError):
+                    total += os.lstat(os.path.join(folder, name)).st_size
+            if total > limit:
+                shutil.rmtree(self.home, ignore_errors=True)
+                return
+
     # --- Stopping the job that runs ---
 
     def begin(self) -> None:
@@ -796,12 +965,7 @@ class Service:
         self.workspaces: dict[str, Workspace] = {}
         cfg.jobs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.workspaces_dir.mkdir(exist_ok=True, mode=0o700)
-        # The font caches of LuaTeX and XeTeX live below HOME, which the
-        # container puts on a tmpfs that starts empty.
-        home = os.environ.get("HOME")
-        if home:
-            with contextlib.suppress(OSError):
-                Path(home).mkdir(parents=True, exist_ok=True)
+        self.sandbox = Sandbox(cfg.sandbox, cfg.jobs_dir, self.env.get("PATH"))
         for tool in ("latexmk", "synctex", "latexdiff", "pandoc"):
             if shutil.which(tool, path=self.env.get("PATH")) is None:
                 logger.warning("%s is not on the PATH", tool)
@@ -907,6 +1071,8 @@ class Service:
             workspace.sweep(manifest)
             if clean:
                 workspace.drop_seeds()
+                # From nothing means that the font caches and biber's files go too.
+                shutil.rmtree(workspace.home, ignore_errors=True)
             need = [path for path, sha in manifest.items() if not workspace.intact(path, sha)]
             token = secrets.token_hex(16)
             workspace.pending = _Pending(token, manifest, need)
@@ -963,7 +1129,12 @@ class Service:
                 except Refused:
                     shutil.rmtree(job, ignore_errors=True)
                     raise
-                result = self._compile(job, workspace.tree, main_file, compiler, False, workspace)
+                box = self._box(workspace.home, job / "tmp", workspace.tree)
+                try:
+                    result = self._compile(job, workspace.tree, main_file, compiler, False, box, workspace)
+                finally:
+                    shutil.rmtree(box.tmp, ignore_errors=True)
+                    workspace.trim_home(self.cfg.max_home)
                 if result["status"] == "cancelled":
                     shutil.rmtree(job, ignore_errors=True)
                     return {"job_id": None, **result}
@@ -1021,7 +1192,14 @@ class Service:
             except Refused:
                 shutil.rmtree(job, ignore_errors=True)
                 raise
-            result = self._compile(job, tree, main_file, compiler, diff)
+            box = self._box(job / "home", job / "tmp", tree, *([job / "old"] if diff else []))
+            try:
+                result = self._compile(job, tree, main_file, compiler, diff, box)
+            finally:
+                # A job without a workspace keeps no caches. biber alone
+                # unpacks 120 MB of itself.
+                shutil.rmtree(box.home, ignore_errors=True)
+                shutil.rmtree(box.tmp, ignore_errors=True)
             meta = {"main_file": main_file, "compiler": compiler, "kind": "pdfdiff" if diff else "pdf", **result}
             meta.pop("log")
             (job / "output.log").write_text(result["log"], encoding="utf-8")
@@ -1033,7 +1211,37 @@ class Service:
             self.slots.release()
             self.prune()
 
-    def _compile(self, job: Path, tree: Path, main_file: str, compiler: str, diff: bool, workspace: Workspace | None = None) -> dict:
+    @staticmethod
+    def _box(home: Path, tmp: Path, *folders: Path) -> Box:
+        """The box of a job whose paper is in ``folders``, with its HOME and
+        its TMPDIR, which are made here."""
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return Box(home, tmp, folders)
+
+    def _run(
+        self,
+        cmd: list[str],
+        cwd: Path,
+        box: Box,
+        stdout: Path,
+        stderr: Path | None,
+        deadline: float,
+        on_start: Callable[[subprocess.Popen], None] | None = None,
+    ) -> tuple[int | None, bool]:
+        """Run a program of a job in its box (``Runner.run``). Its HOME and
+        TMPDIR are the box's. biber is a packed program that unpacks itself
+        below PAR_GLOBAL_TMPDIR and runs from there, so that is the box's
+        HOME as well and never a folder that jobs share. FileNotFoundError
+        when the program is not installed."""
+        if shutil.which(cmd[0], path=self.env.get("PATH")) is None:
+            raise FileNotFoundError(f"{cmd[0]} is not installed")
+        env = {**self.env, "HOME": str(box.home), "TMPDIR": str(box.tmp), "PAR_GLOBAL_TMPDIR": str(box.home)}
+        return self.runner.run(self.sandbox.command(cmd, box), cwd, env, stdout, stderr, deadline, on_start)
+
+    def _compile(
+        self, job: Path, tree: Path, main_file: str, compiler: str, diff: bool, box: Box, workspace: Workspace | None = None
+    ) -> dict:
         started = time.monotonic()
         deadline = started + self.cfg.timeout
 
@@ -1048,40 +1256,55 @@ class Service:
         markdown = is_markdown(main_file)
         if diff:
             # Markdown is diffed as the LaTeX pandoc makes of each side.
-            problem = self._pandoc_both(job, tree, main_file, deadline) if markdown else None
+            problem = self._pandoc_both(job, tree, main_file, deadline, box) if markdown else None
             if problem is None:
-                problem = self._latexdiff(job, tree, tex_name(main_file), deadline)
+                problem = self._latexdiff(job, tree, tex_name(main_file), deadline, box)
             if problem is not None:
                 return done(*problem)
 
         tex = tree / tex_name(main_file)
         self._clear_results(tex)
         seeded = workspace is not None and workspace.restore_seeds(main_file, compiler)
-        status, log = self._build(job, tree, main_file, compiler, deadline, workspace, markdown and not diff)
+        status, log = self._build(job, tree, main_file, compiler, deadline, box, workspace, markdown and not diff)
         if seeded and workspace is not None and _seeds_to_blame(status, log):
             workspace.drop_seeds()
             workspace.sweep(workspace.files or {})
             self._clear_results(tex)
-            status, log = self._build(job, tree, main_file, compiler, deadline, workspace, markdown and not diff)
+            status, log = self._build(job, tree, main_file, compiler, deadline, box, workspace, markdown and not diff)
         return done(status, log)
 
     def _build(
-        self, job: Path, tree: Path, main_file: str, compiler: str, deadline: float, workspace: Workspace | None, pandoc: bool
+        self,
+        job: Path,
+        tree: Path,
+        main_file: str,
+        compiler: str,
+        deadline: float,
+        box: Box,
+        workspace: Workspace | None,
+        pandoc: bool,
     ) -> tuple[str, str]:
         """latexmk on the main file's LaTeX, which with ``pandoc`` pandoc
         makes of the Markdown first. ``(status, log)``."""
         tex = tree / tex_name(main_file)
         if not pandoc:
-            return self._latexmk(job, tex, compiler, deadline, workspace)
-        problem = self._pandoc(job, tree, main_file, deadline, workspace)
+            return self._latexmk(job, tex, compiler, deadline, box, workspace)
+        problem = self._pandoc(job, tree, main_file, deadline, box, workspace)
         if problem is not None:
             return problem
-        status, log = self._latexmk(job, tex, compiler, deadline, workspace)
+        status, log = self._latexmk(job, tex, compiler, deadline, box, workspace)
         lines = json.loads((job / MARKDOWN_LINES).read_text())
         return status, map_markdown_log(log, main_file, lines)
 
     def _pandoc(
-        self, job: Path, folder: Path, main_file: str, deadline: float, workspace: Workspace | None = None, lines: bool = True
+        self,
+        job: Path,
+        folder: Path,
+        main_file: str,
+        deadline: float,
+        box: Box,
+        workspace: Workspace | None = None,
+        lines: bool = True,
     ) -> tuple[str, str] | None:
         """Turn the Markdown file ``main_file`` of ``folder`` into LaTeX next
         to it. With ``lines`` the LaTeX keeps the Markdown's line numbers, and
@@ -1110,7 +1333,7 @@ class Service:
         ]
         on_start = workspace.started if workspace is not None else None
         try:
-            rc, timed_out = self.runner.run(cmd, md.parent, self.env, job / "pandoc.out", job / "pandoc.err", deadline, on_start)
+            rc, timed_out = self._run(cmd, md.parent, box, job / "pandoc.out", job / "pandoc.err", deadline, on_start)
         except FileNotFoundError:
             return "failure", _own_message("pandoc is not installed here, so Markdown cannot be compiled.")
         if workspace is not None:
@@ -1127,13 +1350,13 @@ class Service:
             (job / MARKDOWN_LINES).write_text(json.dumps(markdown_lines(_read_text(tex))))
         return None
 
-    def _pandoc_both(self, job: Path, tree: Path, main_file: str, deadline: float) -> tuple[str, str] | None:
+    def _pandoc_both(self, job: Path, tree: Path, main_file: str, deadline: float, box: Box) -> tuple[str, str] | None:
         """The LaTeX of the older and the newer Markdown, for latexdiff."""
         old = job / "old"
         if not (old / main_file).is_file() or (old / main_file).is_symlink():
             return "failure", f"The main file {main_file} is not in the older version.\n"
-        return self._pandoc(job, old, main_file, deadline, lines=False) or self._pandoc(
-            job, tree, main_file, deadline, lines=False
+        return self._pandoc(job, old, main_file, deadline, box, lines=False) or self._pandoc(
+            job, tree, main_file, deadline, box, lines=False
         )
 
     @staticmethod
@@ -1142,7 +1365,9 @@ class Service:
         for suffix in (".pdf", ".log", ".synctex.gz", ".fdb_latexmk", ".fls"):
             (main.parent / f"{main.stem}{suffix}").unlink(missing_ok=True)
 
-    def _latexmk(self, job: Path, main: Path, compiler: str, deadline: float, workspace: Workspace | None) -> tuple[str, str]:
+    def _latexmk(
+        self, job: Path, main: Path, compiler: str, deadline: float, box: Box, workspace: Workspace | None
+    ) -> tuple[str, str]:
         """Run latexmk on ``main``. ``(status, log)``."""
         if workspace is not None and workspace.stopped():
             return "cancelled", ""
@@ -1160,7 +1385,7 @@ class Service:
             main.name,
         ]
         on_start = workspace.started if workspace is not None else None
-        rc, timed_out = self.runner.run(cmd, workdir, self.env, job / "latexmk.out", None, deadline, on_start)
+        rc, timed_out = self._run(cmd, workdir, box, job / "latexmk.out", None, deadline, on_start)
         if workspace is not None:
             workspace.ended()
             if workspace.stopped():
@@ -1187,7 +1412,7 @@ class Service:
             log += f"\n{LATEXMK_MARK}\n" + "".join(f"{line}\n" for line in ours) + f"{tail}\n"
         return status, log
 
-    def _latexdiff(self, job: Path, tree: Path, main_file: str, deadline: float) -> tuple[str, str] | None:
+    def _latexdiff(self, job: Path, tree: Path, main_file: str, deadline: float, box: Box) -> tuple[str, str] | None:
         """Replace the main file in ``tree`` with ``latexdiff --flatten`` of
         the old and the new one. None when that worked, else (status, log)."""
         old_main = job / "old" / main_file
@@ -1199,7 +1424,7 @@ class Service:
         except Refused as e:
             return "failure", f"{e}.\n"
         cmd = ["latexdiff", "--flatten", f"old/{main_file}", f"tree/{main_file}"]
-        rc, timed_out = self.runner.run(cmd, job, self.env, job / "diff.tex", job / "latexdiff.err", deadline)
+        rc, timed_out = self._run(cmd, job, box, job / "diff.tex", job / "latexdiff.err", deadline)
         errors = _read_text(job / "latexdiff.err")
         if timed_out:
             return "timeout", f"latexdiff took longer than {self.cfg.timeout} seconds and was stopped.\n{errors}"
@@ -1579,10 +1804,16 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, stop)
     print(
-        f"meertex-compile on http://{cfg.host}:{cfg.port}, TeX Live in {service.texmf}, jobs in {cfg.jobs_dir}",
+        f"meertex-compile on http://{cfg.host}:{cfg.port}, TeX Live in {service.texmf}, "
+        f"{service.sandbox} in {cfg.jobs_dir}",
         file=sys.stderr,
         flush=True,
     )
+    if not service.sandbox.on:
+        logger.warning(
+            "Without the sandbox a lualatex document reads and writes every file this user can, "
+            "the other papers' and the container's environment in /proc among them (compile/README.md)."
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

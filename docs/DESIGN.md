@@ -1454,10 +1454,28 @@ A container of its own compiles LaTeX. The server never runs TeX.
   library only), run as an unprivileged user. Only the `web` container
   reaches it, and every request but `GET /healthz` carries
   `Authorization: Bearer <COMPILE_TOKEN>`.
+- Every program of a job runs in a **sandbox** (`compile/sandbox.py`,
+  Landlock, the kernel's own rules for a process and everything it starts).
+  A job reads TeX Live and the system's programs. It writes to the paper's
+  files, a `HOME` and a `TMPDIR` of its own. Nothing else is open to it,
+  neither `/proc` with the environment of the service and the container,
+  nor another paper's folder, and it opens no TCP connection (Landlock 4,
+  Linux 6.7). A paper's privacy rests on this and not on the rules of the
+  programs below, because the Lua of LuaTeX opens any path with `io.input`
+  and `io.output`. `COMPILE_SANDBOX` is `auto` (use it where the kernel has
+  Landlock, Linux 5.13, and warn where not), `on` (refuse to start without)
+  or `off`. The service's first line says which.
+- A job's environment holds `PATH`, the locale and TeX's settings, and
+  nothing else the service or its container was started with. LuaTeX gives
+  a document `os.getenv`, and on Coolify every container holds every secret
+  of the resource. `HOME` holds caches with code the next run loads
+  (LuaTeX's fonts, what biber unpacks of itself), so a workspace has its
+  own and keeps it, and a job without a workspace gets one that goes with
+  it.
 - Each job runs in a fresh folder with `latexmk -norc` (a `latexmkrc` is
   Perl), the project's compiler (`pdflatex`, `xelatex` or `lualatex`),
   `-interaction=nonstopmode`, `-file-line-error`, `-synctex=1`, without shell
-  escape and with `openin_any=p` and `openout_any=p`, so a document cannot
+  escape and with `openin_any=p` and `openout_any=p`, so TeX cannot
   read or write outside its folder. TeX runs in the main file's folder.
   lualatex also gets `TEXMFOUTPUT` set to TeX Live's root, because LuaTeX 1.22
   holds Lua's `io.open` to the paranoid rules and luaotfload reads TeX Live's
@@ -1481,7 +1499,7 @@ A container of its own compiles LaTeX. The server never runs TeX.
     `errors`) are kept outside the tree and put back before each run, so
     latexmk usually needs one TeX pass. A run that was stopped halfway never
     reaches the next one. They are tied to the main file and the compiler,
-    and `clean` forgets them.
+    and `clean` forgets them, and the workspace's `HOME` with them.
   - A run that used them and made no PDF, or reported an error inside a build
     file, runs once more without them. An error in the text does not.
   - A job keeps only its PDF and SyncTeX file. SyncTeX of an older job still
@@ -1728,7 +1746,11 @@ no capabilities and memory, CPU and process limits. Locally `compile` sits on
 an internal network without internet access. On Coolify it shares the
 project network, because custom networks fight Coolify's routing. Nothing a
 job runs opens a connection: no shell escape, and biber only through a guard
-that refuses URLs and paths outside the job.
+that refuses URLs and paths outside the job. The sandbox (§14) closes TCP to
+a job as well. Coolify also hands every variable of the resource to every
+service, so the `compile` container holds the passwords of the database and
+the mail server. The sandbox and the job's own environment keep them from a
+document.
 
 | Variable | |
 | --- | --- |

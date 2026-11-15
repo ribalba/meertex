@@ -21,8 +21,9 @@ LABEL org.opencontainers.image.title="meertex-compile" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.version="${MEERTEX_VERSION}"
 
-# HOME is on the tmpfs that compose mounts at /tmp. The font caches of LuaTeX
-# and XeTeX go there, because the root file system is read-only.
+# HOME is the service's own, on the tmpfs that compose mounts at /tmp, because
+# the root file system is read-only. A job never sees it. Each one gets a
+# HOME of its own below /jobs, for its font caches (service.py, Box).
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/tmp/home \
@@ -52,7 +53,14 @@ RUN set -eu; \
     rm /tmp/pandoc.tar.gz; \
     pandoc --version | head -n 1
 
-COPY service.py markdown.lua /srv/compile/
+# The image comes without the format of xelatex. TeX then builds it on the
+# first run into the HOME of whoever runs it, which takes seven seconds. Every
+# job has a HOME of its own, so it is built once here, for all of them.
+RUN fmtutil-sys --byfmt xelatex > /tmp/fmtutil.log 2>&1 || { cat /tmp/fmtutil.log; exit 1; }; \
+    rm /tmp/fmtutil.log; \
+    kpsewhich -engine=xetex xelatex.fmt
+
+COPY service.py sandbox.py markdown.lua /srv/compile/
 
 USER compile
 WORKDIR /jobs

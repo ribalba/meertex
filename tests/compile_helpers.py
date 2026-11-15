@@ -19,7 +19,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVICE = ROOT / "compile" / "service.py"
+SANDBOX = ROOT / "compile" / "sandbox.py"
 TOKEN = "test-compile-token"
+
+
+def landlock() -> int:
+    """The version of this kernel's Landlock, 0 when it has none. The compile
+    service boxes its jobs in with it (compile/sandbox.py)."""
+    try:
+        cmd = [sys.executable, "-I", str(SANDBOX), "--abi"]
+        return int(subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True).stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+needs_sandbox = pytest.mark.skipif(landlock() < 1, reason="this kernel has no Landlock, so jobs run without the sandbox")
 
 needs_tex = pytest.mark.skipif(
     shutil.which("latexmk") is None or shutil.which("synctex") is None,
@@ -37,9 +51,14 @@ def _free_port() -> int:
 
 
 class Service:
-    def __init__(self, url: str, jobs: Path) -> None:
+    def __init__(self, url: str, jobs: Path, pid: int) -> None:
         self.url = url
         self.jobs = jobs
+        self.pid = pid
+
+    def log(self) -> str:
+        """What the service has printed so far."""
+        return (self.jobs.parent / "service.log").read_text()
 
     def job_count(self) -> int:
         """Jobs the service has made and still keeps."""
@@ -73,7 +92,7 @@ def compile_service(folder: Path, **env: object) -> Iterator[Service]:
                 if proc.poll() is not None or time.monotonic() > deadline:
                     raise RuntimeError(f"The compile service did not start:\n{log_path.read_text()}") from None
                 time.sleep(0.1)
-        yield Service(url, folder / "jobs")
+        yield Service(url, folder / "jobs", proc.pid)
     finally:
         proc.terminate()
         try:

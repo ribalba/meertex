@@ -19,6 +19,7 @@ from compile_helpers import (
     SERVICE,
     TOKEN,
     compile_service,
+    needs_sandbox,
     needs_tex,
     tgz,
 )
@@ -332,14 +333,188 @@ def test_refuses_to_start_without_a_token(tmp_path):
     assert "COMPILE_TOKEN is not set" in out.stderr
 
 
-def test_no_settings_reach_the_jobs(service):
-    """kpathsea expands $VARIABLES in file names, which shows what is in a
-    job's environment: MEERTEX_PROBE is, COMPILE_TOKEN is not."""
+# What a document's Lua can try, for the tests below. io.input and io.output
+# are the calls that LuaTeX's own rules (kpathsea's paranoid mode) do not
+# cover. The results go to the TeX log as "PROBE name=value".
+LUA_PROBE = """
+function read(path)
+  local ok, text = pcall(function()
+    io.input(path)
+    local text = io.read("a")
+    io.input():close()
+    return text
+  end)
+  io.input(io.stdin)
+  return ok and text or nil
+end
+function write(path)
+  local ok = pcall(function()
+    io.output(path)
+    io.write("planted")
+    io.output():close()
+  end)
+  io.output(io.stdout)
+  return ok
+end
+function probe(name, value)
+  texio.write_nl("log", "PROBE " .. name .. "=" .. tostring(value))
+end
+"""
+
+
+def _lua_paper(lua: str) -> dict[str, bytes]:
+    """A paper that runs ``lua`` (with LUA_PROBE) when lualatex compiles it."""
+    tex = b"\\documentclass{article}\n\\begin{document}\n\\directlua{dofile('probe.lua')}\nx\n\\end{document}\n"
+    return {"main.tex": tex, "probe.lua": (LUA_PROBE + lua).encode(), "inside.txt": b"inside-text"}
+
+
+def test_nothing_of_the_services_environment_reaches_the_jobs(service):
+    """kpathsea expands $VARIABLES in file names, and LuaTeX gives a document
+    os.getenv. Neither finds what the service was started with, neither its
+    own settings (COMPILE_TOKEN) nor anything else. MEERTEX_PROBE stands for
+    the passwords that every container of a resource holds on Coolify."""
     tex = b"\\documentclass{article}\n\\begin{document}\n\\input{$MEERTEX_PROBE}\n\\input{$COMPILE_TOKEN}\nx\\end{document}\n"
     files = {"main.tex": tex, "probe-file.tex": b"Probe.\n", f"{TOKEN}.tex": b"Leaked.\n"}
     job = _ok(service, files)
-    assert "(./probe-file.tex" in job["log"]
+    assert "(./probe-file.tex" not in job["log"]
     assert f"(./{TOKEN}.tex" not in job["log"]
+
+    lua = """
+probe("probe", os.getenv("MEERTEX_PROBE"))
+probe("token", os.getenv("COMPILE_TOKEN"))
+probe("path", os.getenv("PATH") ~= nil)
+"""
+    job = _ok(service, _lua_paper(lua), compiler="lualatex")
+    assert "PROBE probe=nil" in job["log"], job["log"][-3000:]
+    assert "PROBE token=nil" in job["log"]
+    assert "PROBE path=true" in job["log"]
+
+
+@needs_sandbox
+def test_a_document_reaches_nothing_outside_its_box(service, tmp_path):
+    """The Lua of LuaTeX opens any path with io.input and io.output, whatever
+    kpathsea's paranoid mode says, and kpse.lookup finds files anywhere. The
+    kernel's rules (compile/sandbox.py) hold where the program's do not."""
+    assert "jobs in a sandbox (Landlock" in service.log()
+    (tmp_path / "deep").mkdir()
+    outside = tmp_path / "deep" / "outside.txt"
+    outside.write_text("outside-secret")
+    planted = tmp_path / "planted.txt"
+    lua = f"""
+probe("inside", read("inside.txt"))
+probe("outside", read("{outside}"))
+probe("planted", write("{planted}"))
+probe("found", kpse.lookup("outside.txt", {{path = "{tmp_path}//", all = true}}))
+local environment = read("/proc/{service.pid}/environ")
+probe("service", environment and environment:find("probe-file", 1, true) ~= nil)
+probe("init", read("/proc/1/environ") ~= nil)
+"""
+    job = _ok(service, _lua_paper(lua), compiler="lualatex")
+    log = job["log"]
+    assert "PROBE inside=inside-text" in log, log[-3000:]  # the probe itself works
+    assert "PROBE outside=nil" in log
+    assert "outside-secret" not in log
+    assert "PROBE planted=false" in log
+    assert not planted.exists()
+    assert "PROBE found=nil" in log
+    # The service's own environment, where MEERTEX_PROBE and the token are.
+    assert "PROBE service=nil" in log
+    assert "PROBE init=false" in log
+
+
+@needs_sandbox
+def test_one_papers_compile_does_not_reach_another_papers(service):
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    secret = b"\\documentclass{article}\n\\begin{document}\nThe secret of paper A.\n\\end{document}\n"
+    _, first = _in_workspace(service, a, {"main.tex": secret})
+    assert first["status"] == "success"
+    theirs = _tree(service, a) / "main.tex"
+    a_job = service.jobs / _ok(service, {"main.tex": secret})["job_id"] / "tree" / "main.tex"
+    assert a_job.is_file()
+
+    lua = f"""
+probe("workspace", read("{theirs}"))
+probe("overwritten", write("{theirs}"))
+probe("job", read("{a_job}"))
+probe("listed", kpse.expand_path("{service.jobs}/workspaces//"))
+probe("found", kpse.lookup("main.tex", {{path = "{service.jobs}//", all = true}}))
+"""
+    _, job = _in_workspace(service, b, _lua_paper(lua), compiler="lualatex")
+    log = job["log"]
+    assert "PROBE workspace=nil" in log, log[-3000:]
+    assert "PROBE overwritten=false" in log
+    assert theirs.read_bytes() == secret
+    assert "PROBE job=nil" in log
+    assert "PROBE found=nil" in log
+    assert a not in log  # not even the names of the other papers' folders
+    assert "The secret of paper A" not in log
+
+
+def test_a_job_has_a_home_of_its_own(service):
+    """HOME holds caches with code the next run loads (LuaTeX's fonts, what
+    biber unpacks of itself), so no two papers share one. A workspace keeps
+    its own, a job without a workspace loses it when it ends."""
+    lua = """
+local home = os.getenv("HOME")
+probe("home", home)
+probe("tmp", os.getenv("TMPDIR"))
+probe("marker", read(home .. "/marker"))
+probe("left", write(home .. "/marker"))
+"""
+    job = _ok(service, _lua_paper(lua), compiler="lualatex")
+    folder = service.jobs / job["job_id"]
+    assert f"PROBE home={folder / 'home'}" in job["log"], job["log"][-3000:]
+    assert f"PROBE tmp={folder / 'tmp'}" in job["log"]
+    assert "PROBE left=true" in job["log"]
+    assert not (folder / "home").exists()
+    assert not (folder / "tmp").exists()
+
+    key = str(uuid.uuid4())
+    home = service.jobs / "workspaces" / key / "home"
+    _, first = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex")
+    assert f"PROBE home={home}" in first["log"]
+    assert "PROBE marker=nil" in first["log"]
+    assert (home / "marker").read_text() == "planted"
+    _, second = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex")
+    assert "PROBE marker=planted" in second["log"]
+    # A clean compile starts without the caches too.
+    _, third = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex", clean=True)
+    assert "PROBE marker=nil" in third["log"]
+
+    _, other = _in_workspace(service, str(uuid.uuid4()), _lua_paper(lua), compiler="lualatex")
+    assert "PROBE marker=nil" in other["log"]
+
+
+def test_a_workspaces_home_does_not_grow_without_end(tmp_path):
+    """What a compile leaves in HOME stays for the next one, so it is capped."""
+    lua = """
+local home = os.getenv("HOME")
+probe("marker", read(home .. "/marker"))
+probe("left", write(home .. "/marker"))
+io.output(home .. "/large")
+io.write(string.rep("x", 5000))
+io.output():close()
+io.output(io.stdout)
+"""
+    with compile_service(tmp_path / "small", COMPILE_MAX_HOME_BYTES=1000) as svc:
+        key = str(uuid.uuid4())
+        for _ in range(2):
+            _, job = _in_workspace(svc, key, _lua_paper(lua), compiler="lualatex")
+            assert "PROBE left=true" in job["log"], job["log"][-3000:]
+            assert "PROBE marker=nil" in job["log"]
+            assert not (svc.jobs / "workspaces" / key / "home").exists()
+
+
+def test_the_sandbox_setting(tmp_path):
+    env = {**os.environ, "COMPILE_TOKEN": TOKEN, "COMPILE_JOBS_DIR": str(tmp_path / "jobs"), "COMPILE_SANDBOX": "maybe"}
+    cmd = [sys.executable, "-I", str(SERVICE)]
+    out = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30, check=False)
+    assert out.returncode != 0
+    assert "COMPILE_SANDBOX is one of auto, on, off" in out.stderr
+
+    with compile_service(tmp_path / "off", COMPILE_SANDBOX="off") as svc:
+        assert _ok(svc, {"main.tex": HELLO, "sections/intro.tex": INTRO})["status"] == "success"
+        assert "jobs WITHOUT a sandbox (COMPILE_SANDBOX is off)" in svc.log()
 
 
 # --- Workspaces, for the compiles of an open editor ------------------------------

@@ -138,15 +138,21 @@ services:
       COMPILE_KEEP_JOBS: ${COMPILE_KEEP_JOBS:-30}
       COMPILE_KEEP_WORKSPACES: ${COMPILE_KEEP_WORKSPACES:-20}
       COMPILE_WORKERS: ${COMPILE_WORKERS:-2}
+      # Every job runs in a sandbox of the kernel's (Landlock, Linux 5.13 and
+      # later), where it reaches its own paper and nothing else of this
+      # container. `auto` uses it where the kernel has it and says so in the
+      # log, `on` refuses to start without it.
+      COMPILE_SANDBOX: ${COMPILE_SANDBOX:-auto}
     # A real init as PID 1 reaps what a killed job leaves behind.
     init: true
     read_only: true
     tmpfs:
-      # HOME and the font caches. exec, because TeX Live's biber unpacks a
-      # Perl interpreter into /tmp and runs it from there.
-      - /tmp:size=512m,exec
+      # The service's own HOME. No job writes here. Each one has a HOME and a
+      # TMPDIR of its own below /jobs.
+      - /tmp:size=512m
     volumes:
-      # The job folders, kept for SyncTeX. The service removes old ones.
+      # The job folders, kept for SyncTeX, and the papers' workspaces with
+      # their font caches. The service removes old ones.
       - meertex-compile-jobs:/jobs
     networks:
       - compile
