@@ -24,6 +24,13 @@ MAX_PROBLEMS = 1000
 
 # -file-line-error: "./sections/intro.tex:12: Undefined control sequence."
 _FILE_LINE_ERROR = re.compile(r"^(?P<file>\S(?:[^:]*?)\.[A-Za-z0-9]+):(?P<line>\d+): (?P<message>.*)$")
+# TeX Live 2025 can switch a TeX error off (\ignoreprimitiveerror). The LaTeX
+# kernel does that for "Infinite glue shrinkage found in box being split"
+# while it reads the marks of a page, which happens whenever a longtable
+# breaks across pages. TeX still logs "./main.tex:12: ignored error: ...".
+# That is no error, and the rest of its line is ordinary log (page numbers,
+# files TeX opens and closes).
+_IGNORED = "ignored error: "
 _BANG_ERROR = re.compile(r"^! (?P<message>.*)$")
 _CONTEXT_LINE = re.compile(r"^l\.(\d+)")
 _WARNING = re.compile(r"^(?:(?:LaTeX|Package|Class|Module) (?:[\w.@-]+ )?|LaTeX Font |pdfTeX |)[Ww]arning: (?P<message>.*)$")
@@ -108,7 +115,7 @@ def parse(log: str, main_file: str, files: set[str]) -> list[dict]:
             break
 
         m = _FILE_LINE_ERROR.match(text)
-        if m and not text.startswith(("(", "[", " ")):
+        if m and not text.startswith(("(", "[", " ")) and not m["message"].startswith(_IGNORED):
             add("error", m["file"], int(m["line"]), m["message"].strip())
             i = _skip_block(lines, i)
             continue

@@ -543,7 +543,10 @@ def _tail_lines(text: str, n: int) -> str:
     return "\n".join(text.splitlines()[-n:])
 
 
-_ERROR_RE = re.compile(r"^(?:! |\S[^\n]*?\.\w+:\d+: )", re.MULTILINE)
+# An error TeX switched off (\ignoreprimitiveerror, which the LaTeX kernel of
+# TeX Live 2025 uses when a longtable breaks across pages) is logged as
+# "./main.tex:12: ignored error: ..." and is no error (app/texlog.py).
+_ERROR_RE = re.compile(r"^(?:! |\S[^\n]*?\.\w+:\d+: (?!ignored error: ))", re.MULTILINE)
 # An error TeX reports inside a file an earlier run wrote (-file-line-error).
 _BUILD_FILE_ERROR_RE = re.compile(r"^[^\n:]+\.(?:aux|bbl|toc|lof|lot|out|nav|snm|vrb|ind|gls|acr|nls):\d+: ", re.MULTILINE)
 
