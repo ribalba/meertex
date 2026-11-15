@@ -1508,6 +1508,39 @@ A container of its own compiles LaTeX. The server never runs TeX.
   and biber runs with `--noconf`. The main file's name is limited to letters,
   digits, spaces and `. , + = @ -`, because latexmk hands it to a shell.
 
+### Markdown
+
+LaTeX stays the main case. A main file that ends in `.md` or `.markdown`
+(the project's, or another document's, below) is turned into LaTeX first,
+and TeX compiles that like any job. The server, the CLI and versions do not
+tell the two apart.
+
+- pandoc (pinned in `compile/Dockerfile`, with `--sandbox` and a data folder
+  that does not exist) reads the file as `commonmark_x` plus
+  `implicit_figures`, `autolink_bare_uris` and `tex_math_gfm`: CommonMark as
+  GitHub writes it, with pandoc's tables, footnotes, `$` math, fenced divs,
+  attributes and raw LaTeX in `` `...`{=latex} ``. It writes
+  `<main file>.tex` next to the Markdown with its standalone template, whose
+  variables the front matter sets (`title`, `author`, `documentclass`,
+  `header-includes`, ...). A file of the paper with that name is overwritten
+  in the job's copy. No `[@key]` citations and no bare `\commands`, which
+  CommonMark keeps as text. Those may come later.
+- pandoc reads with `sourcepos`. Our Lua filter (`compile/markdown.lua`, a
+  document cannot name another) leaves the Markdown's lines in the LaTeX as
+  comments (`%meertex:N`) before every block and at the end of every line of
+  a paragraph (`--wrap=preserve` keeps the Markdown's line breaks). It drops
+  `sourcepos`'s wrappers, so the LaTeX is the same as without, sets
+  `geometry: margin=2.5cm` and `colorlinks` unless the front matter does,
+  and writes a task list's boxes as math symbols.
+- The service keeps the line map in the job. SyncTeX's `edit` answers with
+  the Markdown file and its line, `view` takes them. TeX's errors in the
+  LaTeX (`./notes.md.tex:42:`) are rewritten to the Markdown's line, so the
+  problems and the marks in the editor land there. Warnings keep naming the
+  LaTeX, which is not a file of the paper, so they have no place.
+- In a workspace pandoc runs before every compile and its LaTeX is never a
+  build file. `/latexdiff` runs pandoc on both sides without `sourcepos` and
+  diffs the LaTeX.
+
 ### On the server
 
 - `COMPILE_URL` (empty turns compiling off), `COMPILE_TOKEN`,
@@ -1611,7 +1644,7 @@ It exits 0 on `success` and 1 otherwise.
 - **Another document.** A `.tex` file other than the main file is a document
   of its own when a line that is not commented out has `\documentclass` and
   a later one `\begin{document}`, and its name is one the compile service
-  takes. With such a file open, a bar under the PDF's toolbar says so and has
+  takes. Every Markdown file is one too (Markdown, above). With such a file open, a bar under the PDF's toolbar says so and has
   Show its PDF. The pane then compiles that file (`main_file`, above) on every
   pause in typing, in any file, and the bar says "PDF of letter.tex, not of
   the paper" with Back to the paper. With a third document open, the bar
@@ -1633,6 +1666,12 @@ It exits 0 on `success` and 1 otherwise.
 - A click in the PDF selects the clicked word in the source, found in
   the SyncTeX line and the lines around it, and lights up the line and the
   word for a few seconds.
+- Markdown files get their own colours (`app/static/js/mdmode.js`, also in a
+  review's Files view) but no completion or formatting bar. Make main
+  document is offered for them as for `.tex` files. The clicked word, and a
+  passage selected in the PDF for a review comment, are looked for in the
+  Markdown as a reader sees it, without the marks of emphasis, code, links
+  and lists (`markdownText` in `editor-spot.js`).
 
 ### The page limit
 

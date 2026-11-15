@@ -27,6 +27,7 @@ import { editorOutline } from "../editor-outline.js";
 import { editorAgent } from "../editor-agent.js";
 import { editorProblems } from "../editor-problems.js";
 import { showSpot, spotExtension } from "../editor-spot.js";
+import { markdownMode } from "../mdmode.js";
 
 const BUNDLE = "/static/vendor/editor/editor.js";
 // y-websocket drops a socket that received nothing for 30 seconds, and a
@@ -52,6 +53,9 @@ const PHONE = "(max-width: 767px)";
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 const PDF = /\.pdf$/i;
 const LATEX = /\.(tex|sty|cls|ltx|dtx|ins|bbx|cbx|lbx|tikz)$/i;
+// Markdown, which the compile service turns into LaTeX with pandoc. Every
+// Markdown file is a document of its own.
+const MARKDOWN = /\.(md|markdown)$/i;
 // A .tex file is a document of its own when a line that is not commented out
 // has \documentclass and a later one \begin{document}.
 const DOCUMENTCLASS = /^[^%\n]*\\documentclass\b/m;
@@ -645,13 +649,14 @@ function followTarget(ed) {
   note(ed, "The file the PDF was made from is gone. The PDF shows the paper again.");
 }
 
-// The open file's path when LaTeX can compile it on its own: a .tex file
-// other than the main file, with its own \documentclass and \begin{document},
-// and a name the compile service takes. Else null.
+// The open file's path when it compiles on its own: a Markdown file, or a
+// .tex file with its own \documentclass and \begin{document}. Not the main
+// file, and only with a name the compile service takes. Else null.
 function openDocument(ed) {
   const path = ed.boundText ? ed.openPath : null;
-  if (!path || !/\.tex$/i.test(path) || path === (ed.p.main_file || "main.tex")) return null;
+  if (!path || !(/\.tex$/i.test(path) || MARKDOWN.test(path)) || path === (ed.p.main_file || "main.tex")) return null;
   if (!path.split("/").every((part) => MAIN_NAME.test(part))) return null;
+  if (MARKDOWN.test(path)) return path;
   const text = ed.boundText.toString();
   const cls = DOCUMENTCLASS.exec(text);
   const begin = cls && BEGIN_DOCUMENT.exec(text);
@@ -776,8 +781,13 @@ function paintPath(ed, entry) {
 
 // LaTeX highlighting, and for those who may edit, completions and the
 // formatting keys. They come before the editor's own keymap, so Ctrl+I is
-// emphasis rather than CodeMirror's "select the syntax around".
+// emphasis rather than CodeMirror's "select the syntax around". Markdown
+// gets its colours only.
 function language(ed, path) {
+  if (MARKDOWN.test(path)) {
+    ed.markdown ??= ed.cm.StreamLanguage.define(markdownMode);
+    return ed.markdown;
+  }
   if (!LATEX.test(path)) return [];
   ed.latex ??= [
     ed.cm.StreamLanguage.define(ed.cm.stex),
@@ -972,6 +982,15 @@ function editorLooks(cm) {
       { tag: t.bracket, color: "#59636e" },
       { tag: t.string, color: "#0a3069" },
       { tag: t.invalid, color: "#d1242f" },
+      // Markdown (mdmode.js).
+      { tag: t.heading, color: "#0550ae", fontWeight: "600" },
+      { tag: t.strong, fontWeight: "600" },
+      { tag: t.emphasis, fontStyle: "italic" },
+      { tag: t.strikethrough, textDecoration: "line-through" },
+      { tag: [t.link, t.url], color: "#0969da" },
+      { tag: t.quote, color: "#59636e" },
+      { tag: t.monospace, color: "#0a3069" },
+      { tag: [t.list, t.meta, t.contentSeparator], color: "#953800" },
     ])),
     // The search panel's labels, written like the rest of the app.
     cm.EditorState.phrases.of({
@@ -1255,7 +1274,7 @@ function openAt(ed, { path, line, column = 0, spot = null }) {
   if (!view) return;
   const doc = view.state.doc;
   const target = doc.line(Math.max(1, Math.min(line || 1, doc.lines)));
-  if (spot) reveal(ed, showSpot(view, ed.cm, { line: target.number, ...spot }), false);
+  if (spot) reveal(ed, showSpot(view, ed.cm, { line: target.number, ...spot, path }), false);
   else reveal(ed, target.from + Math.max(0, Math.min(column, target.length)));
   if (!window.matchMedia(PHONE).matches) view.focus();
 }
@@ -1339,7 +1358,7 @@ function fileRow(ed, file, depth) {
   const entry = file.entry;
   const iconName = entry.kind === "text" ? "file-text" : /\.pdf$/i.test(entry.shownAt) ? "pdf" : "file-binary";
   const isMain = entry.shownAt === (ed.p.main_file || "main.tex");
-  const canBeMain = !isMain && !entry.conflict && entry.kind === "text" && /\.tex$/i.test(entry.shownAt);
+  const canBeMain = !isMain && !entry.conflict && entry.kind === "text" && (/\.tex$/i.test(entry.shownAt) || MARKDOWN.test(entry.shownAt));
   const menu = ed.canEdit ? dropdown({
     summary: icon("kebab"),
     summaryClass: "btn-octicon",

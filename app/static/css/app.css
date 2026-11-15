@@ -1876,6 +1876,13 @@ textarea.rv-textarea { min-height: 72px; }
 .tex-bracket { color: #59636e; }
 .tex-string { color: #0a3069; }
 .tex-invalid { color: #d1242f; }
+/* And Markdown's (mdmode.js). Code, lists and the front matter take the .tex-* colours. */
+.md-heading { color: #0550ae; font-weight: 600; }
+.md-strong { font-weight: 600; }
+.md-emphasis { font-style: italic; }
+.md-strike { text-decoration: line-through; }
+.md-link { color: #0969da; }
+.md-quote { color: #59636e; }
 
 @media (max-width: 767px) {
   .rv-files-split { flex-direction: column; min-height: 0; }

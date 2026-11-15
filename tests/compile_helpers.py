@@ -25,6 +25,9 @@ needs_tex = pytest.mark.skipif(
     shutil.which("latexmk") is None or shutil.which("synctex") is None,
     reason="latexmk (TeX Live) is not installed",
 )
+# Markdown main files. The compile image pins pandoc's version
+# (compile/Dockerfile), and so does the CI.
+needs_pandoc = pytest.mark.skipif(shutil.which("pandoc") is None, reason="pandoc is not installed")
 
 
 def _free_port() -> int:

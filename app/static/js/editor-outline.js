@@ -2,7 +2,8 @@
 // editor). The document's headings, \part to \subparagraph, as a tree. It
 // starts at the main file and follows \input, \include, \subfile and \import
 // in the order LaTeX reads them. A .tex file the main file does not read shows
-// its own headings. A click opens a heading's line, and the heading the cursor
+// its own headings, and so does a Markdown file (# headings) that is not the
+// main file. A click opens a heading's line, and the heading the cursor
 // is under is marked. The box folds to its header, remembered per browser,
 // and a folded box does no work.
 //
@@ -21,7 +22,7 @@ import { h, clear } from "./dom.js";
 import { icon } from "./icons.js";
 
 const KEY = "meertex.editor.outline";
-const TEX = /\.tex$/i;
+const OWN = /\.(tex|md|markdown)$/i;
 // While someone types, the outline follows at most this often.
 const DELAY_MS = 300;
 
@@ -171,7 +172,7 @@ export function editorOutline({ cm, read, main, place, open, href }) {
     const at = place();
     builtFor = at?.path ?? null;
     doc = walk(main(), index.outlines);
-    if (at && TEX.test(at.path) && index.outlines.has(at.path) && !doc.starts.has(at.path)) doc = walk(at.path, index.outlines);
+    if (at && OWN.test(at.path) && index.outlines.has(at.path) && !doc.starts.has(at.path)) doc = walk(at.path, index.outlines);
     tree = nest(doc.items);
     paint();
     mark();

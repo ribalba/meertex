@@ -1362,6 +1362,100 @@ def pdf_keeps_its_place_behind_the_comments(env, browser):
     ctx.close()
 
 
+# --- tests: a Markdown paper (docs/DESIGN.md §14 Markdown) ------------------------------------
+
+NOTES_MD = """---
+title: Notes in Markdown
+---
+
+# Introduction
+
+Grüße aus Köln, sagte die *naïve* Forscherin.
+
+This paragraph explains the **method** in far too many words
+and should be a [lot](https://example.org) shorter than it is.
+
+- An item with `code` in it
+"""
+
+
+@test
+def markdown_paper(env, browser):
+    if not env.compiling:
+        return "skipped, needs --compile or --compile-url (with pandoc)"
+    if env.compile_service and not shutil.which("pandoc"):
+        return "skipped, --compile needs pandoc on the PATH for Markdown"
+    paper = paper_with(env, f"Markdown {env.run}", {"notes.md": NOTES_MD}, members={"rita": "reviewer"})
+    base = f"/api/projects/{paper['id']}"
+
+    # In a LaTeX paper, a Markdown file is a document of its own.
+    ctx = env.context(browser, "alice")
+    page = env.page(ctx, "alice")
+    page.goto(f"{env.base}/p/{paper['name']}/edit/notes.md")
+    # The paper's own PDF first, so switching stops no compile (which would answer 409).
+    expect(page.locator(".editor-pdf .pdfview-page").first).to_be_visible(timeout=120000)
+    expect(page.locator(".editor-pdf .pdf-status")).not_to_contain_text("Compiling", timeout=60000)
+    source = page.locator(".pdf-source")
+    expect(source).to_contain_text("notes.md is a document of its own.", timeout=60000)
+    source.get_by_role("button", name="Show its PDF").click()
+    expect(source).to_contain_text("PDF of notes.md, not of the paper.")
+    expect(page.locator(".editor-pdf .pdf-status")).to_have_text(re.compile(r"^Compiled in"), timeout=60000)
+    # Its headings make the outline.
+    expect(page.locator(".editor-outline .tree-link")).to_have_text(["Introduction"])
+    ctx.close()
+
+    # As the main file, the editor colours it, and a click on a word of the
+    # PDF selects it in the Markdown, past the marks around it.
+    with env.api("alice") as c:
+        c.patch(base, json={"main_file": "notes.md"}).raise_for_status()
+    ctx = env.context(browser, "alice")
+    page = env.page(ctx, "alice")
+    page.goto(f"{env.base}/p/{paper['name']}/edit/notes.md")
+    expect(page.locator(".editor-pdf .pdfview-page").first).to_be_visible(timeout=120000)
+    expect(page.locator(".editor-pdf .pdf-status")).to_have_text(re.compile(r"^Compiled in"), timeout=60000)
+    expect(page.locator(".pdf-source")).to_be_hidden()
+    heading = page.locator(".cm-line", has_text="# Introduction").locator("span").first
+    expect(heading).to_have_css("font-weight", "600")
+    page.wait_for_timeout(500)
+    for word, line in (("method", 9), ("lot", 10), ("Forscherin", 7)):
+        point = pdf_word_point(env, paper, page, word)
+        page.mouse.click(point["x"], point["y"])
+        wait_until(lambda w=word: selection(page)["text"] == w, timeout=10, what=f"{word} selected")
+        assert selection(page)["line"] == line, (word, selection(page))
+    env.shot(page, "markdown-editor-1280")
+    ctx.close()
+
+    # The reviewer selects a passage in the review's PDF, across the
+    # Markdown's line break, and comments on it.
+    with env.api("rita") as c:
+        r = c.post(f"{base}/reviews", json={"ref": "live"})
+        r.raise_for_status()
+        review = r.json()["id"]
+    ctx = env.context(browser, "rita")
+    page = env.page(ctx, "rita")
+    page.goto(f"{env.base}/p/{paper['name']}/reviews/{review}/files")
+    expect(page.locator(".rv-pdf-col .textLayer span").first).to_be_attached(timeout=120000)
+    drag_in_pdf(page, "method", "shorter")
+    wait_until(lambda: picked(page).startswith("method") and picked(page).endswith("shorter"), timeout=10, what="the passage marked")
+    assert "[lot](https://example.org)" in picked(page), picked(page)
+    assert page.locator(".rv-pick").first.evaluate("el => el.closest('tr').id") == "RL9"
+    env.shot(page, "markdown-review-1280")
+    page.locator(".rv-pdf-float").click()
+    compose = page.locator(".rv-compose")
+    expect(compose).to_contain_text("Comment on lines 9")
+    compose.get_by_label("Comment").fill("Shorter, please.")
+    compose.get_by_role("button", name="Add review comment").click()
+    expect(compose).to_have_count(0)
+    with env.api("rita") as c:
+        threads = c.get(f"{base}/reviews/{review}").json()["threads"]
+    assert len(threads) == 1, threads
+    t = threads[0]
+    assert t["path"] == "notes.md" and (t["base"]["line_start"], t["base"]["line_end"]) == (9, 10), t
+    assert t["quote"].startswith("method") and t["quote"].endswith("shorter"), t["quote"]
+    ctx.close()
+    return "a click and a selection in the PDF land in notes.md"
+
+
 # --- main -----------------------------------------------------------------------------------------
 
 

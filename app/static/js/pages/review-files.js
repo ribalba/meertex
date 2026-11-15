@@ -24,6 +24,7 @@ import { icon } from "../icons.js";
 import { navigate, onLeave, setQuery } from "../router.js";
 import { createPdfView } from "../pdfview.js";
 import { findPassage } from "../editor-spot.js";
+import { markdownMode } from "../mdmode.js";
 import { session } from "../session.js";
 import { blankslate, flash, flashBox, flashError, queueFlash, spinner } from "../ui.js";
 import {
@@ -37,6 +38,7 @@ const PHONE = "(max-width: 767px)";
 // The editor's bundle (pages/editor.js) and the files it colours, for the same colours here.
 const BUNDLE = "/static/vendor/editor/editor.js";
 const LATEX = /\.(tex|sty|cls|ltx|dtx|ins|bbx|cbx|lbx|tikz)$/i;
+const MARKDOWN = /\.(md|markdown)$/i;
 
 let colours = null;
 
@@ -113,16 +115,19 @@ function readPdfWidth() {
   return v >= 0.15 && v <= 0.85 ? v : 0.46;
 }
 
-// The spans of a LaTeX file to colour, [{from, to, cls}] in UTF-16 units: the
-// editor's mode, in its colours (the .tex-* rules of app.css). Other files,
-// and LaTeX when the bundle does not load, stay plain.
+// The spans of a LaTeX or Markdown file to colour, [{from, to, cls}] in
+// UTF-16 units: the editor's modes, in its colours (the .tex-* and .md-*
+// rules of app.css). Other files, and all when the bundle does not load, stay
+// plain.
 async function texColours(path, text) {
-  if (!LATEX.test(path)) return [];
+  const markdown = MARKDOWN.test(path);
+  if (!markdown && !LATEX.test(path)) return [];
   colours ??= import(BUNDLE).then((cm) => {
     const t = cm.tags;
     return {
       cm,
-      language: cm.StreamLanguage.define(cm.stex),
+      latex: cm.StreamLanguage.define(cm.stex),
+      markdown: cm.StreamLanguage.define(markdownMode),
       highlighter: cm.tagHighlighter([
         { tag: t.comment, class: "tex-comment" },
         { tag: t.tagName, class: "tex-command" },
@@ -131,6 +136,14 @@ async function texColours(path, text) {
         { tag: t.bracket, class: "tex-bracket" },
         { tag: t.string, class: "tex-string" },
         { tag: t.invalid, class: "tex-invalid" },
+        { tag: t.heading, class: "md-heading" },
+        { tag: t.strong, class: "md-strong" },
+        { tag: t.emphasis, class: "md-emphasis" },
+        { tag: t.strikethrough, class: "md-strike" },
+        { tag: [t.link, t.url], class: "md-link" },
+        { tag: t.quote, class: "md-quote" },
+        { tag: t.monospace, class: "tex-string" },
+        { tag: [t.list, t.meta, t.contentSeparator], class: "tex-atom" },
       ]),
     };
   }).catch((err) => {
@@ -138,12 +151,13 @@ async function texColours(path, text) {
     throw err;
   });
   try {
-    const { cm, language, highlighter } = await colours;
+    const { cm, latex, highlighter, ...modes } = await colours;
+    const language = markdown ? modes.markdown : latex;
     const spans = [];
     cm.highlightTree(language.parser.parse(text), highlighter, (from, to, cls) => spans.push({ from, to, cls }));
     return spans;
   } catch (err) {
-    console.warn("The LaTeX could not be coloured", err);
+    console.warn("The file could not be coloured", err);
     return [];
   }
 }
@@ -719,7 +733,7 @@ export async function renderFiles(ctx) {
     if (mine !== pickToken || !ctx.alive()) return;
     const first = at.line;
     const last = b?.path === at.path ? b.line : first;
-    const found = findPassage(sourceDoc(), first, last, sel.text);
+    const found = findPassage(sourceDoc(), first, last, sel.text, at.path);
     state.pick = found
       ? { s16: found.from, e16: found.to }
       : { lines: true, line_start: Math.min(first, last), line_end: Math.max(first, last) };

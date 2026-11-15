@@ -102,7 +102,7 @@ function general(ctx, out) {
       field("Short name", inputs.paper, { hint: "Only used when the name is built." })),
     venue.el,
     h("div", { class: "form-row" },
-      field("Main file", inputs.main_file, { hint: "The file LaTeX compiles." }),
+      field("Main file", inputs.main_file, { hint: "The file LaTeX compiles. A Markdown file (.md) becomes LaTeX first." }),
       field("DOI", inputs.doi, { optional: true })),
     field("Published version", inputs.publication_url, { optional: true }),
     field("Notes", inputs.notes, { optional: true, hint: "Markdown. Shown on the overview." }),

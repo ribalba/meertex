@@ -150,7 +150,8 @@ What the tests cover:
   viewer get no bar.
 
 With a compile service (`--compile`, which needs latexmk, synctex and
-latexdiff on the `PATH`) also:
+latexdiff on the `PATH`, and pandoc for the Markdown test of
+`test_reviews_ui.py`) also:
 
 - The PDF pane compiles when the editor opens and when typing pauses, stops a
   compile a newer edit has overtaken, recompiles from scratch from its menu,
@@ -225,6 +226,12 @@ What the tests cover:
   A click on a word in the PDF selects it in the text, the clicked one
   of two in a long line, `na\"ive` for the PDF's "naïve", and the highlight
   fades.
+- With a compile service that has pandoc: a Markdown file in a LaTeX paper is
+  a document of its own whose PDF the pane shows, and its headings make the
+  outline. As the main file it has its colours, a click on a word in the PDF
+  selects it past the Markdown's marks, and a passage selected in the
+  review's PDF across a line break and a link is marked in the Markdown and
+  gets a comment on its two lines.
 
 ## The timeline and planned papers
 

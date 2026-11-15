@@ -3,9 +3,16 @@
 The meertex server never runs TeX. It sends the files of a project here as a
 tar.gz and gets back a status and the log. The job's folder stays here for a
 while, so the PDF can be fetched and SyncTeX can map between the PDF and the
-sources. This file is the whole service. It uses only the standard library,
-so it runs the same in its Docker image (compile/Dockerfile) and natively next
-to a developer's TeX Live (``make compile-dev``).
+sources. This file and its Lua filter for Markdown (markdown.lua) are the
+whole service. It uses only the standard library, so it runs the same in its
+Docker image (compile/Dockerfile) and natively next to a developer's TeX Live
+(``make compile-dev``).
+
+A Markdown main file (``.md``) is turned into LaTeX first, by pandoc with
+markdown.lua, and TeX compiles that LaTeX (``<main file>.tex`` next to it).
+The filter leaves the Markdown's line numbers in the LaTeX as comments, and
+SyncTeX's lines and TeX's errors are mapped back through them, so the editor
+never sees the LaTeX.
 
 A document is untrusted input. TeX reads and writes files, and LaTeX packages
 run Lua, so every job is boxed in:
@@ -22,6 +29,9 @@ run Lua, so every job is boxed in:
 * biber is Perl, so kpathsea's rules do not bind it. latexmk runs it through
   ``biber_guard``, which refuses bibliographies outside the job's folder or
   on the network before biber reads them.
+* pandoc runs with ``--sandbox``, so it reads nothing but the Markdown file,
+  and with a data folder that does not exist, so no template or filter of
+  anyone else's. A document cannot name a filter or a template.
 * The service's own settings (the token) are not in a job's environment.
 
 The container adds the rest: an unprivileged user, a read-only root file
@@ -102,6 +112,18 @@ INCLUDE_RE = re.compile(
     r"\*?\s*\{([^}]*)\}(?:\s*\{([^}]*)\})?"
     r"|\\input\s+([^\s{}\\%]+)"
 )
+# A main file with one of these endings is Markdown.
+MARKDOWN_SUFFIXES = (".md", ".markdown")
+# CommonMark with pandoc's extensions (tables, footnotes, math in $, fenced
+# divs, attributes, raw LaTeX in ```{=latex}), plus what GitHub adds: bare
+# links and its math. A lone image with a caption is a figure.
+MARKDOWN_FROM = "commonmark_x+implicit_figures+autolink_bare_uris+tex_math_gfm"
+MARKDOWN_FILTER = Path(__file__).resolve().with_name("markdown.lua")
+# The marks markdown.lua leaves in the LaTeX, at the end of a line or on a
+# line of their own. A % of the text is \% in the LaTeX.
+MARKDOWN_MARK_RE = re.compile(r"(?<!\\)%meertex:(\d+)\s*$")
+# What a Markdown job keeps: the Markdown line of every line of the LaTeX.
+MARKDOWN_LINES = "markdown-lines.json"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -259,6 +281,82 @@ def _place(rel: str, roots: dict[str, Path]) -> tuple[Path, list[str]]:
     if parts[0] not in roots:
         raise Refused(f"{rel} is outside {', '.join(sorted(r + '/' for r in roots))}")
     return roots[parts[0]], parts[1:]
+
+
+def is_markdown(main_file: str) -> bool:
+    return main_file.lower().endswith(MARKDOWN_SUFFIXES)
+
+
+def tex_name(main_file: str) -> str:
+    """The file TeX compiles for ``main_file``: the file itself, or for a
+    Markdown file the LaTeX pandoc makes of it, next to it."""
+    return f"{main_file}.tex" if is_markdown(main_file) else main_file
+
+
+def markdown_lines(tex: str) -> list[int]:
+    """The Markdown line of every line of the LaTeX that pandoc made with
+    markdown.lua, and 0 for a line without text of the document: the
+    preamble, empty lines and the marks' own lines. A line takes the line of
+    the mark before it. Lines of the body before the first mark (the title of
+    the front matter) take line 1."""
+    lines: list[int] = []
+    current = 1
+    body = False
+    for text in tex.split("\n"):
+        if not body:
+            body = text.strip() == "\\begin{document}"
+            lines.append(0)
+            continue
+        mark = MARKDOWN_MARK_RE.search(text)
+        if mark is not None and text.lstrip().startswith("%meertex:"):
+            current = int(mark[1])
+            lines.append(0)
+            continue
+        lines.append(current if text.strip() else 0)
+        if mark is not None:
+            current = int(mark[1])
+    return lines
+
+
+def markdown_line(lines: list[int], tex_line: int) -> int:
+    """The Markdown line of a line of the LaTeX. A line without one takes the
+    nearest one before it, or after it."""
+    if not lines:
+        return 1
+    at = min(max(tex_line, 1), len(lines)) - 1
+    for k in (*range(at, -1, -1), *range(at + 1, len(lines))):
+        if lines[k]:
+            return lines[k]
+    return 1
+
+
+def latex_line(lines: list[int], md_line: int) -> int:
+    """The first line of the LaTeX that shows the Markdown line ``md_line``,
+    or the nearest line before it that the LaTeX shows (an empty line, the
+    front matter). A footnote's text is where the footnote mark is."""
+    best, at = 0, 0
+    for k, line in enumerate(lines):
+        if best < line <= md_line:
+            best, at = line, k + 1
+    if at:
+        return at
+    return next((k + 1 for k, line in enumerate(lines) if line), 1)
+
+
+def map_markdown_log(log: str, main_file: str, lines: list[int]) -> str:
+    """TeX's errors name the LaTeX and its lines (-file-line-error). They are
+    made to name the Markdown file and its lines, so the editor marks them
+    there. Warnings name the file only by opening it, and stay with the
+    LaTeX, which is not a file of the paper."""
+    md = Path(main_file).name
+    pattern = re.compile(rf"^((?:\./)?){re.escape(Path(tex_name(main_file)).name)}:(\d+): ", re.MULTILINE)
+    return pattern.sub(lambda m: f"{m[1]}{md}:{markdown_line(lines, int(m[2]))}: ", log)
+
+
+def _own_message(message: str) -> str:
+    """A message of the service at the end of a log, which the server lists
+    as an error (app/texlog.py)."""
+    return f"\n{LATEXMK_MARK}\n{GUARD_PREFIX}{message}\n"
 
 
 def check_includes(tree: Path) -> None:
@@ -701,7 +799,7 @@ class Service:
         if home:
             with contextlib.suppress(OSError):
                 Path(home).mkdir(parents=True, exist_ok=True)
-        for tool in ("latexmk", "synctex", "latexdiff"):
+        for tool in ("latexmk", "synctex", "latexdiff", "pandoc"):
             if shutil.which(tool, path=self.env.get("PATH")) is None:
                 logger.warning("%s is not on the PATH", tool)
         self.prune()
@@ -881,14 +979,17 @@ class Service:
     def _finish_workspace_job(self, job: Path, workspace: Workspace, main_file: str, compiler: str, result: dict) -> None:
         """Move the PDF and the SyncTeX file to the job, where they stay when
         the workspace moves on, and keep the build files of a run that ended."""
-        main = workspace.tree / main_file
+        main = workspace.tree / tex_name(main_file)
         (job / "out").mkdir()
         for suffix in (".pdf", ".synctex.gz"):
             with contextlib.suppress(FileNotFoundError):
                 os.replace(main.parent / f"{main.stem}{suffix}", job / "out" / f"{main.stem}{suffix}")
         if result["status"] in ("success", "errors"):
             log = main.parent / f"{main.stem}.log"
-            workspace.save_seeds(main_file, compiler, {log.relative_to(workspace.tree).as_posix()})
+            skip = {log.relative_to(workspace.tree).as_posix()}
+            if is_markdown(main_file):
+                skip.add(tex_name(main_file))  # pandoc makes it again every time
+            workspace.save_seeds(main_file, compiler, skip)
         meta = {"main_file": main_file, "compiler": compiler, "kind": "pdf", "workspace": workspace.folder.name, **result}
         meta.pop("log")
         (job / "output.log").write_text(result["log"], encoding="utf-8")
@@ -941,20 +1042,96 @@ class Service:
         main = tree / main_file
         if not main.is_file() or main.is_symlink():
             return done("failure", f"The main file {main_file} is not in the project.\n")
+        markdown = is_markdown(main_file)
         if diff:
-            problem = self._latexdiff(job, tree, main_file, deadline)
+            # Markdown is diffed as the LaTeX pandoc makes of each side.
+            problem = self._pandoc_both(job, tree, main_file, deadline) if markdown else None
+            if problem is None:
+                problem = self._latexdiff(job, tree, tex_name(main_file), deadline)
             if problem is not None:
                 return done(*problem)
 
-        self._clear_results(main)
+        tex = tree / tex_name(main_file)
+        self._clear_results(tex)
         seeded = workspace is not None and workspace.restore_seeds(main_file, compiler)
-        status, log = self._latexmk(job, main, compiler, deadline, workspace)
+        status, log = self._build(job, tree, main_file, compiler, deadline, workspace, markdown and not diff)
         if seeded and workspace is not None and _seeds_to_blame(status, log):
             workspace.drop_seeds()
             workspace.sweep(workspace.files or {})
-            self._clear_results(main)
-            status, log = self._latexmk(job, main, compiler, deadline, workspace)
+            self._clear_results(tex)
+            status, log = self._build(job, tree, main_file, compiler, deadline, workspace, markdown and not diff)
         return done(status, log)
+
+    def _build(
+        self, job: Path, tree: Path, main_file: str, compiler: str, deadline: float, workspace: Workspace | None, pandoc: bool
+    ) -> tuple[str, str]:
+        """latexmk on the main file's LaTeX, which with ``pandoc`` pandoc
+        makes of the Markdown first. ``(status, log)``."""
+        tex = tree / tex_name(main_file)
+        if not pandoc:
+            return self._latexmk(job, tex, compiler, deadline, workspace)
+        problem = self._pandoc(job, tree, main_file, deadline, workspace)
+        if problem is not None:
+            return problem
+        status, log = self._latexmk(job, tex, compiler, deadline, workspace)
+        lines = json.loads((job / MARKDOWN_LINES).read_text())
+        return status, map_markdown_log(log, main_file, lines)
+
+    def _pandoc(
+        self, job: Path, folder: Path, main_file: str, deadline: float, workspace: Workspace | None = None, lines: bool = True
+    ) -> tuple[str, str] | None:
+        """Turn the Markdown file ``main_file`` of ``folder`` into LaTeX next
+        to it. With ``lines`` the LaTeX keeps the Markdown's line numbers, and
+        the job keeps them for SyncTeX (MARKDOWN_LINES). None when that
+        worked, else ``(status, log)``."""
+        if workspace is not None and workspace.stopped():
+            return "cancelled", ""
+        md = folder / main_file
+        tex = folder / tex_name(main_file)
+        if tex.is_dir():
+            return "failure", _own_message(f"{tex_name(main_file)} is a folder, where the LaTeX of {main_file} goes.")
+        tex.unlink(missing_ok=True)  # a file of the paper with that name loses
+        cmd = [
+            "pandoc",
+            "--sandbox",
+            # Not there, so pandoc has only its own templates.
+            f"--data-dir={job / 'pandoc-data'}",
+            f"--from={MARKDOWN_FROM}{'+sourcepos' if lines else ''}",
+            "--to=latex",
+            "--standalone",
+            # The lines of a paragraph stay the lines of the Markdown.
+            "--wrap=preserve",
+            f"--lua-filter={MARKDOWN_FILTER}",
+            f"--output={tex.name}",
+            md.name,
+        ]
+        on_start = workspace.started if workspace is not None else None
+        try:
+            rc, timed_out = self.runner.run(cmd, md.parent, self.env, job / "pandoc.out", job / "pandoc.err", deadline, on_start)
+        except FileNotFoundError:
+            return "failure", _own_message("pandoc is not installed here, so Markdown cannot be compiled.")
+        if workspace is not None:
+            workspace.ended()
+            if workspace.stopped():
+                return "cancelled", ""
+        errors = _read_text(job / "pandoc.err").strip()
+        if timed_out:
+            return "timeout", f"pandoc took longer than {self.cfg.timeout} seconds and was stopped.\n{errors}\n"
+        if rc != 0 or not tex.is_file():
+            first = errors.splitlines()[0] if errors else f"exit code {rc}"
+            return "failure", f"pandoc could not read {main_file}.\n{errors}\n" + _own_message(f"pandoc could not read {main_file}: {first}")
+        if lines:
+            (job / MARKDOWN_LINES).write_text(json.dumps(markdown_lines(_read_text(tex))))
+        return None
+
+    def _pandoc_both(self, job: Path, tree: Path, main_file: str, deadline: float) -> tuple[str, str] | None:
+        """The LaTeX of the older and the newer Markdown, for latexdiff."""
+        old = job / "old"
+        if not (old / main_file).is_file() or (old / main_file).is_symlink():
+            return "failure", f"The main file {main_file} is not in the older version.\n"
+        return self._pandoc(job, old, main_file, deadline, lines=False) or self._pandoc(
+            job, tree, main_file, deadline, lines=False
+        )
 
     @staticmethod
     def _clear_results(main: Path) -> None:
@@ -1037,13 +1214,14 @@ class Service:
         if found is None:
             raise UnknownJob(job_id)
         folder, meta = found
+        main_file = tex_name(meta["main_file"])
         if meta.get("workspace"):
             # TeX ran in the workspace, so its SyncTeX file names paths there.
             tree = self.workspaces_dir / meta["workspace"] / "tree"
-            pdf = folder / "out" / f"{Path(meta['main_file']).stem}.pdf"
+            pdf = folder / "out" / f"{Path(main_file).stem}.pdf"
         else:
             tree = folder / "tree"
-            main = tree / meta["main_file"]
+            main = tree / main_file
             pdf = main.parent / f"{main.stem}.pdf"
         if meta.get("status") not in ("success", "errors") or not pdf.is_file():
             raise NoPdf(job_id)
@@ -1063,11 +1241,25 @@ class Service:
         )
         return _synctex_records(out.stdout)
 
+    def markdown_of(self, job_id: str) -> tuple[str, list[int]] | None:
+        """``(main file, the Markdown line of every line of its LaTeX)`` of a
+        job that compiled Markdown, or None. A pdfdiff has no lines."""
+        found = self.job_meta(job_id)
+        if found is None or not is_markdown(found[1].get("main_file", "")):
+            return None
+        try:
+            lines = json.loads((found[0] / MARKDOWN_LINES).read_text())
+        except (OSError, ValueError):
+            return None
+        return found[1]["main_file"], [int(n) for n in lines]
+
     def synctex_edit(self, job_id: str, page: int, x: float, y: float) -> dict | None:
         """The source position at a point of the PDF (PDF points from the
         page's top left): ``{file, line, column}``, with ``file`` relative to
-        the project. None when SyncTeX knows nothing there."""
+        the project. None when SyncTeX knows nothing there. A place in the
+        LaTeX of a Markdown file is its place in the Markdown."""
         tree, pdf = self.pdf_of(job_id)
+        markdown = self.markdown_of(job_id)
         root = os.path.realpath(tree)
         for record in self._synctex(["edit", "-o", f"{page}:{x}:{y}:{pdf}"], pdf.parent):
             name = record.get("Input", "")
@@ -1079,18 +1271,27 @@ class Service:
             except ValueError:
                 continue
             if line >= 1:
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                if markdown is not None and rel == tex_name(markdown[0]):
+                    return {"file": markdown[0], "line": markdown_line(markdown[1], line), "column": 0}
                 # SyncTeX rarely knows the column and says -1 then.
-                return {"file": os.path.relpath(path, root).replace(os.sep, "/"), "line": line, "column": max(column, 0)}
+                return {"file": rel, "line": line, "column": max(column, 0)}
         return None
 
     def synctex_view(self, job_id: str, file: str, line: int, column: int) -> list[dict]:
         """The boxes of the PDF that show a source position:
-        ``[{page, x, y, width, height}]`` in PDF points from the top left."""
+        ``[{page, x, y, width, height}]`` in PDF points from the top left.
+        A Markdown file's line is looked for in its LaTeX."""
         tree, pdf = self.pdf_of(job_id)
         rel = clean_path(file)
         # A workspace that was removed since no longer says which files it had.
         if rel is None or (tree.is_dir() and not (tree / rel).is_file()):
             raise Refused(f"{file} is not a file of this compile")
+        markdown = self.markdown_of(job_id)
+        if markdown is not None and rel == markdown[0]:
+            # A workspace makes the LaTeX again for every compile, SyncTeX
+            # only needs its name.
+            rel, line, column = tex_name(rel), latex_line(markdown[1], line), 0
         boxes: list[dict] = []
         for record in self._synctex(["view", "-i", f"{line}:{column}:{tree / rel}", "-o", str(pdf)], pdf.parent):
             try:

@@ -5,9 +5,9 @@ meertex server never runs TeX. It sends the files of a project here as a
 tar.gz, gets back a status and the log, and fetches the PDF. The job's folder
 stays here for a while, so SyncTeX can map between the PDF and the sources.
 
-`service.py` is the whole service. It uses only Python's standard library, so
-it runs the same in its Docker image and natively next to a TeX Live
-installation.
+`service.py` and `markdown.lua` are the whole service. It uses only Python's
+standard library, so it runs the same in its Docker image and natively next
+to a TeX Live installation. A Markdown main file needs pandoc as well.
 
 ## Running it
 
@@ -21,7 +21,8 @@ docker compose up -d compile
 ```
 
 **Natively**, with this machine's TeX Live (latexmk, synctex and latexdiff on
-the `PATH`), for `make dev`.
+the `PATH`, and pandoc for Markdown), for `make dev`. Without pandoc, a
+Markdown main file fails with a message that says so.
 
 ```bash
 make compile-dev                 # :8070, the token from .env's COMPILE_TOKEN
@@ -34,7 +35,7 @@ COMPILE_TOKEN=secret COMPILE_PORT=8070 python3 -I compile/service.py
 ```
 
 The tests start it the same way (`tests/compile_helpers.py`) and skip when
-latexmk is missing.
+latexmk is missing, the Markdown tests also when pandoc is missing.
 
 ## Settings
 
@@ -75,6 +76,34 @@ SyncTeX does not know it, which is most of the time.
 The log is TeX's log of the main file, run with `max_print_line=10000` so no
 message or path is wrapped. When a job does not succeed, latexmk's last lines
 follow after the line `=== latexmk (the last lines of its output) ===`.
+
+## Markdown
+
+A main file that ends in `.md` or `.markdown` is turned into LaTeX first, and
+TeX compiles that. pandoc reads it as CommonMark with pandoc's extensions
+(`commonmark_x`: tables, footnotes, math in `$`, fenced divs, attributes, raw
+LaTeX in `` `...`{=latex} `` and ` ```{=latex} `), plus GitHub's bare links and
+math, and a lone image with alt text as a figure. It writes
+`<main file>.tex` next to the Markdown with its standalone LaTeX template.
+The front matter sets the template's variables (`title`, `author`, `date`,
+`abstract`, `documentclass`, `fontsize`, `header-includes`, ...). `geometry`
+defaults to `margin=2.5cm` and `colorlinks` to true.
+
+pandoc reads with `sourcepos`, which gives every element its place in the
+Markdown. `markdown.lua` turns these places into comments that TeX never sees:
+`%meertex:N` before every block, and at the end of every line of a paragraph
+the line the next one comes from. The service reads them back into a line map
+(`markdown-lines.json` in the job), so that
+
+- `synctex/edit` answers with the Markdown file and its line,
+- `synctex/view` takes the Markdown file and its line,
+- TeX's errors (`./notes.md.tex:42: ...`) name the Markdown file and its line.
+  Warnings stay with the LaTeX, which is not a file of the paper.
+
+pandoc runs with `--sandbox` (it reads only the Markdown file) and a data
+folder that does not exist, so only its own templates. A document cannot name
+a filter or a template. `/latexdiff` turns both sides into LaTeX, without the
+marks, and diffs those.
 
 ## Workspaces
 
@@ -142,3 +171,9 @@ It brings Python 3, latexmk, synctex, latexdiff, biber and a prebuilt
 luaotfload font database. To move to a newer TeX Live, change the tag and
 the digest together (`docker buildx imagetools inspect texlive/texlive:<tag>`),
 then run `make test` natively and one compile through the container.
+
+pandoc is its static release build from GitHub (about 170 MB), pinned by
+`PANDOC_VERSION` and the archive's SHA-256 for amd64 and arm64. CI installs
+the same one. To move to a newer pandoc, change the version and both
+checksums in the Dockerfile and in `.github/workflows/tests.yml` (`gh api
+repos/jgm/pandoc/releases/tags/<version>` lists each asset's `digest`).

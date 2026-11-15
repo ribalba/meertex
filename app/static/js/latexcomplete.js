@@ -7,6 +7,7 @@
 // reads a file again only after it changed, and only when a completion asks.
 
 const LATEX_FILE = /\.(tex|sty|cls|ltx)$/i;
+const MARKDOWN_FILE = /\.(md|markdown)$/i;
 const BIB_FILE = /\.bib$/i;
 const TEX_FILE = /\.tex$/i;
 const GRAPHIC = /\.(pdf|png|jpe?g|eps|svg|gif|tiff?)$/i;
@@ -91,6 +92,40 @@ function scanTex(text) {
   return { labels, commands, environments, cites: [], outline };
 }
 
+// A Markdown file's headings for the outline: "# Title" and a line underlined
+// with === or ---, outside code blocks and the front matter. One # is level 1.
+function scanMarkdown(text) {
+  const outline = [];
+  const lines = text.split("\n");
+  let fence = null;
+  let start = 0;
+  if (/^---\s*$/.test(lines[0] || "")) {
+    const end = lines.findIndex((l, i) => i > 0 && /^(---|\.\.\.)\s*$/.test(l));
+    if (end > 0) start = end + 1;
+  }
+  const title = (s) => s.replace(/\s*\{[#.][^}]*\}\s*$/, "").replace(/[*_`]/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i];
+    const open = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (open && (!fence || (open[1][0] === fence[0] && open[1].length >= fence.length))) {
+      fence = fence ? null : open[1];
+      continue;
+    }
+    if (fence) continue;
+    const atx = /^\s{0,3}(#{1,6})(?:\s+(.*?))?(?:\s+#+)?\s*$/.exec(line);
+    if (atx) {
+      outline.push({ level: atx[1].length, title: title(atx[2] || ""), line: i + 1 });
+      continue;
+    }
+    const under = /^\s{0,3}(=+|-+)\s*$/.exec(lines[i + 1] || "");
+    if (under && line.trim() && !/^\s*([-*+>|]|\d+[.)])\s/.test(line)) {
+      outline.push({ level: under[1][0] === "=" ? 1 : 2, title: title(line), line: i + 1 });
+      i += 1;
+    }
+  }
+  return { labels: [], commands: [], environments: [], cites: [], outline };
+}
+
 // The text of a field's value at `at`: {...} with nested braces, "..." or a bare word.
 function fieldValue(body, at) {
   const open = body[at];
@@ -160,7 +195,8 @@ function scanBib(text) {
 // project. `changed(events)` takes the events of the "files" map's
 // observeDeep. `read(byPath)` takes the materialized files (livefiles.js) and
 // returns everything, rescanning only the files that changed since the last
-// read. `outlines` maps each LaTeX file's path to its headings and inputs.
+// read. `outlines` maps each LaTeX file's path to its headings and inputs,
+// and each Markdown file's to its headings.
 export class ProjectIndex {
   constructor() {
     this.scans = new Map();
@@ -188,12 +224,14 @@ export class ProjectIndex {
     for (const entry of byPath.values()) {
       result.files.push(entry);
       if (entry.kind !== "text" || !entry.text) continue;
-      const kind = BIB_FILE.test(entry.shownAt) ? "bib" : LATEX_FILE.test(entry.shownAt) ? "tex" : null;
+      const kind = BIB_FILE.test(entry.shownAt) ? "bib" : LATEX_FILE.test(entry.shownAt) ? "tex"
+        : MARKDOWN_FILE.test(entry.shownAt) ? "md" : null;
       if (!kind) continue;
       let scan = this.scans.get(entry.id);
       if (!scan || scan.path !== entry.shownAt) {
         const text = entry.text.toString();
-        scan = { path: entry.shownAt, ...(kind === "bib" ? scanBib(text) : scanTex(text)) };
+        const scanner = { bib: scanBib, tex: scanTex, md: scanMarkdown }[kind];
+        scan = { path: entry.shownAt, ...scanner(text) };
         this.scans.set(entry.id, scan);
       }
       for (const l of scan.labels) result.labels.push({ ...l, path: scan.path });

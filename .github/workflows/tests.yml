@@ -4,7 +4,8 @@
 #
 # `lint` runs ruff. `server` runs the whole suite, tests/ and cli/tests/, on
 # the Python of the Dockerfile and against the PostgreSQL of
-# docker-compose.yml, with Ubuntu's TeX Live for the compile tests.
+# docker-compose.yml, with Ubuntu's TeX Live and the compile image's pandoc
+# for the compile tests.
 # tests/test_grammar_live.py needs a LanguageTool (GRAMMAR_TEST_URL) and skips.
 # `cli` runs the CLI's tests on the oldest Python that cli/pyproject.toml
 # allows, with only the CLI installed, the way pipx installs it. Its
@@ -80,6 +81,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             latexmk texlive-latex-base texlive-latex-recommended texlive-fonts-recommended lmodern \
             texlive-plain-generic texlive-xetex texlive-luatex texlive-bibtex-extra biber latexdiff
+      # The pandoc of compile/Dockerfile, for Markdown main files. Ubuntu's is
+      # older and writes other LaTeX.
+      - name: Install pandoc
+        run: |
+          curl -fsSL -o /tmp/pandoc.tar.gz https://github.com/jgm/pandoc/releases/download/3.13/pandoc-3.13-linux-amd64.tar.gz
+          echo "38aa33b325a2bc96a4c39409631212db55702f564250bcdbead180b3bf646389  /tmp/pandoc.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/pandoc.tar.gz -C /usr/local/bin --strip-components=2 pandoc-3.13/bin/pandoc
+          pandoc --version | head -n 1
       - name: Install
         run: |
           python -m pip install -r requirements.txt pytest

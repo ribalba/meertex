@@ -33,7 +33,8 @@ outdated copy.
 - **Edit in the browser** with coauthors at the same time, cursors and
   names included, on the same document your local folder syncs with. LaTeX
   autocomplete, a PDF that compiles as you type, compile errors on their
-  lines, and SyncTeX between PDF and source.
+  lines, and SyncTeX between PDF and source. A Markdown file compiles too
+  (through pandoc), with the same SyncTeX and PDF comments.
 - **Reviews like GitHub's.** Comment on spans of text or on the PDF, suggest
   changes, resolve with the diff of how a request was addressed, accept or
   reopen. `meertex threads`, `reply` and `resolve` let Claude work through them.
