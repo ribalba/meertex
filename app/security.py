@@ -224,6 +224,25 @@ def enforce_verify_rate(db: DBSession, email: str) -> None:
         )
 
 
+def enforce_assistant_rate(db: DBSession, user_id: str) -> None:
+    """Count one request to the new-paper assistant (DESIGN §21) against the
+    account's 24 hours and against the server's. Every request costs money,
+    and anyone can sign up."""
+    day = 24 * 60 * 60
+    if not _rate_hit(db, "assistant:" + user_id, settings.assistant_daily_per_account, day):
+        raise HTTPException(
+            status_code=429,
+            detail=f"You asked the assistant {settings.assistant_daily_per_account} times within a day, "
+            "which is as often as this server allows. Fill in the form by hand, or try again tomorrow.",
+        )
+    if not _rate_hit(db, "assistant:all", settings.assistant_daily_total, day):
+        raise HTTPException(
+            status_code=429,
+            detail="The assistant has answered as many requests today as this server allows. "
+            "Fill in the form by hand, or try again tomorrow.",
+        )
+
+
 def create_session(db: DBSession, user: User) -> str:
     note_active(user)
     token = new_token()

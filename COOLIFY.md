@@ -31,8 +31,10 @@ from outside the host at all.
 | `SERVICE_PASSWORD_64_MEERTEX` | Leave it alone. The `SECRET_KEY` that signs login codes. Changing it only invalidates sign-in links and codes still in flight. |
 | `SERVICE_PASSWORD_64_COMPILE` | Leave it alone. The token `web` shows the compile service. Both read the same variable. |
 | `COMPILE_TIMEOUT_SECONDS`, `COMPILE_KEEP_JOBS`, `COMPILE_KEEP_WORKSPACES`, `COMPILE_KEEP_LIVE_PDFS`, `COMPILE_WORKERS`, `COMPILE_MEMORY`, `COMPILE_CPUS` | Optional. Default 90 seconds per compile, 30 jobs kept for SyncTeX, 20 papers' editor workspaces, the PDFs of a paper's 20 newest live compiles, 2 compiles at once, 2 GB of memory and 2 CPUs for the compile container. |
+| `COMPILE_SANDBOX` | Optional, default `auto`. The sandbox every compile job runs in ([Compiling](#compiling)). `on` makes the compile service refuse to start on a kernel without Landlock, `off` switches the sandbox off. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_USE_TLS`, `EMAIL_FROM` | Needed before anyone but you can sign in, for invites, and for the reminder mails. Without `SMTP_HOST` the sign-in link and code are printed to the `web` container's log instead, which is how you sign in the first time (step 5). |
 | `GRAMMAR_URL`, `GRAMMAR_TIMEOUT_SECONDS`, `GRAMMAR_ALLOW_PUBLIC_HOSTS`, `GRAMMAR_MAX_CONCURRENT`, `LANGUAGETOOL_MEMORY` | Optional. The editor's spelling and grammar check ([Spelling and grammar](#spelling-and-grammar)). Empty `GRAMMAR_URL` means the bundled `languagetool` service. Default 20 seconds per check, public hosts refused, 3 requests at once, 1.5 GB of memory for the container. |
+| `ANTHROPIC_API_KEY`, `ASSISTANT_CLAUDE_MODEL`, `ASSISTANT_DAILY_PER_ACCOUNT`, `ASSISTANT_DAILY_TOTAL`, `REFERENCES_CLAUDE_MODEL` | Optional. An Anthropic API key turns on what asks Claude: the new-paper assistant and the claim check of the references ([The assistant](#the-assistant)). Without a key both are off. |
 | `NEW_USER_MAIL_TO` | Optional. One mail to this address for every new account, at its first sign-in, with who invited the person or that they signed up on their own ([docs/DESIGN.md](docs/DESIGN.md) §2, Accounts). Empty mails nobody. |
 | `EXAMPLE_PAPER` | Optional, default `true`. Every new account starts with an example paper at its first sign-in ([docs/DESIGN.md](docs/DESIGN.md) §19). `false` makes none. |
 | `INSTANCE_ADMINS` | Optional. Email addresses, separated by commas, whose accounts open the instance dashboard at `/admin` from the user menu ([docs/DESIGN.md](docs/DESIGN.md) §18). Empty means nobody. |
@@ -107,6 +109,23 @@ The editor underlines spelling and grammar mistakes in `.tex`, `.md` and `.txt` 
 | **Privacy** | Unpublished papers go to the checker, so it has no domain and no ports, and `web` refuses a `GRAMMAR_URL` with a public address unless `GRAMMAR_ALLOW_PUBLIC_HOSTS` is `true`. Nothing logs the text. |
 | **Load** | `web` caches results per paragraph and only sends the paragraphs that changed. At most `GRAMMAR_MAX_CONCURRENT` (3) requests are with the checker at once. |
 | **Without it** | While the container is stopped or starting, checks answer 503 and the editor says so on its Spellcheck button. Everything else works. |
+
+## The assistant
+
+"Fill in from the call for papers" on the new-paper form asks Claude to read
+the address somebody pastes. Claude fills in the venue, the deadlines and a
+`main.tex` in the venue's format, and the person checks the form before the
+paper is created ([docs/DESIGN.md](docs/DESIGN.md) §21).
+
+| | |
+| --- | --- |
+| **Key** | `ANTHROPIC_API_KEY`, an API key from the Anthropic Console. Mark it as a secret in Coolify. The same key turns on the claim check of the references (§16, Claims), which every editor of a paper can then start and which asks Claude once per cited entry. |
+| **Model** | `ASSISTANT_CLAUDE_MODEL`, default `claude-opus-5-5`. Any Claude from 4.6 on works, for example `claude-sonnet-5-5` or `claude-haiku-5-5`, which cost less. The claim check has its own `REFERENCES_CLAUDE_MODEL`. |
+| **Cost** | One request reads up to 8 pages, and Claude gets at most 40,000 tokens of each. What a request really took is in the `web` log, one line per request with the model, the pages read and the tokens in and out. |
+| **Limits** | `ASSISTANT_DAILY_PER_ACCOUNT` (10) requests per account and `ASSISTANT_DAILY_TOTAL` (200) for the whole server, each within 24 hours. Anyone can sign up, so the second one caps what a day can cost. `0` in either turns the assistant off. At most 4 requests run at once. |
+| **Web fetch** | Claude reads the pages with Anthropic's web fetch tool, so the request leaves from Anthropic, not from this server. An organization admin can turn web fetch off on the Capabilities page of the Anthropic Console. The assistant then answers with an error that says so. |
+| **What Anthropic gets** | The address, the track when one was typed, and today's date. Nothing of a paper. |
+| **Without it** | The form has no assistant box and everything else works. |
 
 ## Operating it
 

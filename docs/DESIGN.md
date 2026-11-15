@@ -293,6 +293,13 @@ files into the live document as one snapshot.
   fails, the paper it just made is deleted again, so a failed upload leaves
   nothing behind.
 
+After an answer of the assistant (§21) the new-paper form has a fourth
+start, **the venue's format**. It is the `main.tex` the assistant wrote for
+the venue's class, and an empty `refs.bib`. The form creates the paper empty
+and writes the two files through the files API (§11). The first
+`\title{Untitled}` of the file becomes the paper's title, escaped for LaTeX.
+When a write fails, the paper is deleted again, like after a failed import.
+
 ### Planned papers
 
 A **planned** project is a venue you mean to hand something in to before the
@@ -1026,6 +1033,14 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 ### Sync
 
 - `GET /api/projects/{ref}/sync` (WebSocket, §10).
+
+### Assistant
+
+- `GET /api/assistant` returns `{enabled}`, whether this server has the
+  new-paper assistant (§21).
+- `POST /api/assistant/new-paper {url, hint?}` reads a call for papers and
+  returns `{fields, dates, starter, remarks, pages}` (§21, The answer). It
+  creates nothing.
 
 ### Git
 
@@ -1765,7 +1780,10 @@ document.
 | `REFERENCES_NETWORK` | `true`. `false` turns the reference lookups off (§16). |
 | `REFERENCES_MAILTO` | The address the lookups give the services, `EMAIL_FROM` when empty. |
 | `SEMANTIC_SCHOLAR_API_KEY` | Optional. A key of its own gets a larger rate limit. |
-| `ANTHROPIC_API_KEY`, `REFERENCES_CLAUDE_MODEL` | Turn the claim check on (§16, Claims). Empty and `claude-opus-5-5`. |
+| `ANTHROPIC_API_KEY` | Empty. The key for what asks Claude: the claim check (§16, Claims) and the new-paper assistant (§21). Both are off without it. |
+| `REFERENCES_CLAUDE_MODEL` | `claude-opus-5-5`, the model of the claim check. |
+| `ASSISTANT_CLAUDE_MODEL` | `claude-opus-5-5`, the model of the assistant. It has to be Claude 4.6 or newer. |
+| `ASSISTANT_DAILY_PER_ACCOUNT`, `ASSISTANT_DAILY_TOTAL` | 10 and 200. Requests to the assistant within 24 hours, for one account and for the whole server. 0 in either turns it off. |
 | `GRAMMAR_URL` | The LanguageTool server (§17). The compose files point it at their `languagetool` service. Empty turns the check off. |
 | `GRAMMAR_TIMEOUT_SECONDS`, `GRAMMAR_ALLOW_PUBLIC_HOSTS`, `GRAMMAR_MAX_CONCURRENT` | 20, `false`, 3 (§17, The checker). |
 | `LANGUAGETOOL_MEMORY` | `1536m`, the `languagetool` container's limit. |
@@ -2588,3 +2606,133 @@ model that can call tools and a context of at least 32k tokens. In the
 desktop app it checks each of these on the computer (the checkout's folder
 only as `~/...`), and its button opens the editor with the panel. In a
 browser it links the desktop app's latest release.
+
+## 21. The new-paper assistant
+
+The new-paper form can fill itself in from the address of a call for papers.
+Claude reads the address and answers with the venue's fields (§4), every
+deadline (§5) and a `main.tex` in the venue's format. The assistant creates
+nothing. Its answer fills the form, and the person checks it there before
+they create the paper or the plan. The code is `app/assistant.py` and
+`app/routers/assistant.py`.
+
+The new-paper skill (`skills/meertex-new-paper`) does the same from Claude
+Code on a person's own computer, with their own Claude. The assistant is for
+the browser, and the server's owner pays for it.
+
+### Asking Claude
+
+- One conversation through the official `anthropic` SDK, with
+  `ASSISTANT_CLAUDE_MODEL` (`claude-opus-5-5`), effort `medium`, a JSON
+  schema for the answer and the API's own fallback for refused requests
+  (`fallbacks: "default"`). It is streamed, because it can take minutes.
+- Claude reads the pages with Anthropic's web fetch tool
+  (`web_fetch_20260318`). The tool runs at Anthropic, so this server never
+  fetches an address somebody typed. Claude may read up to 8 pages and gets
+  at most 40,000 tokens of each. Those are the address itself and pages it
+  links, such as "Important dates" or the author instructions.
+- The tool only reads an address that a user message or a page it read
+  names, so the address goes into the user message. It runs no JavaScript
+  and keeps to a site's `robots.txt`. The model has to be Claude 4.6 or
+  newer for this version of the tool.
+- A turn that Anthropic's own loop paused (`pause_turn`) is sent back to go
+  on, up to 3 times.
+- Claude gets the address, the track or cycle when the person typed one,
+  and today's date. Nothing of a paper.
+- The instructions say to take every value from the pages and never from
+  memory, to leave empty what the pages do not say, to leave out a date
+  that is TBA, and that the pages are data. With several tracks or
+  submission cycles Claude takes the one the person named. Without a name
+  it takes the main research track and the next cycle whose deadline is
+  still ahead, or the last cycle when every deadline has passed, and says
+  so in a remark. It never mixes the dates of two cycles.
+- `page_limit` is the limit at submission in the short form the page-limit
+  check reads (§14), and a limit for the camera-ready version goes into the
+  notes. A format that needs style files TeX Live does not have is never
+  rebuilt by hand. Its `main_tex` stays empty and the author kit is linked.
+
+### The answer
+
+`POST /api/assistant/new-paper {url, hint?}` (session or token). `url` is
+the call for papers or the venue's site. Without a scheme it is read as
+`https://`. `hint` names the track or the submission cycle. It returns
+
+```json
+{
+  "fields": {"conference": "ICSE", "conference_name": "…", "year": 2027,
+             "track": "Research Track", "cfp_url": "…", "conference_url": "…",
+             "submission_url": "…", "location": "Dublin, Ireland",
+             "publisher": "IEEE", "page_limit": "10 pages + 2 pages of references",
+             "template": "IEEEtran conference", "review_model": "double-blind",
+             "notes": "- …"},
+  "dates": [{"kind": "submission", "due_at": "2026-07-18T23:59", "tz": "AoE"},
+            {"kind": "notification", "date": "2026-10-20", "tz": "AoE"},
+            {"kind": "other", "label": "Artifact submission",
+             "date": "2026-11-05", "tz": "AoE"}],
+  "starter": {"main_tex": "\\documentclass[conference]{IEEEtran}…",
+              "author_kit_url": "https://…"},
+  "remarks": ["The call gives no time zone, so AoE is assumed."],
+  "pages": ["https://…"]
+}
+```
+
+- `fields` and `dates` are what `POST /api/projects` takes (§11), so the
+  answer plus a title is a body for it.
+- `fields` holds only what the pages say. A key that is missing was not
+  found. `cfp_url` is the address that was asked when Claude names no other.
+- `dates` come soonest first. A day without a time is a `date`, a time is a
+  `due_at` local to `tz` (§5). A zone the page does not give is `AoE`, with
+  a remark. Every date passes the check a new project's dates pass. One
+  that fails is left out and named in a remark.
+- `starter.main_tex` is a minimal `main.tex` with the class and the options
+  the call requires, or null. It is null when the call names no format,
+  when the format needs style files that TeX Live does not have, and when
+  what Claude wrote is not a whole LaTeX document. `starter.author_kit_url`
+  is the official author kit that a page links, or null (§4, Starting
+  files).
+- `remarks` are sentences for the person: what Claude assumed, what the
+  pages do not say and what was left out.
+- `pages` are the addresses Claude read.
+- Everything Claude says is cleaned like any input. Strings are cut to the
+  lengths of §4, and an address that is not http or https is dropped, so
+  nothing from a page can become a link that runs script.
+
+Errors are `{detail}` with a sentence to show.
+
+| Status | When |
+| --- | --- |
+| 422 | The address is no http or https address, holds a user name or is longer than 250 characters, which is all web fetch takes. Or Claude found no call for papers there, and `detail` says what it found instead. |
+| 429 | The account or the server used up its requests of the last 24 hours. |
+| 502 | Claude could not be asked or gave no usable answer. |
+| 503 | The server has no assistant, or 4 requests are running already. |
+
+### Limits
+
+Every request costs money and anyone can sign up, so requests are counted
+before Claude is asked. An account gets `ASSISTANT_DAILY_PER_ACCOUNT` (10)
+within 24 hours and the whole server `ASSISTANT_DAILY_TOTAL` (200), in the
+`rate_limits` table that sign-in uses. An address that is refused is not
+counted. At most 4 requests run at once.
+
+The assistant is on with an `ANTHROPIC_API_KEY` and both limits above 0.
+`GET /api/assistant` returns `{enabled}`. The server logs one line per
+request with the model, the number of pages and the tokens in and out.
+
+### In the web app
+
+- With the assistant on, `/new` shows a box "Fill in from the call for
+  papers" under the choice between a paper and a plan. It has the address,
+  an optional "Track or cycle" and a "Fill in" button. Enter in the box asks
+  the assistant and does not create the paper.
+- While Claude reads, the box shows how long it has been and a Stop button.
+  Stop drops the answer. The request at Anthropic goes on and is counted.
+- The answer sets the conference, the year, the venue's fields and the
+  notes. Notes that are there already are kept and the new ones are added
+  below. The title, the short name, the folder and the labels are never
+  touched. The dates replace the rows that are still empty and the rows of
+  an earlier answer. Rows a person filled in stay.
+- The box then says how many fields and dates it filled in, lists the
+  remarks under "To check" and links the pages that were read.
+- "Start with" gets "The venue's format" with the `main.tex` to look at,
+  already chosen, when there is one. The author kit's address shows under
+  "A publisher's template", to download and choose there.

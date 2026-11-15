@@ -24,6 +24,7 @@ from .config import get_settings
 from .database import init_db
 from .routers import (
     admin,
+    assistant,
     auth,
     avatars,
     blobs,
@@ -97,6 +98,7 @@ app.include_router(timeline.router)
 app.include_router(reminders.router)
 app.include_router(references.router)
 app.include_router(grammar.router)
+app.include_router(assistant.router)
 app.include_router(avatars.router)
 # git clone of a paper (/p/<name>.git/...), ahead of the app's /p/ pages.
 app.include_router(git.router)

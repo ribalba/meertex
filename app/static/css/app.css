@@ -1527,6 +1527,34 @@ code.cmd {
 .name-preview .name { font-family: var(--mono); font-size: 14px; font-weight: 600; word-break: break-all; }
 .token-field { font-family: var(--mono); }
 
+/* The assistant on /new, which fills the form from a call for papers. */
+.assistant-box {
+  margin-bottom: 16px; padding: 16px;
+  background: var(--bg-subtle); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.assistant-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 14px; font-weight: 600; }
+.assistant-head .icon { color: var(--fg-muted); }
+.assistant-row { display: flex; align-items: flex-end; gap: 8px 16px; }
+.assistant-row > .form-group { margin-bottom: 0; min-width: 0; }
+.assistant-url { flex: 2 1 0; }
+.assistant-track { flex: 1 1 0; }
+.assistant-row > .btn { flex: none; }
+.assistant-status:not(:empty) { margin-top: 12px; }
+.assistant-running { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.assistant-status ul { margin: 0 0 10px; padding-left: 20px; }
+@media (max-width: 639px) {
+  .assistant-row { flex-direction: column; align-items: stretch; }
+  .assistant-url, .assistant-track { flex: none; }
+  .assistant-row > .btn { align-self: flex-start; }
+}
+.starter-preview {
+  max-height: 240px; overflow: auto; padding: 8px 12px;
+  font-family: var(--mono); font-size: 12px; white-space: pre; cursor: text;
+  color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+/* A long line of the file scrolls inside the preview, not the page. */
+.choice:has(.starter-preview) > div { flex: 1 1 auto; min-width: 0; }
+
 /* --- Login --------------------------------------------------------------- */
 
 .login-body { background: var(--bg-subtle); min-height: 100vh; }

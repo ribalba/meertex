@@ -163,7 +163,22 @@ export function dateRow(template = null, { onRemove = null, kinds = null, fixedK
     return out;
   }
 
-  return { el, value, changes, showError, focus: () => day.focus() };
+  return { el, value, changes, showError, focus: () => day.focus(), isEmpty: () => !day.value };
+}
+
+// A date in the shape POST /api/projects takes (`date` for a day, `due_at` as
+// the wall clock in `tz`) as the template of a timed dateRow. `local` is taken
+// as written (venueParts in time.js), so the row shows exactly that day and
+// time. A kind the list does not know becomes Other with the kind as its label,
+// so the select never ends up without a choice.
+export function fromInput(d) {
+  const local = d.due_at || (d.date ? `${d.date}T23:59` : "");
+  const known = Boolean(KIND_LABEL[d.kind]);
+  const kind = known ? d.kind : "other";
+  const label = d.label || (known ? "" : String(d.kind || ""));
+  const tz = d.tz || "AoE";
+  if (!local) return { kind, label, tz };
+  return { kind, label, tz, due_at: local, local, date_only: !d.due_at };
 }
 
 // A list of date rows with "Add a date", for forms that create several dates.
@@ -172,17 +187,22 @@ export function dateList(initial = []) {
   const container = h("div", { class: "date-rows" });
   const empty = h("div", { class: "date-rows-empty", text: "No dates yet. Add the deadlines from the call for papers." });
 
+  // The rows the last fill() added. A second fill replaces them instead of
+  // adding the same dates again.
+  const filled = new Set();
+
   function refresh() {
     empty.hidden = rows.length > 0;
   }
+  function remove(row) {
+    const i = rows.indexOf(row);
+    if (i >= 0) rows.splice(i, 1);
+    filled.delete(row);
+    row.el.remove();
+    refresh();
+  }
   function add(date = null, focus = false) {
-    const row = dateRow(date, {
-      onRemove: (el) => {
-        rows.splice(rows.indexOf(row), 1);
-        el.remove();
-        refresh();
-      },
-    });
+    const row = dateRow(date, { onRemove: () => remove(row) });
     rows.push(row);
     container.append(row.el);
     refresh();
@@ -204,5 +224,15 @@ export function dateList(initial = []) {
     }
     return out;
   }
-  return { el, values, add };
+  // Dates from elsewhere (the assistant on /new), already as dateRow
+  // templates. Empty rows and the rows of an earlier fill go. The rows a
+  // person added and gave a day stay.
+  function fill(list) {
+    for (const row of [...rows]) {
+      if (row.isEmpty() || filled.has(row)) remove(row);
+    }
+    filled.clear();
+    for (const d of list) filled.add(add(d));
+  }
+  return { el, values, add, fill };
 }

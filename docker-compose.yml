@@ -77,6 +77,11 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       REFERENCES_CLAUDE_MODEL: ${REFERENCES_CLAUDE_MODEL:-claude-opus-5-5}
 
+      # The new-paper assistant (docs/DESIGN.md §21). It needs the key above.
+      ASSISTANT_CLAUDE_MODEL: ${ASSISTANT_CLAUDE_MODEL:-claude-opus-5-5}
+      ASSISTANT_DAILY_PER_ACCOUNT: ${ASSISTANT_DAILY_PER_ACCOUNT:-10}
+      ASSISTANT_DAILY_TOTAL: ${ASSISTANT_DAILY_TOTAL:-200}
+
       # Spelling and grammar in the editor (docs/DESIGN.md §17), checked by the
       # `languagetool` service below. A host with a public address is refused
       # unless GRAMMAR_ALLOW_PUBLIC_HOSTS is true. GRAMMAR_URL= (empty) in .env

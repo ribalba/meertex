@@ -46,6 +46,11 @@ outdated copy.
   to start writing and the questions waiting. Mute it per paper.
   `meertex reminders` shows what the next one says.
 - **Publisher templates.** Start a paper from an author kit's zip.
+- **A new paper from its call for papers.** Paste the address on the
+  new-paper form, and Claude fills in the venue, every deadline with its time
+  zone and a `main.tex` in the venue's format. You check the form before the
+  paper is created. A server needs an Anthropic API key for it
+  (`ANTHROPIC_API_KEY`, `ASSISTANT_CLAUDE_MODEL`).
 - **A reference check.** Every `.bib` entry is looked up at doi.org,
   Crossref, Semantic Scholar, DBLP, arXiv and Open Library, and its links are
   fetched. Made-up citations, DOIs of other papers, wrong authors, dead links

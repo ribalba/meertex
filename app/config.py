@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     references_claude_model: str = "claude-opus-5-5"
 
+    # --- The new-paper assistant (docs/DESIGN.md §21) ----------------------------
+    # It asks Claude to read a call for papers, with ANTHROPIC_API_KEY above.
+    # Without a key it is off. The model must be Claude 4.6 or newer, because
+    # the request uses Anthropic's web fetch tool.
+    assistant_claude_model: str = "claude-opus-5-5"
+    # Requests within 24 hours, for one account and for the whole server.
+    # Every request costs money, and anyone can sign up. 0 turns the
+    # assistant off.
+    assistant_daily_per_account: int = 10
+    assistant_daily_total: int = 200
+
     # --- Spelling and grammar (docs/DESIGN.md §17) -----------------------------------
     # A LanguageTool server (its base URL, a trailing /v2 is fine). Empty turns
     # the check off, and the editor keeps the browser's own spellchecker.
