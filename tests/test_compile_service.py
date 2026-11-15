@@ -347,10 +347,10 @@ function read(path)
   io.input(io.stdin)
   return ok and text or nil
 end
-function write(path)
+function write(path, text)
   local ok = pcall(function()
     io.output(path)
-    io.write("planted")
+    io.write(text or "planted")
     io.output():close()
   end)
   io.output(io.stdout)
@@ -450,18 +450,31 @@ probe("found", kpse.lookup("main.tex", {{path = "{service.jobs}//", all = true}}
     assert "The secret of paper A" not in log
 
 
+def _home_lua(name: str) -> str:
+    """Lua that says what the marker in HOME holds and leaves ``name`` there
+    when there is none. One compile can run TeX twice, which older latexmk
+    does for a new .aux file, and the second pass then finds the marker of
+    the first. So a marker names the compile that left it."""
+    return f"""
+local home = os.getenv("HOME")
+probe("home", home)
+probe("tmp", os.getenv("TMPDIR"))
+local found = read(home .. "/marker")
+probe("marker", found)
+probe("left", found ~= nil or write(home .. "/marker", "{name}"))
+"""
+
+
+def _started_empty(log: str, name: str) -> bool:
+    """Whether the compile ``name`` found no marker but its own in HOME."""
+    return "PROBE marker=nil" in log or f"PROBE marker={name}" in log
+
+
 def test_a_job_has_a_home_of_its_own(service):
     """HOME holds caches with code the next run loads (LuaTeX's fonts, what
     biber unpacks of itself), so no two papers share one. A workspace keeps
     its own, a job without a workspace loses it when it ends."""
-    lua = """
-local home = os.getenv("HOME")
-probe("home", home)
-probe("tmp", os.getenv("TMPDIR"))
-probe("marker", read(home .. "/marker"))
-probe("left", write(home .. "/marker"))
-"""
-    job = _ok(service, _lua_paper(lua), compiler="lualatex")
+    job = _ok(service, _lua_paper(_home_lua("job")), compiler="lualatex")
     folder = service.jobs / job["job_id"]
     assert f"PROBE home={folder / 'home'}" in job["log"], job["log"][-3000:]
     assert f"PROBE tmp={folder / 'tmp'}" in job["log"]
@@ -471,26 +484,24 @@ probe("left", write(home .. "/marker"))
 
     key = str(uuid.uuid4())
     home = service.jobs / "workspaces" / key / "home"
-    _, first = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex")
+    _, first = _in_workspace(service, key, _lua_paper(_home_lua("first")), compiler="lualatex")
     assert f"PROBE home={home}" in first["log"]
-    assert "PROBE marker=nil" in first["log"]
-    assert (home / "marker").read_text() == "planted"
-    _, second = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex")
-    assert "PROBE marker=planted" in second["log"]
+    assert _started_empty(first["log"], "first"), first["log"][-3000:]
+    assert (home / "marker").read_text() == "first"
+    _, second = _in_workspace(service, key, _lua_paper(_home_lua("second")), compiler="lualatex")
+    assert "PROBE marker=first" in second["log"]
     # A clean compile starts without the caches too.
-    _, third = _in_workspace(service, key, _lua_paper(lua), compiler="lualatex", clean=True)
-    assert "PROBE marker=nil" in third["log"]
+    _, third = _in_workspace(service, key, _lua_paper(_home_lua("clean")), compiler="lualatex", clean=True)
+    assert _started_empty(third["log"], "clean")
+    assert (home / "marker").read_text() == "clean"
 
-    _, other = _in_workspace(service, str(uuid.uuid4()), _lua_paper(lua), compiler="lualatex")
-    assert "PROBE marker=nil" in other["log"]
+    _, other = _in_workspace(service, str(uuid.uuid4()), _lua_paper(_home_lua("other")), compiler="lualatex")
+    assert _started_empty(other["log"], "other")
 
 
 def test_a_workspaces_home_does_not_grow_without_end(tmp_path):
     """What a compile leaves in HOME stays for the next one, so it is capped."""
-    lua = """
-local home = os.getenv("HOME")
-probe("marker", read(home .. "/marker"))
-probe("left", write(home .. "/marker"))
+    large = """
 io.output(home .. "/large")
 io.write(string.rep("x", 5000))
 io.output():close()
@@ -498,10 +509,10 @@ io.output(io.stdout)
 """
     with compile_service(tmp_path / "small", COMPILE_MAX_HOME_BYTES=1000) as svc:
         key = str(uuid.uuid4())
-        for _ in range(2):
-            _, job = _in_workspace(svc, key, _lua_paper(lua), compiler="lualatex")
+        for name in ("one", "two"):
+            _, job = _in_workspace(svc, key, _lua_paper(_home_lua(name) + large), compiler="lualatex")
             assert "PROBE left=true" in job["log"], job["log"][-3000:]
-            assert "PROBE marker=nil" in job["log"]
+            assert _started_empty(job["log"], name)
             assert not (svc.jobs / "workspaces" / key / "home").exists()
 
 
