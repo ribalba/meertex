@@ -1,7 +1,7 @@
 # meertex-server: the web app, its API and the live documents' sync endpoint,
 # in one process. The shape is meerpad's. git is installed because every
 # project's history is a git repository (docs/DESIGN.md §9).
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 ARG MEERTEX_VERSION=0.0.0
 
