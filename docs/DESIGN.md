@@ -493,7 +493,10 @@ A question is only asked when it still makes sense.
 - `notification` is only asked while `outcome` is null.
 - `camera_ready` is only asked when `outcome` is `accepted`.
 - `abstract`, `submission`, `supplementary` and `rebuttal_end` are no longer
-  asked once there is an outcome.
+  asked once there is an outcome. They also stay quiet when a later
+  `notification` date was answered with a decision, so a revision's `yes`,
+  which sets the outcome back to null, does not bring them back. A rebuttal
+  date after that notification is still asked.
 - `revision` is only asked when `outcome` is `revision`.
 - Nothing is asked after `outcome` is `rejected`, `withdrawn` or
   `not_submitted`.

@@ -193,6 +193,7 @@ def summary(
     they put it and their usual writing time. ``folder_path`` is "" at the top
     level."""
     submitted = lifecycle.handed_in(dates, has_submission_version)
+    decided = lifecycle.last_decision(dates)
     window = lifecycle.writing_window(project, dates, submitted, writing_days)
     return {
         "id": project.id,
@@ -210,7 +211,7 @@ def summary(
         "folder_id": membership.folder_id,
         "folder_path": folder_path,
         "next_date": next_date_dict(lifecycle.next_date(project, dates, now), now),
-        "question_count": sum(1 for d in dates if lifecycle.asks(project, d, submitted, now)),
+        "question_count": sum(1 for d in dates if lifecycle.asks(project, d, submitted, decided, now)),
         "open_threads": open_threads,
         "writing_days": project.writing_days or writing_days,
         # The paper's own writing time, null when it uses the owner's usual one.

@@ -124,6 +124,38 @@ def test_revision_cycle():
         assert p["questions"] == []
 
 
+def test_handing_in_a_revision_does_not_bring_back_the_first_round():
+    with running_app() as client:
+        sign_in(client)
+        p = _project(
+            client,
+            "icse",
+            [
+                {"kind": "abstract", "date": "2026-01-08"},
+                {"kind": "submission", "date": "2026-01-15"},
+                {"kind": "rebuttal_end", "date": "2026-02-15"},
+                {"kind": "notification", "date": "2026-03-01"},
+                {"kind": "revision", "date": "2026-05-01"},
+            ],
+        )
+        p = _answer(client, p, "submission", "yes").json()
+        p = _answer(client, p, "notification", "revision").json()
+        assert [q["kind"] for q in p["questions"]] == ["revision"]
+        # Back under review with a null outcome. The abstract and the rebuttal
+        # were never answered, but a decision came after them.
+        p = _answer(client, p, "revision", "yes").json()
+        assert p["outcome"] is None
+        assert p["questions"] == []
+        assert p["question_count"] == 0
+        assert client.get("/api/questions").json() == []
+
+        # A rebuttal date after the decision is still asked.
+        r = client.post(f"/api/projects/{p['id']}/dates", json={"kind": "rebuttal_end", "date": "2026-04-01"})
+        assert r.status_code == 201, r.text
+        p = client.get(f"/api/projects/{p['id']}").json()
+        assert [(q["kind"], q["due_at"][:10]) for q in p["questions"]] == [("rebuttal_end", "2026-04-02")]
+
+
 def test_no_closes_the_paper():
     with running_app() as client:
         sign_in(client)

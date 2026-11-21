@@ -54,8 +54,10 @@ VERSION_FOR_YES = {
 CLOSED = frozenset({"rejected", "withdrawn", "not_submitted"})
 # Asked only after the paper was handed in.
 _AFTER_HANDING_IN = frozenset({"rebuttal_end", "notification", "revision"})
-# About handing in. Once a decision is there, they are moot.
+# About handing in. Once a decision is there, or came after them, they are moot.
 _BEFORE_DECISION = frozenset({"abstract", "submission", "supplementary", "rebuttal_end"})
+# The answers to a notification that are a decision ("moved" is not).
+_DECISIONS = frozenset({"accepted", "rejected", "revision"})
 
 
 def answers_for(kind: str) -> tuple[str, ...]:
@@ -82,9 +84,16 @@ def _counts_for_outcome(kind: str, outcome: str | None) -> bool:
     return True
 
 
-def asks(project: Project, d: ProjectDate, submitted: bool, now: datetime) -> bool:
-    """Whether date ``d`` has a question waiting. ``submitted`` is handed_in().
-    A plan asks nothing: there is no paper yet to hand in."""
+def last_decision(dates: list[ProjectDate]) -> datetime | None:
+    """The latest notification date answered with a decision, or None. It
+    outlives the outcome, which a revision's "yes" sets back to null."""
+    return max((d.due_at for d in dates if d.kind == "notification" and d.answer in _DECISIONS), default=None)
+
+
+def asks(project: Project, d: ProjectDate, submitted: bool, decided: datetime | None, now: datetime) -> bool:
+    """Whether date ``d`` has a question waiting. ``submitted`` is handed_in()
+    and ``decided`` is last_decision(). A plan asks nothing: there is no paper
+    yet to hand in."""
     if project.planned:
         return False
     if d.answer is not None or d.due_at >= now or d.kind not in _QUESTIONS:
@@ -96,7 +105,7 @@ def asks(project: Project, d: ProjectDate, submitted: bool, now: datetime) -> bo
         return False
     if d.kind == "notification" and outcome is not None:
         return False
-    if d.kind in _BEFORE_DECISION and outcome is not None:
+    if d.kind in _BEFORE_DECISION and (outcome is not None or (decided is not None and d.due_at <= decided)):
         return False
     return not (d.kind in _AFTER_HANDING_IN and not submitted)
 
@@ -111,9 +120,10 @@ def question_text(d: ProjectDate) -> str:
 def questions(project: Project, dates: list[ProjectDate], has_submission_version: bool, now: datetime) -> list[dict]:
     """The project's waiting questions, oldest date first, as the API sends them."""
     submitted = handed_in(dates, has_submission_version)
+    decided = last_decision(dates)
     out = []
     for d in sorted(dates, key=lambda d: (d.due_at, d.position)):
-        if not asks(project, d, submitted, now):
+        if not asks(project, d, submitted, decided, now):
             continue
         out.append(
             {

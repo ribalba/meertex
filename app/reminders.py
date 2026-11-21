@@ -231,8 +231,9 @@ def _question_items(project: Project, dates: list[ProjectDate], submitted: bool,
                     since: datetime | None, now: datetime) -> list[tuple[datetime, dict, list[LogKey]]]:
     """Questions (§6) whose date passed after ``since``, the last mail."""
     out = []
+    decided = lifecycle.last_decision(dates)
     for d in dates:
-        if not lifecycle.asks(project, d, submitted, now):
+        if not lifecycle.asks(project, d, submitted, decided, now):
             continue
         key = (d.id, "question", 0, d.due_at)
         if sent is not None and (key in sent or (since is not None and d.due_at <= since)):
