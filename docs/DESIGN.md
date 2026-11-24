@@ -55,10 +55,19 @@ meerpad's scheme, carried over unchanged. You enter your email and get a
 link and a six-character code, and either one signs you in. There are no
 passwords. A brand-new email gets an account on its first sign-in.
 
+Opening an emailed link (a sign-in link or an invite) does not sign in by
+itself. It shows a page that names the account, and for an invite the
+paper, with a "Sign in" button. Only the button's POST signs in. Mail
+scanners such as Microsoft's Safe Links open every link in a mail but do
+not submit forms, so they no longer get a session or count as the
+person's first sign-in. The page changes nothing and can be opened any
+number of times.
+
 The desktop app (`electron/`) asks with `client: "desktop"`. Its mail then
-carries a `meertex://login?token=` link instead of the web one. The app loads
-the ordinary callback with that token inside its window, so the session lands
-there and not in the system browser. The code works in the app as well.
+carries a `meertex://login?token=` link instead of the web one. The app
+sends the callback's POST with that token inside its window, so the session
+lands there and not in the system browser, without the button. No scanner
+opens a `meertex://` link. The code works in the app as well.
 
 A user has `id, email, name, timezone, api_token, naming_pattern, writing_days, reminders, reminder_days, reminder_hour, mention_mails, avatar_url, instance_admin, created_at`.
 `naming_pattern` is described in §4, `writing_days` and the reminders in §5,
@@ -75,8 +84,7 @@ says where the person comes from, which is who invited them to which paper
 as what, or that they signed up on their own. It also says how they signed
 in (code, sign-in link or invite link, and browser, CLI or desktop app),
 their IP address and user agent, and how many accounts have signed in so
-far. A mail scanner that opens the link first counts as that sign-in, and
-its user agent shows it. The first sign-in also makes the account's example
+far. The first sign-in also makes the account's example
 paper (§19).
 
 The API token is for scripts, the CLI and agents. It is sent as
@@ -121,6 +129,35 @@ sit unread for days. The links and codes you ask for yourself expire after
 
 A project that is not yours and where you are not a member is 404
 everywhere, never 403. Too low a role for a write is 403.
+
+### Sharing a paper with a link
+
+Besides inviting by email, a paper can have a join link. Whoever opens it
+signs in with any email and then joins the paper in the link's role. Nobody
+gets a mail, so the person who makes the link sends it on themselves.
+
+- One link per paper, in `project_shares {project_id, token, role,
+  created_by, created_at}`. The token is 32 random bytes, URL-safe, and
+  `role` is `editor`, `reviewer` or `viewer`.
+- The link is `<BASE_URL>/join/<token>`. A signed-out visitor goes to
+  `/login` and comes back to it. The page names the paper, who shared it and
+  the role, and "Join as <role>" adds the membership. A member goes straight
+  on to the paper. The page is sent with `X-Robots-Tag: noindex, nofollow`
+  and `Referrer-Policy: no-referrer`.
+- Editors and the owner manage the link, with the same rule as for invites.
+  Editors make reviewer and viewer links. Only the owner makes a link that
+  makes editors, and only the owner changes, renews or stops one.
+- Joining never changes the role of someone who is already a member. Who
+  joined counts as invited by the person who made the link, for the
+  `NEW_USER_MAIL_TO` mail as well.
+- A new link, a stopped link and a changed role leave everyone who already
+  joined on the paper. Settings, Access removes them.
+
+People who are already on the paper do not need the join link. Settings,
+Access shows every member a link to the paper by its id
+(`<BASE_URL>/p/<id>`), with a copy button, to send in a chat or a mail. A
+name is only unique among one person's papers, so the id is what works for
+everyone. For anybody else it is 404 like any paper they are not on.
 
 ## 3. Folders and the project list
 
@@ -912,7 +949,10 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 - `POST /api/auth/login {email, client?, next?}`. `client` is `web` (the
   default), `cli` or `desktop` (§2, Accounts).
 - `POST /api/auth/verify-code {email, code}`
-- `GET /api/auth/callback?token=`
+- `GET /api/auth/callback?token=` is the page with the "Sign in" button. It
+  is 400 for a used-up or expired link and never signs in.
+- `POST /api/auth/callback` with the form field `token` signs in and
+  answers 303 to where the link lands.
 - `GET/PATCH /api/auth/me`. `PATCH` takes `name`, `timezone`, `naming_pattern`, `writing_days`,
   `reminders`, `reminder_days`, `reminder_hour` (§5, Reminders).
 - `PUT /api/auth/me/avatar` with the picture as the body, `DELETE /api/auth/me/avatar`.
@@ -995,6 +1035,19 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
 - `GET /api/people` returns `[{user_id, email, name, papers}]`, everyone who
   shares a paper with you, those on the most papers with you first. "Add
   someone" suggests their emails.
+- `GET /api/projects/{ref}/share` returns `{token, url, role, created_by:
+  {email, name} | null, created_at}` or null. Editor and owner.
+- `POST /api/projects/{ref}/share {role?}` makes a new link and returns
+  201. `role` defaults to `viewer`. The link the paper had before stops
+  working.
+- `PATCH /api/projects/{ref}/share {role}` changes the role. The link stays
+  the same. 404 when the paper has none.
+- `DELETE /api/projects/{ref}/share` stops sharing.
+- `GET /api/join/{token}` returns `{project: {id, name, title}, role,
+  shared_by: {email, name} | null, member_role}`. `member_role` is your role
+  on the paper or null. A replaced or stopped link is 404.
+- `POST /api/join/{token}` joins and returns `{project_id, role, joined}`.
+  A member keeps their role and gets `joined: false`.
 
 ### Versions
 
@@ -1023,9 +1076,47 @@ diff      {from, to, files: [{path, old_path, status, binary, diff}]}
   `{files: [{path, status, diff}]}` with `status` one of `added`, `deleted`,
   `modified`, `renamed`. `word=true` gives a word diff, which is what LaTeX
   paragraphs need.
+- `GET /api/projects/{ref}/search?q=<regex>&ref=live` searches the text
+  files, see Search below.
 - `GET /api/projects/{ref}/history?limit=50` returns
   `[{commit, parent, at, message, editors, files_changed}]`, newest first.
   `parent` is the first parent, null for the first commit.
+
+### Search
+
+The Files tab has a search box above the listing. It searches every text
+file of the paper for a regular expression and lists the matching lines like
+`grep -n`, grouped by file (`app/search.py`).
+
+- `q` is a regular expression in Python's syntax, at most 1000 characters.
+  `^` and `$` match at every line. `regex=false` takes it as plain text.
+  Case is ignored unless `case=true`. A pattern that does not compile is
+  422 with the reason.
+- `ref` is where to search (`live`, `HEAD`, a tag or a commit). With
+  `versions=true` it searches every version instead, newest first.
+- `ext=tex,bib` searches only files with these extensions. Empty searches
+  every text file. Blobs are never searched.
+- A file that is the same in several refs is searched once and its entry
+  names all of them.
+- The answer is `{refs, files, lines, files_searched, truncated, timed_out}`.
+  `files` is sorted by path, each `{path, refs, count, lines}` with `lines`
+  as `[{line, text, ranges, cut_before, cut_after}]`. `ranges` are the
+  matches as UTF-16 offsets into `text`, which is what JavaScript slices by.
+  A line longer than 300 characters is cut around its first match, and
+  `cut_before` and `cut_after` say where.
+- At most 500 lines come back over all files. Further lines are counted in
+  `lines` and in each file's `count`, and `truncated` is set.
+- The matching uses the `regex` module, which lets go of the GIL and takes a
+  timeout. After 5 seconds the search stops, sends what it found and sets
+  `timed_out`, so a pattern that backtracks forever cannot stall the one
+  worker.
+- Viewers and up may search.
+
+In the web app the search state is in the URL of the Files tab
+(`/files?q=...&versions=1&ext=tex&case=1&regex=0`), so Back returns to the
+last search. The scope menu offers live, HEAD, all versions and each
+version, and the file type menu the extensions of the text files at hand. A
+line number opens the file at that line.
 
 ### Blobs
 

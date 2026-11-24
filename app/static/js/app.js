@@ -14,6 +14,7 @@ import * as account from "./pages/account.js";
 import * as admin from "./pages/admin.js";
 import * as project from "./pages/project.js";
 import * as timeline from "./pages/timeline.js";
+import * as join from "./pages/join.js";
 
 function renderHeader() {
   const me = session.me;
@@ -108,6 +109,7 @@ async function boot() {
   route(/^\/settings$/, account.render);
   route(/^\/admin$/, admin.render);
   route(/^\/p\/([^/]+)(?:\/(.*))?$/, project.render);
+  route(/^\/join\/([^/]+)$/, join.render);
   start();
 }
 

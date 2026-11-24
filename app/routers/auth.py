@@ -1,10 +1,14 @@
 """Sign-in: meerpad's magic link + code flow, unchanged apart from the names."""
 
+import html
+import re
+from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func
+from sqlalchemy.orm import Session as DBSession
 from sqlalchemy.orm import aliased
 
 from .. import reminders, when
@@ -29,6 +33,7 @@ from ..security import (
     enforce_login_rate,
     enforce_verify_rate,
     new_api_token,
+    valid_login_token,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -146,15 +151,86 @@ def verify_login_code(
     return {"ok": True, "redirect": "/"}
 
 
+# The emailed link only shows a button. Mail scanners (Microsoft's Safe Links,
+# for one) open every link in a mail, and a link that signed in right away gave
+# them a session and counted as the person's first sign-in. They open links but
+# do not submit forms, so only the button's POST signs in (DESIGN §2, Accounts).
+_CONFIRM_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Robots-Tag": "noindex, nofollow",
+    # The token is in the URL.
+    "Referrer-Policy": "no-referrer",
+}
+
+
+def _confirm_page(title: str, body: str, status_code: int = 200) -> HTMLResponse:
+    page = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>{html.escape(title)} · meertex</title>
+  <meta name="theme-color" content="#f6f8fa" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="login-body">
+  <main class="login-wrap">
+    <img class="login-logo" src="/static/img/logo-192.png" alt="meertex" width="64" height="64" />
+    <h1>{html.escape(title)}</h1>
+{body}
+  </main>
+</body>
+</html>
+"""
+    return HTMLResponse(page, status_code=status_code, headers=_CONFIRM_HEADERS)
+
+
+def _paper_title(db: DBSession, redirect_to: str | None) -> str | None:
+    """The paper an invite link lands on, to name it on the button's page."""
+    m = re.fullmatch(r"/p/([0-9a-f-]{36})", redirect_to or "")
+    project = db.get(Project, m.group(1)) if m else None
+    return (project.title or project.name) if project else None
+
+
 @router.get("/callback")
-def login_callback(token: str, request: Request, background: BackgroundTasks, db: DB) -> Response:
+def login_callback_page(token: str, db: DB) -> Response:
+    """The page an emailed link opens. It changes nothing and only offers the
+    button that signs in."""
+    lt = valid_login_token(db, token)
+    if lt is None:
+        return _confirm_page(
+            "This link does not work",
+            '    <div class="login-box">This sign-in link is used up or expired. '
+            "Ask for a new one, or sign in with your email.</div>\n"
+            '    <div class="login-alt"><a href="/login">Sign in to meertex</a></div>',
+            status_code=400,
+        )
+    paper = _paper_title(db, lt.redirect_to)
+    what = f"and open “{html.escape(paper)}”" if paper else "and continue"
+    return _confirm_page(
+        "Sign in to meertex",
+        f"""    <form class="login-box" method="post" action="/api/auth/callback">
+      <p class="mt-0">You sign in as <strong>{html.escape(lt.email)}</strong> {what}.</p>
+      <input type="hidden" name="token" value="{html.escape(token)}" />
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+    </form>
+    <div class="login-alt">Not you? Then ignore this link.</div>""",
+    )
+
+
+@router.post("/callback")
+def login_callback(
+    token: Annotated[str, Form()], request: Request, background: BackgroundTasks, db: DB
+) -> Response:
     """Consume a magic link, establish a session cookie, and redirect into the app."""
     user, redirect_to = consume_login_token(db, token)
     session_token = create_session(db, user)
     # Only an invite's link never expires (routers/members.py).
     invite = db.get(LoginToken, token).expires_at is None
     _first_sign_in(db, user, request, background, "with the invite link" if invite else "with a sign-in link")
-    resp = RedirectResponse(url=_safe_next(redirect_to), status_code=302)
+    # 303, so the browser follows with a GET.
+    resp = RedirectResponse(url=_safe_next(redirect_to), status_code=303)
     _set_session_cookie(resp, session_token)
     return resp
 

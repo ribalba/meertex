@@ -10,7 +10,7 @@ import { dateList } from "../dates.js";
 import { labelEditor, venueFields, VENUE_KEYS } from "../forms.js";
 import { timeAgo } from "../time.js";
 import {
-  avatar, busy, confirmDialog, field, flash, flashBox, flashError, openDialog, OUTCOMES, queueFlash,
+  avatar, busy, confirmDialog, copyButton, field, flash, flashBox, flashError, openDialog, OUTCOMES, queueFlash,
   setTitle, textInput,
 } from "../ui.js";
 
@@ -263,9 +263,10 @@ async function access(ctx, out) {
   const p = ctx.project;
   // People from the user's other papers are suggested in "Add someone". The
   // page works without them.
-  const [members, people] = await Promise.all([
+  const [members, people, share] = await Promise.all([
     api.get(projectUrl(ctx.ref, "/members")),
     ctx.canEdit ? api.get("/api/people").catch(() => []) : [],
+    ctx.canEdit ? api.get(projectUrl(ctx.ref, "/share")) : null,
   ]);
   if (!ctx.alive()) return;
   const order = { owner: 0, editor: 1, reviewer: 2, viewer: 3 };
@@ -354,12 +355,106 @@ async function access(ctx, out) {
     h("ul", { class: "box box-list" },
       h("li", { class: "box-header box-header-sm" }, h("h3", { class: "box-title flex-1", text: plural(members.length, "person", "people") })),
       rows),
+    memberLink(p),
     ctx.canEdit ? invite : null,
+    ctx.canEdit ? shareLink(ctx, share) : null,
     h("div", { class: "mt-4" },
       h("h3", { class: "mb-2", style: { fontSize: "14px" }, text: "Roles" }),
       h("ul", { class: "text-small color-muted", style: { paddingLeft: "20px", margin: "0" } },
         Object.entries(ROLE_TEXT).map(([r, t]) => h("li", {}, h("strong", { class: "color-fg", text: `${r[0].toUpperCase()}${r.slice(1)}: ` }), t)))),
   ]);
+}
+
+// A link to the paper for the people on it, to send in a chat or a mail. By id,
+// because a name is only unique among one person's papers (DESIGN §2, Sharing
+// a paper with a link).
+function memberLink(p) {
+  const href = `${location.origin}/p/${enc(p.id)}`;
+  const link = h("input", { type: "text", class: "form-control", readonly: true, value: href, "aria-label": "Link to this paper" });
+  link.addEventListener("focus", () => link.select());
+  return h("div", { class: "box mt-4" },
+    h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title", text: "Link for people on this paper" })),
+    h("div", { class: "box-body" },
+      h("div", { class: "copy-field" }, link, copyButton(href, { label: "Copy link", cls: "btn", showText: true })),
+      h("p", { class: "form-hint mb-0", text: "Opens this paper for everyone above. Nobody else gets in with it." })));
+}
+
+// The paper's join link (DESIGN §2, Sharing a paper with a link). Whoever
+// opens it signs in with any email and joins in the link's role. Editors
+// make reviewer and viewer links, only the owner one that makes editors.
+function shareLink(ctx, initial) {
+  let share = initial;
+  const box = h("div", { class: "box mt-4" });
+  const url = projectUrl(ctx.ref, "/share");
+  const roles = ["editor", "reviewer", "viewer"];
+  const roleOptions = (sel) => roles.map((r) => h("option", { value: r, disabled: r === "editor" && !ctx.isOwner, selected: r === sel },
+    r[0].toUpperCase() + r.slice(1)));
+
+  async function act(button, fn, done) {
+    try {
+      share = await busy(button, fn);
+      if (done) flash(done, "success");
+    } catch (err) {
+      flashError(err);
+    }
+    paint();
+  }
+
+  function paint() {
+    // A link that makes editors is the owner's to change.
+    const locked = share?.role === "editor" && !ctx.isOwner;
+    const roleSel = h("select", { class: "form-select", "aria-label": "Role for people who join with the link", disabled: locked },
+      roleOptions(share ? share.role : "viewer"));
+    const body = h("div", { class: "box-body" });
+
+    if (!share) {
+      const make = h("button", { type: "button", class: "btn", text: "Make a link" });
+      make.addEventListener("click", () => act(make, () => api.post(url, { role: roleSel.value })));
+      body.append(
+        h("p", { class: "mt-0", text: "Anyone who opens the link signs in with their email and joins this paper. Nobody gets a mail, so send the link yourself." }),
+        h("div", { class: "flex flex-wrap" }, h("span", { class: "flex-1", text: "People who join get the role" }), roleSel, make));
+    } else {
+      roleSel.addEventListener("change", () => act(roleSel, () => api.patch(url, { role: roleSel.value }),
+        `People who join with the link become ${roleSel.value}s.`));
+      const link = h("input", { type: "text", class: "form-control", readonly: true, value: share.url, "aria-label": "Link" });
+      link.addEventListener("focus", () => link.select());
+
+      const renew = h("button", { type: "button", class: "btn", text: "New link", disabled: locked });
+      renew.addEventListener("click", async () => {
+        const ok = await confirmDialog({
+          title: "Make a new link?",
+          message: "The current link stops working right away. People who already joined stay on the paper.",
+          confirmText: "Make a new link",
+          danger: true,
+        });
+        if (ok) act(renew, () => api.post(url, { role: share.role }), "Made a new link.");
+      });
+      const stop = h("button", { type: "button", class: "btn btn-danger", text: "Stop sharing", disabled: locked });
+      stop.addEventListener("click", async () => {
+        const ok = await confirmDialog({
+          title: "Stop sharing with a link?",
+          message: "The link stops working right away. People who already joined stay on the paper. Remove them above if they should not.",
+          confirmText: "Stop sharing",
+          danger: true,
+        });
+        if (ok) act(stop, async () => { await api.del(url); return null; }, "The link no longer works.");
+      });
+
+      const by = share.created_by ? share.created_by.name || share.created_by.email : null;
+      body.append(
+        h("p", { class: "mt-0", text: "Anyone who opens this link signs in with their email and joins this paper. Treat it like a key." }),
+        h("div", { class: "copy-field" }, link, copyButton(share.url, { label: "Copy link", cls: "btn", showText: true })),
+        h("div", { class: "flex flex-wrap mt-3" }, h("span", { class: "flex-1", text: "People who join get the role" }), roleSel),
+        h("p", { class: "form-hint" }, by ? `Made by ${by}, ` : "Made ", timeAgo(share.created_at), ".",
+          locked ? " Only the owner can change a link that makes editors." : null),
+        h("div", { class: "flex flex-wrap mt-3" }, renew, stop));
+    }
+    clear(box).append(
+      h("div", { class: "box-header box-header-sm" }, h("h3", { class: "box-title", text: "Share with a link" })),
+      body);
+  }
+  paint();
+  return box;
 }
 
 // --- Resubmit ---------------------------------------------------------------

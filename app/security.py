@@ -108,9 +108,17 @@ def create_login_token(
     return token
 
 
-def consume_login_token(db: DBSession, token: str) -> tuple[User, str | None]:
+def valid_login_token(db: DBSession, token: str) -> LoginToken | None:
+    """The link's token while it still works, without using it."""
     lt = db.query(LoginToken).filter(LoginToken.token == token).one_or_none()
     if lt is None or (lt.expires_at is not None and lt.expires_at < utcnow()):
+        return None
+    return lt
+
+
+def consume_login_token(db: DBSession, token: str) -> tuple[User, str | None]:
+    lt = valid_login_token(db, token)
+    if lt is None:
         raise HTTPException(status_code=400, detail="Invalid or expired login link")
     user = get_or_create_user(db, lt.email)
     db.commit()

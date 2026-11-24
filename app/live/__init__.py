@@ -13,6 +13,7 @@ raises ``Refused`` (a ValueError), one that names nothing raises ``NotFound``
 
 import logging
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -257,6 +258,41 @@ def list_files(project_id: str, ref: str = "live") -> list[dict]:
     for f in tree:
         kind = "text" if ydoc.is_text(contents.get(f["sha"], b"\0"), limit) else "blob"
         out.append({"id": None, "path": f["path"], "kind": kind, "size": f["size"], "sha": f["sha"]})
+    return out
+
+
+def text_files(project_id: str, refs: list[str], keep: Callable[[str], bool] | None = None) -> dict[str, dict[str, str]]:
+    """The text files at each ref, ``{ref: {path: text}}``, for the search.
+    ``keep(path)`` picks the paths to read. Git refs are read in one batch, so
+    a file that is the same in many versions is read once. Every ref is
+    checked before anything is read."""
+    for ref in refs:
+        check_ref(ref)
+    commits: dict[str, str] = {}
+    for ref in refs:
+        if ref == "live":
+            continue
+        commit = git.resolve(project_id, ref)
+        if commit is None:
+            raise NotFound(f"Nothing is called {ref}")
+        commits[ref] = commit
+    out: dict[str, dict[str, str]] = {}
+    if "live" in refs:
+        with rooms.get(project_id).read() as doc:
+            files = ydoc.materialize(doc)
+        out["live"] = {
+            path: e.text or "" for path, e in files.items() if e.kind == "text" and (keep is None or keep(path))
+        }
+    limit = get_settings().max_text_bytes
+    trees = {ref: git.ls_tree(project_id, commit) for ref, commit in commits.items()}
+    wanted = {f["sha"] for tree in trees.values() for f in tree if f["size"] <= limit and (keep is None or keep(f["path"]))}
+    texts: dict[str, str] = {}
+    for sha, data in git.read_blobs(project_id, sorted(wanted)).items():
+        # The same test as list_files, so the search sees the files it lists as text.
+        if ydoc.is_text(data, limit):
+            texts[sha] = data.decode()
+    for ref, tree in trees.items():
+        out[ref] = {f["path"]: texts[f["sha"]] for f in tree if f["sha"] in texts and (keep is None or keep(f["path"]))}
     return out
 
 

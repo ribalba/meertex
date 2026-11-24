@@ -261,6 +261,22 @@ class Membership(Base):
     reminders_muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
 
 
+class ProjectShare(Base):
+    """A link that lets anyone who signs in with it join a project in one role
+    (DESIGN §2, Sharing a paper with a link). One per project. A new link
+    replaces the token, and deleting the row stops the sharing."""
+
+    __tablename__ = "project_shares"
+
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # One of the grantable roles. Never owner.
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Who made the link. A person who joins with it counts as invited by them.
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+
+
 # --- Dates (DESIGN §5, §6) -------------------------------------------------------
 
 DATE_KINDS = (

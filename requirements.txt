@@ -20,5 +20,10 @@ diff-match-patch==20241021
 # The reference lookups use it too (§16).
 httpx==0.28.1
 
+# The file search (docs/DESIGN.md §11, Search). Unlike re it takes a timeout
+# and lets go of the GIL, so a pattern that backtracks forever cannot stall
+# the one worker.
+regex==2026.9.29
+
 # The claim check of the references (docs/DESIGN.md §16, Claims).
 anthropic==2.11.0

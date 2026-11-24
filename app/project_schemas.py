@@ -134,6 +134,12 @@ class MemberPatch(BaseModel):
     role: GrantableRole
 
 
+class ProjectShareIn(BaseModel):
+    """POST and PATCH /api/projects/{ref}/share (§2, Sharing a paper with a link)."""
+
+    role: GrantableRole = "viewer"
+
+
 class VersionOptions(BaseModel):
     """``version`` of an answer: which state to freeze, and a note."""
 

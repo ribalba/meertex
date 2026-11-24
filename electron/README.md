@@ -88,8 +88,10 @@ So the shell does this.
    sign-in email with `client: "desktop"` (`app/static/js/login.js`).
 2. The server mails a `meertex://login?token=...` link instead of the web one
    (`app/routers/auth.py`).
-3. Clicking it starts or focuses this app, which loads the real callback URL
-   **inside its window**, so the cookie is stored here.
+3. Clicking it starts or focuses this app, which sends the callback's POST
+   **inside its window**, so the cookie is stored here. In a browser the web
+   link first shows a "Sign in" button so that mail scanners cannot sign in.
+   The app skips that button, since no scanner opens a `meertex://` link.
 
 The code in the same email always works too. Type it into the window. That is
 the way in when the mail is read on another device, where a `meertex://` link

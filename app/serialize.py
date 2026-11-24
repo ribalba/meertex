@@ -17,6 +17,7 @@ from .models import (
     Membership,
     Project,
     ProjectDate,
+    ProjectShare,
     TimelineShare,
     User,
     Version,
@@ -176,6 +177,16 @@ def member_dict(m: Membership, user: User) -> dict:
         "avatar_url": user.avatar_url,
         "role": m.role,
         "added_at": iso(m.added_at),
+    }
+
+
+def project_share_dict(share: ProjectShare, by: User | None) -> dict:
+    return {
+        "token": share.token,
+        "url": f"{get_settings().base_url.rstrip('/')}/join/{share.token}",
+        "role": share.role,
+        "created_by": {"email": by.email, "name": by.name} if by else None,
+        "created_at": iso(share.created_at),
     }
 
 

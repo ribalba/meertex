@@ -62,10 +62,56 @@ def test_the_desktop_app_gets_a_deep_link(monkeypatch):
         assert web.startswith(callback)
         assert cli.startswith(callback)
         token = desktop.removeprefix("meertex://login?token=")
-        r = client.get(f"/api/auth/callback?token={token}", follow_redirects=False)
-        assert r.status_code == 302
+        r = client.post("/api/auth/callback", data={"token": token}, follow_redirects=False)
+        assert r.status_code == 303
         assert r.headers["location"] == "/settings"
         assert client.get("/api/auth/me").json()["email"] == "didi@example.com"
+
+
+def test_opening_a_link_does_not_sign_in(monkeypatch):
+    """Mail scanners open every link in a mail. Opening the link only shows a
+    button, and only its POST signs in (DESIGN §2, Accounts)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.routers import auth
+
+    links = []
+    monkeypatch.setattr(auth, "send_login_link", lambda to, link, code: links.append(link))
+    with running_app() as client:
+        assert client.post("/api/auth/login", json={"email": "arne@example.com", "next": "/timeline"}).status_code == 200
+        path = links[0].removeprefix("http://testserver")
+        token = path.split("token=", 1)[1]
+        with TestClient(app) as scanner:
+            for _ in range(3):
+                r = scanner.get(path, follow_redirects=False)
+                assert r.status_code == 200
+                assert r.headers["referrer-policy"] == "no-referrer"
+                assert r.headers["cache-control"] == "no-store"
+                assert "arne@example.com" in r.text
+                assert 'method="post" action="/api/auth/callback"' in r.text
+                assert f'name="token" value="{token}"' in r.text
+            assert "meertex_session" not in scanner.cookies
+            assert scanner.get("/api/auth/me").status_code == 401
+
+        from app.database import SessionLocal
+        from app.models import User
+
+        with SessionLocal() as db:
+            arne = db.query(User).filter(User.email == "arne@example.com").one_or_none()
+            assert arne is None or arne.first_sign_in_at is None
+
+        # The person clicks the button.
+        with TestClient(app) as browser:
+            r = browser.post("/api/auth/callback", data={"token": token}, follow_redirects=False)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/timeline"
+            assert browser.get("/api/auth/me").json()["email"] == "arne@example.com"
+
+        r = client.get("/api/auth/callback?token=nope")
+        assert r.status_code == 400
+        assert "This link does not work" in r.text
+        assert client.post("/api/auth/callback", data={"token": "nope"}).status_code == 400
 
 
 def _new_user_mails(monkeypatch, to: str = "admin@example.com") -> list[tuple[str, str, str]]:
@@ -145,9 +191,9 @@ def test_the_mail_names_who_invited_the_new_account(monkeypatch):
 
         electron = "Mozilla/5.0 (X11; Linux x86_64) meertex/0.4.0 Chrome/140.0 Electron/38.0.0 Safari/537.36"
         with TestClient(app, headers={"User-Agent": electron}) as arne:
-            r = arne.get(invites[0].removeprefix("http://testserver"), follow_redirects=False)
-            assert r.status_code == 302
-            arne.get(invites[1].removeprefix("http://testserver"), follow_redirects=False)
+            r = arne.post("/api/auth/callback", data={"token": invites[0].split("token=", 1)[1]}, follow_redirects=False)
+            assert r.status_code == 303
+            arne.post("/api/auth/callback", data={"token": invites[1].split("token=", 1)[1]}, follow_redirects=False)
         [_, (subject, body)] = _to(sent)
         today = when.day_text(utcnow())
         assert subject == "New user arne@example.com"

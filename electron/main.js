@@ -263,7 +263,13 @@ function handleDeepLink(link) {
     pendingLink = link;
     return;
   }
-  mainWindow.loadURL(`${APP_URL}/api/auth/callback?token=${encodeURIComponent(token)}`);
+  // Straight to the POST that signs in. In a browser the link first shows a
+  // button, so that mail scanners which open links do not sign in, but no
+  // scanner opens a meertex:// link.
+  mainWindow.loadURL(`${APP_URL}/api/auth/callback`, {
+    postData: [{ type: "rawData", bytes: Buffer.from(`token=${encodeURIComponent(token)}`) }],
+    extraHeaders: "Content-Type: application/x-www-form-urlencoded\n",
+  });
   showWindow();
 }
 

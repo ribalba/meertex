@@ -42,8 +42,13 @@ def test_invite_creates_the_account_and_mails_a_link(monkeypatch):
 
         # The membership is there before Arne ever signs in, and the link lands on the project.
         with TestClient(app) as arne:
-            r = arne.get(mail["link"].removeprefix("http://testserver"), follow_redirects=False)
-            assert r.status_code == 302
+            # Opening the link shows the button, and the button signs in.
+            page = arne.get(mail["link"].removeprefix("http://testserver"), follow_redirects=False)
+            assert page.status_code == 200
+            assert "Green LLMs" in page.text
+            token = mail["link"].split("token=", 1)[1]
+            r = arne.post("/api/auth/callback", data={"token": token}, follow_redirects=False)
+            assert r.status_code == 303
             # By id: Arne may own a project called "green" himself.
             assert r.headers["location"] == f"/p/{p['id']}"
             assert arne.get("/api/projects/green").json()["role"] == "editor"
@@ -80,8 +85,10 @@ def test_the_invite_link_does_not_expire(monkeypatch):
         monkeypatch.setattr(security, "utcnow", lambda: later)
         with TestClient(app) as arne:
             assert arne.get(login, follow_redirects=False).status_code == 400
-            r = arne.get(invite, follow_redirects=False)
-            assert r.status_code == 302
+            assert arne.post("/api/auth/callback", data={"token": login.split("token=", 1)[1]}).status_code == 400
+            assert arne.get(invite, follow_redirects=False).status_code == 200
+            r = arne.post("/api/auth/callback", data={"token": invite.split("token=", 1)[1]}, follow_redirects=False)
+            assert r.status_code == 303
             assert r.headers["location"] == f"/p/{p['id']}"
             assert arne.get("/api/auth/me").json()["email"] == "arne@example.com"
 

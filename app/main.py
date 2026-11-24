@@ -179,6 +179,17 @@ def shared_timeline_page(token: str) -> FileResponse:
     return resp
 
 
+# A paper's join link (DESIGN §2, Sharing a paper with a link). A signed-out
+# visitor goes to /login and comes back here. The token stays out of search
+# engines and of the Referer.
+@app.get("/join/{token}")
+def join_page(token: str) -> FileResponse:
+    resp = _app_shell()
+    resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    return resp
+
+
 @app.get("/login")
 def login_page(user: OptionalUser) -> Response:
     if user is not None:

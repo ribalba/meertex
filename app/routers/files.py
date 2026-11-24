@@ -24,11 +24,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as DBSession
 from starlette.background import BackgroundTask
 
-from .. import live
+from .. import live, search
 from ..access import resolve_project
 from ..config import get_settings
 from ..database import DB
-from ..models import Project, User
+from ..models import Project, User, Version
 from ..security import SessionOrTokenUser
 
 router = APIRouter(prefix="/api/projects", tags=["files"])
@@ -185,6 +185,37 @@ def download_zip(project: str, user: SessionOrTokenUser, db: DB, ref: Ref = "liv
     name = f"{p.name}-{re.sub(r'[^A-Za-z0-9._-]+', '-', ref)}.zip"
     headers = {**SAFE_HEADERS, "Content-Disposition": content_disposition("attachment", name)}
     return FileResponse(tmp, media_type="application/zip", headers=headers, background=BackgroundTask(os.unlink, tmp))
+
+
+@router.get("/{project}/search")
+def search_files(
+    project: str,
+    user: SessionOrTokenUser,
+    db: DB,
+    q: Annotated[str, Query(min_length=1, max_length=search.MAX_QUERY)],
+    ref: Ref = "live",
+    versions: bool = False,
+    ext: Annotated[str, Query(description="Extensions to search, comma-separated, such as tex,bib")] = "",
+    case: bool = False,
+    regex: bool = True,
+) -> dict:
+    """Search the text files at ``ref``, or with ``versions=true`` at every
+    version, for the regular expression ``q`` (plain text with
+    ``regex=false``). Case is ignored unless ``case=true``."""
+    p = project_for(db, user, project, "viewer")
+    try:
+        pattern = search.compile_pattern(q, is_regex=regex, case=case)
+    except search.BadPattern as e:
+        raise HTTPException(status_code=422, detail=e.args[0]) from None
+    if versions:
+        tags = db.query(Version.tag).filter(Version.project_id == p.id).order_by(Version.number.desc()).all()
+        refs = [t for (t,) in tags]
+    else:
+        refs = [ref]
+    exts = {e.strip().lstrip(".").lower() for e in ext.split(",") if e.strip()}
+    keep = (lambda path: search.extension(path) in exts) if exts else None
+    sources = call_live(live.text_files, p.id, refs, keep)
+    return {"refs": refs, **search.search(sources, pattern)}
 
 
 @router.get("/{project}/diff")
