@@ -105,7 +105,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-@codemirror/lint 6.9.7 (MIT)
+@codemirror/lint 6.9.8 (MIT)
 ==============================================================================
 
 MIT License
@@ -337,7 +337,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-lib0 0.2.119 (MIT)
+lib0 0.2.120 (MIT)
 ==============================================================================
 
 The MIT License (MIT)
